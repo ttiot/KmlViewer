@@ -1,0 +1,1579 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualiseur KML - GPS Clean</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+        
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: relative;
+            z-index: 1000;
+        }
+        
+        .navbar-brand {
+            font-weight: bold;
+            color: white !important;
+        }
+        
+        /* Sidebar styles */
+        .sidebar {
+            position: fixed;
+            top: 56px; /* hauteur de la navbar */
+            left: 0;
+            width: 350px;
+            height: calc(100vh - 56px);
+            background: white;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            transform: translateX(0);
+            transition: transform 0.3s ease;
+            z-index: 999;
+            overflow-y: auto;
+        }
+        
+        .sidebar.collapsed {
+            transform: translateX(-320px);
+        }
+        
+        .sidebar-toggle {
+            position: fixed;
+            top: 76px; /* navbar height + 20px */
+            left: 320px; /* sidebar width - 30px */
+            width: 40px;
+            height: 40px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 0 5px 5px 0;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.2);
+            z-index: 1001;
+            transition: left 0.3s ease;
+        }
+        
+        .sidebar-toggle:hover {
+            background: #5a6fd8;
+        }
+        
+        .sidebar.collapsed + .main-content .sidebar-toggle,
+        .sidebar.collapsed ~ .sidebar-toggle {
+            left: 0;
+        }
+        
+        .sidebar-content {
+            padding: 20px;
+        }
+        
+        .main-content {
+            margin-left: 350px;
+            transition: margin-left 0.3s ease;
+            padding: 20px;
+            min-height: calc(100vh - 56px);
+        }
+        
+        .main-content.expanded {
+            margin-left: 30px;
+        }
+        
+        #map {
+            height: 60vh;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border: 2px solid #e9ecef;
+            margin-bottom: 20px;
+        }
+        
+        .control-panel {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .file-upload-area {
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .file-upload-area:hover {
+            border-color: #667eea;
+            background-color: #f8f9ff;
+        }
+        
+        .file-upload-area.dragover {
+            border-color: #667eea;
+            background-color: #f0f4ff;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 25px;
+            padding: 10px 25px;
+            font-weight: 500;
+        }
+        
+        .btn-outline-primary {
+            border-color: #667eea;
+            color: #667eea;
+            border-radius: 25px;
+            padding: 8px 20px;
+        }
+        
+        .btn-outline-primary:hover {
+            background-color: #667eea;
+            border-color: #667eea;
+        }
+        
+        .layer-control {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .layer-control h6 {
+            color: #495057;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .form-check-input:checked {
+            background-color: #667eea;
+            border-color: #667eea;
+        }
+        
+        /* Popup alerts styles */
+        .alert-popup {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            min-width: 300px;
+            max-width: 400px;
+            background: rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            border: none;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            z-index: 9999;
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            margin-bottom: 10px;
+        }
+        
+        .alert-popup.show {
+            transform: translateX(0);
+        }
+        
+        .alert-popup .alert-content {
+            padding: 15px 20px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .alert-popup .btn-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            color: #666;
+            cursor: pointer;
+            opacity: 0.7;
+        }
+        
+        .alert-popup .btn-close:hover {
+            opacity: 1;
+        }
+        
+        .alert-popup.alert-success {
+            border-left: 4px solid #28a745;
+        }
+        
+        .alert-popup.alert-danger {
+            border-left: 4px solid #dc3545;
+        }
+        
+        .alert-popup.alert-warning {
+            border-left: 4px solid #ffc107;
+        }
+        
+        .alert-popup.alert-info {
+            border-left: 4px solid #17a2b8;
+        }
+        
+        .feature-info {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 20px;
+        }
+        
+        .loading {
+            display: none;
+        }
+        
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+        }
+        
+        .points-list {
+            margin-bottom: 20px;
+        }
+        
+        .points-list-content {
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        
+        .point-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .point-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .point-item.active {
+            background-color: #3eff5e;
+            color: white;
+        }
+        
+        .point-item.active .text-muted {
+            color: rgba(255, 255, 255, 0.8) !important;
+        }
+        
+        .point-item:last-child {
+            border-bottom: none;
+        }
+        
+        .point-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .point-description {
+            font-size: 0.875rem;
+            color: #6c757d;
+            margin-bottom: 4px;
+        }
+        
+        .point-meta {
+            font-size: 0.75rem;
+            color: #6c757d;
+        }
+        
+        .point-badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 10px;
+        }
+        
+        /* Points list in main content */
+        .points-section {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            height: calc(60vh - 40px);
+            overflow-y: auto;
+        }
+        
+        /* Navigation controls in main content */
+        .navigation-section {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        /* Sample files styling */
+        .sample-file-btn {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            position: relative;
+        }
+        
+        .sample-file-btn:hover::after {
+            content: attr(data-full-name);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            white-space: nowrap;
+            z-index: 1000;
+            margin-bottom: 5px;
+        }
+        
+        .sample-file-btn:hover::before {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 5px solid transparent;
+            border-top-color: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 300px;
+            }
+            
+            .sidebar.collapsed {
+                transform: translateX(-270px);
+            }
+            
+            .main-content {
+                margin-left: 300px;
+            }
+            
+            .main-content.expanded {
+                margin-left: 30px;
+            }
+            
+            .sidebar-toggle {
+                left: 270px;
+            }
+        }
+        
+        /* Styles pour le panneau d'analyse - Phase 3 */
+        .analysis-section {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            height: calc(60vh - 40px);
+            overflow-y: auto;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            border: 1px solid #e9ecef;
+        }
+        
+        .stat-value {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            font-size: 0.75rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 200px;
+            margin-bottom: 15px;
+        }
+        
+        .nav-tabs .nav-link {
+            font-size: 0.875rem;
+            padding: 8px 12px;
+        }
+        
+        .nav-tabs .nav-link.active {
+            background-color: #667eea;
+            border-color: #667eea;
+            color: white;
+        }
+        
+        .nav-tabs .nav-link:hover {
+            border-color: #667eea;
+            color: #667eea;
+        }
+        
+        .elevation-stats, .speed-stats {
+            background: #f8f9fa;
+            border-radius: 6px;
+            padding: 10px;
+        }
+        
+        .elevation-stats div, .speed-stats div {
+            font-weight: 500;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-map-marked-alt me-2"></i>
+                Visualiseur KML
+            </a>
+        </div>
+    </nav>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-content">
+            <!-- Panneau de contrôle -->
+            <div class="control-panel">
+                <h5 class="mb-3">
+                    <i class="fas fa-upload me-2"></i>
+                    Charger un fichier KML
+                </h5>
+                
+                <!-- Zone de téléchargement -->
+                <div class="file-upload-area" id="fileUploadArea">
+                    <i class="fas fa-cloud-upload-alt fa-2x text-muted mb-2"></i>
+                    <h6>Glissez-déposez votre fichier KML ici</h6>
+                    <p class="text-muted">ou cliquez pour sélectionner</p>
+                    <input type="file" id="fileInput" accept=".kml" style="display: none;">
+                </div>
+                
+                <!-- Fichiers d'exemple -->
+                <div class="mt-3">
+                    <h6>Fichiers d'exemple :</h6>
+                    <div id="sampleFiles" class="d-flex flex-wrap gap-2">
+                        <!-- Les fichiers d'exemple seront chargés ici -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Contrôle des couches -->
+            <div class="layer-control mb-3">
+                <h6>
+                    <i class="fas fa-layer-group me-2"></i>
+                    Fonds de carte
+                </h6>
+                
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="baseLayer" id="osm" value="osm" checked>
+                    <label class="form-check-label" for="osm">
+                        OpenStreetMap
+                    </label>
+                </div>
+                
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="baseLayer" id="satellite" value="satellite">
+                    <label class="form-check-label" for="satellite">
+                        Satellite (Esri)
+                    </label>
+                </div>
+                
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="baseLayer" id="terrain" value="terrain">
+                    <label class="form-check-label" for="terrain">
+                        Terrain (OpenTopoMap)
+                    </label>
+                </div>
+                
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="baseLayer" id="cartodb" value="cartodb">
+                    <label class="form-check-label" for="cartodb">
+                        CartoDB Positron
+                    </label>
+                </div>
+                
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="baseLayer" id="stamen" value="stamen">
+                    <label class="form-check-label" for="stamen">
+                        Stamen Toner
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Contrôle d'affichage des unités -->
+            <div class="layer-control">
+                <h6>
+                    <i class="fas fa-cog me-2"></i>
+                    Affichage des données
+                </h6>
+                
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="displayMode" id="doubleUnit" value="double" checked>
+                    <label class="form-check-label" for="doubleUnit">
+                        Double unité (km/h + kts, ft + m)
+                    </label>
+                </div>
+                
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="displayMode" id="simpleUnit" value="simple">
+                    <label class="form-check-label" for="simpleUnit">
+                        Unité simple (km/h, m)
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar toggle button -->
+    <button class="sidebar-toggle" id="sidebarToggle">
+        <i class="fas fa-chevron-left"></i>
+    </button>
+
+    <!-- Main content -->
+    <div class="main-content" id="mainContent">
+        <!-- Contrôles de navigation -->
+        <div id="navigationControls" class="navigation-section" style="display: none;">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <h6><i class="fas fa-navigation me-2"></i>Navigation entre les points</h6>
+                    <div id="navigationInfo" style="display: none;">
+                        <!-- Informations sur le point actuel -->
+                    </div>
+                </div>
+                <div class="col-md-6 text-end">
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn btn-outline-primary" onclick="navigateToPreviousPoint()">
+                            <i class="fas fa-arrow-left"></i> Précédent
+                        </button>
+                        <button type="button" class="btn btn-outline-primary" onclick="navigateToNextPoint()">
+                            Suivant <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                    <div class="mt-2">
+                        <small class="text-muted">Utilisez les flèches ← → du clavier</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Carte et listing des points -->
+        <div class="row">
+            <div class="col-lg-8">
+                <div id="map"></div>
+            </div>
+            <div class="col-lg-4">
+                <!-- Listing des points -->
+                <div id="pointsList" class="points-section" style="display: none;">
+                    <h6 class="mb-3">
+                        <i class="fas fa-list me-2"></i>
+                        Points (<span id="pointsCount">0</span>)
+                    </h6>
+                    <div id="pointsListContent" class="points-list-content">
+                        <!-- Les points seront listés ici -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <!-- Panneau d'analyse - Phase 3 -->
+            <div class="col-lg-12" id="analysisPanel" style="display: none;">
+                <div class="analysis-section">
+                    <h6 class="mb-3">
+                        <i class="fas fa-chart-line me-2"></i>
+                        Analyse de trajet
+                    </h6>
+                    
+                    <!-- Onglets d'analyse -->
+                    <ul class="nav nav-tabs mb-3" id="analysisTab" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="stats-tab" data-bs-toggle="tab" data-bs-target="#stats" type="button" role="tab">
+                                <i class="fas fa-calculator"></i> Stats
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="elevation-tab" data-bs-toggle="tab" data-bs-target="#elevation" type="button" role="tab">
+                                <i class="fas fa-mountain"></i> Élévation
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="speed-tab" data-bs-toggle="tab" data-bs-target="#speed" type="button" role="tab">
+                                <i class="fas fa-tachometer-alt"></i> Vitesse
+                            </button>
+                        </li>
+                    </ul>
+                    
+                    <!-- Contenu des onglets -->
+                    <div class="tab-content" id="analysisTabContent">
+                        <!-- Onglet Statistiques -->
+                        <div class="tab-pane fade show active" id="stats" role="tabpanel">
+                            <div id="basicStats">
+                                <div class="row g-2 mb-3">
+                                    <div class="col-6">
+                                        <div class="stat-card">
+                                            <div class="stat-value" id="totalDistance">-</div>
+                                            <div class="stat-label">Distance totale</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-card">
+                                            <div class="stat-value" id="totalDuration">-</div>
+                                            <div class="stat-label">Durée estimée</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-card">
+                                            <div class="stat-value" id="avgSpeed">-</div>
+                                            <div class="stat-label">Vitesse moy.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-card">
+                                            <div class="stat-value" id="maxSpeed">-</div>
+                                            <div class="stat-label">Vitesse max</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-card">
+                                            <div class="stat-value" id="totalAscent">-</div>
+                                            <div class="stat-label">Dénivelé +</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-card">
+                                            <div class="stat-value" id="totalDescent">-</div>
+                                            <div class="stat-label">Dénivelé -</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Onglet Élévation -->
+                        <div class="tab-pane fade" id="elevation" role="tabpanel">
+                            <div class="chart-container">
+                                <canvas id="elevationChart" width="400" height="200"></canvas>
+                            </div>
+                            <div class="elevation-stats mt-3">
+                                <div class="row g-2">
+                                    <div class="col-6">
+                                        <small class="text-muted">Alt. min:</small>
+                                        <div id="minElevation">-</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Alt. max:</small>
+                                        <div id="maxElevation">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Onglet Vitesse -->
+                        <div class="tab-pane fade" id="speed" role="tabpanel">
+                            <div class="chart-container">
+                                <canvas id="speedChart" width="400" height="200"></canvas>
+                            </div>
+                            <div class="speed-stats mt-3">
+                                <div class="row g-2">
+                                    <div class="col-4">
+                                        <small class="text-muted">Min:</small>
+                                        <div id="minSpeed">-</div>
+                                    </div>
+                                    <div class="col-4">
+                                        <small class="text-muted">Moy:</small>
+                                        <div id="avgSpeedDetail">-</div>
+                                    </div>
+                                    <div class="col-4">
+                                        <small class="text-muted">Max:</small>
+                                        <div id="maxSpeedDetail">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Container for popup alerts -->
+    <div id="alertContainer"></div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script>
+        // Variables globales
+        let map;
+        let currentKmlLayer;
+        let baseLayers = {};
+        let allPoints = [];
+        let currentPointIndex = -1;
+        let pointMarkers = [];
+        
+        // Variables pour l'analyse - Phase 3
+        let currentAnalysis = null;
+        let elevationChart = null;
+        let speedChart = null;
+        
+        // Initialisation de la carte
+        function initMap() {
+            map = L.map('map').setView([46.603354, 1.888334], 6); // Centre de la France
+            
+            // Définition des couches de base
+            baseLayers = {
+                'osm': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }),
+                'satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: '© Esri'
+                }),
+                'terrain': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenTopoMap contributors'
+                }),
+                'cartodb': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '© CartoDB'
+                }),
+                'stamen': L.tileLayer('https://stamen-tiles-{s}.a.ssl.fastly.net/toner/{z}/{x}/{y}{r}.png', {
+                    attribution: '© Stamen Design'
+                })
+            };
+            
+            // Ajouter la couche par défaut
+            baseLayers['osm'].addTo(map);
+            
+            // Gestionnaire de changement de couche
+            document.querySelectorAll('input[name="baseLayer"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    // Supprimer toutes les couches de base
+                    Object.values(baseLayers).forEach(layer => {
+                        map.removeLayer(layer);
+                    });
+                    
+                    // Ajouter la nouvelle couche
+                    baseLayers[this.value].addTo(map);
+                });
+            });
+        }
+        
+        // Affichage des alertes en popup
+        function showAlert(message, type = 'info') {
+            const alertContainer = document.getElementById('alertContainer');
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert-popup alert-${type}`;
+            alertDiv.innerHTML = `
+                <div class="alert-content">${message}</div>
+                <button type="button" class="btn-close" onclick="this.parentElement.remove()">&times;</button>
+            `;
+            
+            // Positionner les alertes les unes au-dessus des autres
+            const existingAlerts = alertContainer.querySelectorAll('.alert-popup');
+            let bottomOffset = 20;
+            existingAlerts.forEach(alert => {
+                bottomOffset += alert.offsetHeight + 10;
+            });
+            alertDiv.style.bottom = bottomOffset + 'px';
+            
+            alertContainer.appendChild(alertDiv);
+            
+            // Animation d'entrée
+            setTimeout(() => {
+                alertDiv.classList.add('show');
+            }, 100);
+            
+            // Auto-suppression après 10 secondes
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.classList.remove('show');
+                    setTimeout(() => {
+                        if (alertDiv.parentNode) {
+                            alertDiv.remove();
+                            // Réajuster les positions des alertes restantes
+                            repositionAlerts();
+                        }
+                    }, 300);
+                }
+            }, 10000);
+        }
+        
+        // Fonction pour repositionner les alertes après suppression
+        function repositionAlerts() {
+            const alerts = document.querySelectorAll('.alert-popup');
+            let bottomOffset = 20;
+            alerts.forEach(alert => {
+                alert.style.bottom = bottomOffset + 'px';
+                bottomOffset += alert.offsetHeight + 10;
+            });
+        }
+        
+        // Chargement des fichiers d'exemple
+        function loadSampleFiles() {
+            fetch('/api/sample-files')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('sampleFiles');
+                    container.innerHTML = '';
+                    
+                    data.files.forEach(file => {
+                        const button = document.createElement('button');
+                        button.className = 'btn btn-outline-primary btn-sm sample-file-btn';
+                        
+                        // Tronquer le nom si trop long
+                        const displayName = file.name.length > 25 ? file.name.substring(0, 22) + '...' : file.name;
+                        button.textContent = displayName;
+                        button.setAttribute('data-full-name', file.name);
+                        button.title = file.name; // Fallback pour les navigateurs qui ne supportent pas les pseudo-éléments
+                        button.onclick = () => loadSampleFile(file.name);
+                        container.appendChild(button);
+                    });
+                })
+                .catch(error => {
+                    console.error('Erreur lors du chargement des fichiers d\'exemple:', error);
+                });
+        }
+        
+        // Chargement d'un fichier d'exemple
+        function loadSampleFile(filename) {
+            showAlert(`<i class="fas fa-spinner fa-spin me-2"></i>Chargement de ${filename}...`, 'info');
+            
+            // Récupérer le mode d'affichage sélectionné
+            const displayMode = document.querySelector('input[name="displayMode"]:checked').value;
+            
+            fetch(`/api/load-sample/${filename}?display_mode=${displayMode}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        displayKmlData(data);
+                        showAlert(`<i class="fas fa-check me-2"></i>Fichier ${filename} chargé avec succès!`, 'success');
+                    } else {
+                        showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${data.error}`, 'danger');
+                    }
+                })
+                .catch(error => {
+                    showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur lors du chargement: ${error.message}`, 'danger');
+                });
+        }
+        
+        // Affichage des données KML sur la carte
+        function displayKmlData(data) {
+            // Supprimer la couche précédente si elle existe
+            if (currentKmlLayer) {
+                map.removeLayer(currentKmlLayer);
+            }
+            
+            // Réinitialiser les variables de navigation
+            allPoints = data.points || [];
+            currentPointIndex = -1;
+            pointMarkers = [];
+            
+            // Créer un groupe de couches pour les features KML
+            currentKmlLayer = L.layerGroup();
+            
+            let bounds = L.latLngBounds();
+            let featureCount = 0;
+            
+            data.features.forEach((feature, index) => {
+                if (feature.type === 'polyline') {
+                    const polyline = L.polyline(feature.coordinates, {
+                        color: '#667eea',
+                        weight: 4,
+                        opacity: 0.8
+                    });
+                    
+                    polyline.bindPopup(`
+                        <div class="popup-content">
+                            <strong>${feature.name}</strong><br>
+                            ${feature.description || 'Trace GPS'}
+                        </div>
+                    `);
+                    
+                    currentKmlLayer.addLayer(polyline);
+                    bounds.extend(feature.coordinates);
+                    featureCount++;
+                    
+                } else if (feature.type === 'marker') {
+                    // Créer un marqueur avec une couleur différente selon le type
+                    const markerColor = feature.is_annotation ? '#ff6b6b' : '#4ecdc4';
+                    const markerIcon = L.divIcon({
+                        className: 'custom-marker',
+                        html: `<div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    
+                    const marker = L.marker(feature.coordinates, { icon: markerIcon });
+                    
+                    const popupContent = `
+                        <div class="popup-content">
+                            <strong>${feature.name}</strong><br>
+                            ${feature.description || 'Point d\'intérêt'}<br>
+                            ${feature.altitude ? `<small>Altitude: ${Math.round(feature.altitude)}m</small><br>` : ''}
+                            <small>Point ${feature.index + 1}/${data.total_points}</small>
+                            <div class="mt-2">
+                                <button class="btn btn-sm btn-outline-primary" onclick="navigateToPoint(${feature.index})">
+                                    <i class="fas fa-crosshairs"></i> Centrer
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    
+                    marker.bindPopup(popupContent);
+                    
+                    // Ajouter un gestionnaire de clic pour la navigation et mise en surbrillance
+                    marker.on('click', function() {
+                        selectPoint(feature.index);
+                    });
+                    
+                    currentKmlLayer.addLayer(marker);
+                    pointMarkers.push(marker);
+                    bounds.extend(feature.coordinates);
+                    featureCount++;
+                }
+            });
+            
+            // Ajouter la couche à la carte
+            currentKmlLayer.addTo(map);
+            
+            // Ajuster la vue sur les données
+            if (bounds.isValid()) {
+                map.fitBounds(bounds, { padding: [20, 20] });
+            }
+            
+            // Afficher les informations
+            // displayFeatureInfo(data.features);
+            
+            // Générer le listing des points
+            displayPointsList();
+            
+            // Afficher les contrôles de navigation si il y a des points
+            if (allPoints.length > 0) {
+                showNavigationControls();
+                showAlert(`<i class="fas fa-check me-2"></i>${featureCount} élément(s) affiché(s) sur la carte. Utilisez les flèches ← → pour naviguer entre les ${allPoints.length} points.`, 'success');
+            } else {
+                hideNavigationControls();
+                showAlert(`<i class="fas fa-check me-2"></i>${featureCount} élément(s) affiché(s) sur la carte`, 'success');
+            }
+            
+            // Lancer l'analyse de trajectoire - Phase 3
+            analyzeTrajectory(data.features);
+        }
+        
+        // Affichage des informations sur les features
+        function displayFeatureInfo(features) {
+            const infoDiv = document.getElementById('featureInfo');
+            const detailsDiv = document.getElementById('featureDetails');
+            
+            if (features.length === 0) {
+                infoDiv.style.display = 'none';
+                return;
+            }
+            
+            let html = '<ul class="list-unstyled">';
+            let pointCount = 0;
+            let traceCount = 0;
+            
+            features.forEach((feature, index) => {
+                if (feature.type === 'marker') {
+                    pointCount++;
+                } else if (feature.type === 'polyline') {
+                    traceCount++;
+                }
+                
+                html += `
+                    <li class="mb-2">
+                        <i class="fas fa-${feature.type === 'polyline' ? 'route' : 'map-marker-alt'} me-2"></i>
+                        <strong>${feature.name}</strong>
+                        ${feature.description ? `<br><small class="text-muted">${feature.description}</small>` : ''}
+                        ${feature.type === 'marker' ? `<br><small class="badge bg-${feature.is_annotation ? 'warning' : 'info'}">${feature.is_annotation ? 'Annotation' : 'Point principal'}</small>` : ''}
+                    </li>
+                `;
+            });
+            html += '</ul>';
+            
+            if (pointCount > 0) {
+                html += `<div class="mt-3 p-2 bg-light rounded">
+                    <small><strong>Résumé:</strong> ${traceCount} trace(s), ${pointCount} point(s)</small>
+                </div>`;
+            }
+            
+            detailsDiv.innerHTML = html;
+            infoDiv.style.display = 'block';
+        }
+        
+        // Navigation entre les points
+        function navigateToPoint(index) {
+            if (index < 0 || index >= allPoints.length) return;
+            
+            selectPoint(index);
+            const point = allPoints[index];
+            
+            // Centrer la carte sur le point
+            map.setView(point.coordinates, Math.max(map.getZoom(), 15));
+            
+            // Ouvrir le popup du marqueur correspondant
+            if (pointMarkers[index]) {
+                pointMarkers[index].openPopup();
+            }
+        }
+        
+        function navigateToNextPoint() {
+            if (allPoints.length === 0) return;
+            
+            const nextIndex = (currentPointIndex + 1) % allPoints.length;
+            navigateToPoint(nextIndex);
+        }
+        
+        function navigateToPreviousPoint() {
+            if (allPoints.length === 0) return;
+            
+            const prevIndex = currentPointIndex <= 0 ? allPoints.length - 1 : currentPointIndex - 1;
+            navigateToPoint(prevIndex);
+        }
+        
+        function updateNavigationInfo() {
+            const navInfo = document.getElementById('navigationInfo');
+            if (currentPointIndex >= 0 && allPoints.length > 0) {
+                const point = allPoints[currentPointIndex];
+                navInfo.innerHTML = `
+                    <strong>Point ${currentPointIndex + 1}/${allPoints.length}</strong><br>
+                    <small>${point.name}</small>
+                `;
+                navInfo.style.display = 'block';
+            } else {
+                navInfo.style.display = 'none';
+            }
+        }
+        
+        function showNavigationControls() {
+            const navControls = document.getElementById('navigationControls');
+            if (navControls) {
+                navControls.style.display = 'block';
+            }
+        }
+        
+        function hideNavigationControls() {
+            const navControls = document.getElementById('navigationControls');
+            if (navControls) {
+                navControls.style.display = 'none';
+            }
+        }
+        
+        // Génération du listing des points
+        function displayPointsList() {
+            const pointsList = document.getElementById('pointsList');
+            const pointsListContent = document.getElementById('pointsListContent');
+            const pointsCount = document.getElementById('pointsCount');
+            
+            if (allPoints.length === 0) {
+                pointsList.style.display = 'none';
+                return;
+            }
+            
+            // Mettre à jour le compteur
+            pointsCount.textContent = allPoints.length;
+            
+            // Générer le contenu du listing
+            let html = '';
+            allPoints.forEach((point, index) => {
+                const markerColor = point.is_annotation ? '#ff6b6b' : '#4ecdc4';
+                const badgeClass = point.is_annotation ? 'bg-warning' : 'bg-info';
+                const badgeText = point.is_annotation ? 'Annotation' : 'Point principal';
+                
+                html += `
+                    <div class="point-item" data-point-index="${index}" onclick="selectPointFromList(${index})">
+                        <div class="d-flex align-items-start">
+                            <div class="me-3 mt-1">
+                                <div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="point-name">${point.name}</div>
+                                ${point.description ? `<div class="point-description">${point.description}</div>` : ''}
+                                <div class="point-meta">
+                                    <span class="badge ${badgeClass} point-badge me-2">${badgeText}</span>
+                                    <small class="text-muted">Point ${index + 1}/${allPoints.length}</small>
+                                    ${point.altitude ? `<small class="text-muted ms-2">Alt: ${Math.round(point.altitude)}m</small>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            pointsListContent.innerHTML = html;
+            pointsList.style.display = 'block';
+        }
+        
+        // Sélection d'un point depuis le listing
+        function selectPointFromList(index) {
+            selectPoint(index);
+            
+            // Centrer la carte sur le point
+            const point = allPoints[index];
+            map.setView(point.coordinates, Math.max(map.getZoom(), 15));
+            
+            // Ouvrir le popup du marqueur correspondant
+            if (pointMarkers[index]) {
+                pointMarkers[index].openPopup();
+            }
+        }
+        
+        // Sélection d'un point (fonction commune)
+        function selectPoint(index) {
+            if (index < 0 || index >= allPoints.length) return;
+            
+            currentPointIndex = index;
+            
+            // Mettre à jour la navigation
+            updateNavigationInfo();
+            
+            // Mettre en surbrillance dans le listing
+            updatePointsListHighlight();
+        }
+        
+        // Mise à jour de la surbrillance dans le listing des points
+        function updatePointsListHighlight() {
+            // Supprimer toutes les surbrillances existantes
+            document.querySelectorAll('.point-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            // Ajouter la surbrillance au point actuel
+            if (currentPointIndex >= 0) {
+                const activeItem = document.querySelector(`[data-point-index="${currentPointIndex}"]`);
+                if (activeItem) {
+                    activeItem.classList.add('active');
+                    
+                    // Faire défiler pour rendre visible le point sélectionné
+                    activeItem.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'nearest'
+                    });
+                }
+            }
+        }
+        
+        // Gestion des touches du clavier
+        function setupKeyboardNavigation() {
+            document.addEventListener('keydown', function(e) {
+                if (allPoints.length === 0) return;
+                
+                switch(e.key) {
+                    case 'ArrowLeft':
+                        e.preventDefault();
+                        navigateToPreviousPoint();
+                        break;
+                    case 'ArrowRight':
+                        e.preventDefault();
+                        navigateToNextPoint();
+                        break;
+                }
+            });
+        }
+        
+        // Gestion du drag & drop et sélection de fichier
+        function setupFileHandling() {
+            const fileUploadArea = document.getElementById('fileUploadArea');
+            const fileInput = document.getElementById('fileInput');
+            
+            // Clic sur la zone de téléchargement
+            fileUploadArea.addEventListener('click', () => {
+                fileInput.click();
+            });
+            
+            // Sélection de fichier
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    uploadFile(e.target.files[0]);
+                }
+            });
+            
+            // Drag & Drop
+            fileUploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                fileUploadArea.classList.add('dragover');
+            });
+            
+            fileUploadArea.addEventListener('dragleave', () => {
+                fileUploadArea.classList.remove('dragover');
+            });
+            
+            fileUploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                fileUploadArea.classList.remove('dragover');
+                
+                if (e.dataTransfer.files.length > 0) {
+                    uploadFile(e.dataTransfer.files[0]);
+                }
+            });
+        }
+        
+        // Upload de fichier
+        function uploadFile(file) {
+            if (!file.name.toLowerCase().endsWith('.kml')) {
+                showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Seuls les fichiers .kml sont acceptés', 'warning');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Ajouter le mode d'affichage sélectionné
+            const displayMode = document.querySelector('input[name="displayMode"]:checked').value;
+            formData.append('display_mode', displayMode);
+            
+            showAlert(`<i class="fas fa-spinner fa-spin me-2"></i>Traitement de ${file.name}...`, 'info');
+            
+            fetch('/api/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayKmlData(data);
+                    showAlert(`<i class="fas fa-check me-2"></i>Fichier ${file.name} traité avec succès!`, 'success');
+                } else {
+                    showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${data.error}`, 'danger');
+                }
+            })
+            .catch(error => {
+                showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur lors de l'upload: ${error.message}`, 'danger');
+            });
+        }
+        
+        // Fonction pour recharger les données avec un nouveau mode d'affichage
+        function reloadWithDisplayMode() {
+            // Cette fonction sera appelée quand on change le mode d'affichage
+            // Pour l'instant, on affiche juste un message à l'utilisateur
+            showAlert('<i class="fas fa-info-circle me-2"></i>Veuillez recharger votre fichier KML pour appliquer le nouveau mode d\'affichage', 'info');
+        }
+        
+        // Gestionnaire pour le changement de mode d'affichage
+        function setupDisplayModeHandling() {
+            document.querySelectorAll('input[name="displayMode"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    // Si des données sont déjà chargées, informer l'utilisateur
+                    if (allPoints.length > 0) {
+                        reloadWithDisplayMode();
+                    }
+                });
+            });
+        }
+        
+        // Gestion de la sidebar
+        function setupSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const sidebarToggle = document.getElementById('sidebarToggle');
+            const mainContent = document.getElementById('mainContent');
+            
+            sidebarToggle.addEventListener('click', function() {
+                sidebar.classList.toggle('collapsed');
+                mainContent.classList.toggle('expanded');
+                
+                // Changer l'icône du bouton
+                const icon = sidebarToggle.querySelector('i');
+                if (sidebar.classList.contains('collapsed')) {
+                    icon.className = 'fas fa-chevron-right';
+                } else {
+                    icon.className = 'fas fa-chevron-left';
+                }
+                
+                // Redimensionner la carte après l'animation
+                setTimeout(() => {
+                    if (map) {
+                        map.invalidateSize();
+                    }
+                }, 300);
+            });
+        }
+        
+        // ===== FONCTIONS D'ANALYSE DE TRAJECTOIRE - PHASE 3 =====
+        
+        // Fonction principale d'analyse de trajectoire
+        function analyzeTrajectory(features) {
+            if (!features || features.length === 0) {
+                hideAnalysisPanel();
+                return;
+            }
+            
+            // Appeler l'API d'analyse
+            fetch('/api/analysis/trajectory', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ features: features })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    currentAnalysis = data.analysis;
+                    displayAnalysisResults(currentAnalysis);
+                    showAnalysisPanel();
+                } else {
+                    console.error('Erreur lors de l\'analyse:', data.error);
+                    hideAnalysisPanel();
+                }
+            })
+            .catch(error => {
+                console.error('Erreur lors de l\'analyse:', error);
+                hideAnalysisPanel();
+            });
+        }
+        
+        // Affichage des résultats d'analyse
+        function displayAnalysisResults(analysis) {
+            // Mise à jour des statistiques de base
+            updateBasicStats(analysis);
+            
+            // Création des graphiques
+            if (analysis.elevation && analysis.elevation.elevation_profile) {
+                createElevationChart(analysis.elevation.elevation_profile);
+            }
+            
+            if (analysis.speed && analysis.speed.speed_profile) {
+                createSpeedChart(analysis.speed.speed_profile);
+            }
+        }
+        
+        // Mise à jour des statistiques de base
+        function updateBasicStats(analysis) {
+            const distance = analysis.distance || {};
+            const speed = analysis.speed || {};
+            const elevation = analysis.elevation || {};
+            const duration = analysis.duration || {};
+            
+            // Distance totale
+            document.getElementById('totalDistance').textContent =
+                distance.total_distance_km ? `${distance.total_distance_km} km` : '-';
+            
+            // Durée estimée
+            document.getElementById('totalDuration').textContent =
+                duration.estimated_duration_minutes ? `${Math.round(duration.estimated_duration_minutes)} min` : '-';
+            
+            // Vitesse moyenne
+            document.getElementById('avgSpeed').textContent =
+                speed.avg_speed_kmh ? `${speed.avg_speed_kmh} km/h` : '-';
+            
+            // Vitesse maximale
+            document.getElementById('maxSpeed').textContent =
+                speed.max_speed_kmh ? `${speed.max_speed_kmh} km/h` : '-';
+            
+            // Dénivelé positif
+            document.getElementById('totalAscent').textContent =
+                elevation.total_ascent ? `+${elevation.total_ascent} m` : '-';
+            
+            // Dénivelé négatif
+            document.getElementById('totalDescent').textContent =
+                elevation.total_descent ? `-${elevation.total_descent} m` : '-';
+            
+            // Statistiques détaillées d'élévation
+            document.getElementById('minElevation').textContent =
+                elevation.min_elevation ? `${elevation.min_elevation} m` : '-';
+            document.getElementById('maxElevation').textContent =
+                elevation.max_elevation ? `${elevation.max_elevation} m` : '-';
+            
+            // Statistiques détaillées de vitesse
+            document.getElementById('minSpeed').textContent =
+                speed.min_speed_kmh ? `${speed.min_speed_kmh} km/h` : '-';
+            document.getElementById('avgSpeedDetail').textContent =
+                speed.avg_speed_kmh ? `${speed.avg_speed_kmh} km/h` : '-';
+            document.getElementById('maxSpeedDetail').textContent =
+                speed.max_speed_kmh ? `${speed.max_speed_kmh} km/h` : '-';
+        }
+        
+        // Création du graphique d'élévation
+        function createElevationChart(elevationProfile) {
+            const ctx = document.getElementById('elevationChart').getContext('2d');
+            
+            // Détruire le graphique existant s'il y en a un
+            if (elevationChart) {
+                elevationChart.destroy();
+            }
+            
+            const labels = elevationProfile.map(point => (point.distance / 1000).toFixed(1));
+            const data = elevationProfile.map(point => point.elevation);
+            
+            elevationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Élévation (m)',
+                        data: data,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Distance (km)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Altitude (m)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Création du graphique de vitesse
+        function createSpeedChart(speedProfile) {
+            const ctx = document.getElementById('speedChart').getContext('2d');
+            
+            // Détruire le graphique existant s'il y en a un
+            if (speedChart) {
+                speedChart.destroy();
+            }
+            
+            const labels = speedProfile.map((point, index) => index + 1);
+            const data = speedProfile.map(point => point.speed_kmh);
+            
+            speedChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Vitesse (km/h)',
+                        data: data,
+                        borderColor: '#28a745',
+                        backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Point'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Vitesse (km/h)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Affichage du panneau d'analyse
+        function showAnalysisPanel() {
+            const analysisPanel = document.getElementById('analysisPanel');
+            const pointsList = document.getElementById('pointsList');
+            
+            if (analysisPanel) {
+                analysisPanel.style.display = 'block';
+                
+                // Réorganiser les colonnes : carte 4, points 4, analyse 4
+                const mapCol = document.querySelector('.col-lg-8');
+                const pointsCol = document.querySelector('.col-lg-4');
+                
+                if (mapCol && pointsCol) {
+                    mapCol.className = 'col-lg-8';
+                    pointsCol.className = 'col-lg-4';
+                }
+                
+                // Redimensionner la carte
+                setTimeout(() => {
+                    if (map) {
+                        map.invalidateSize();
+                    }
+                }, 300);
+            }
+        }
+        
+        // Masquage du panneau d'analyse
+        function hideAnalysisPanel() {
+            const analysisPanel = document.getElementById('analysisPanel');
+            
+            if (analysisPanel) {
+                analysisPanel.style.display = 'none';
+                
+                // Restaurer les colonnes originales : carte 8, points 4
+                const mapCol = document.querySelector('.col-lg-4');
+                const pointsCol = mapCol ? mapCol.nextElementSibling : null;
+                
+                if (mapCol && pointsCol) {
+                    mapCol.className = 'col-lg-8';
+                    pointsCol.className = 'col-lg-4';
+                }
+                
+                // Redimensionner la carte
+                setTimeout(() => {
+                    if (map) {
+                        map.invalidateSize();
+                    }
+                }, 300);
+            }
+        }
+        
+        // ===== FIN DES FONCTIONS D'ANALYSE =====
+        
+        // Initialisation
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            setupFileHandling();
+            loadSampleFiles();
+            setupKeyboardNavigation();
+            setupDisplayModeHandling();
+            setupSidebar();
+        });
+    </script>
+</body>
+</html>

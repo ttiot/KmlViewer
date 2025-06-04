@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  kml-viewer:
+    build: ./web-app
+    container_name: kml-viewer-app
+    ports:
+      - "8080:5000"
+    volumes:
+      # Monter les fichiers KML du projet pour les utiliser comme exemples
+      - .:/app/sample_files:ro
+    environment:
+      - FLASK_ENV=development
+      - FLASK_APP=kml_viewer.py
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: kml-viewer-network
