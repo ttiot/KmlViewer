@@ -4,6 +4,7 @@ Service de gestion des fichiers.
 
 from pathlib import Path
 from typing import Dict, List
+from app.services.timing_tools import track_time
 from werkzeug.utils import secure_filename
 from flask import current_app
 
@@ -12,12 +13,14 @@ class FileService:
     """Service de gestion des fichiers KML."""
     
     @staticmethod
+    @track_time
     def allowed_file(filename: str) -> bool:
         """Vérifie si le fichier a une extension autorisée."""
         return ('.' in filename and 
                 filename.rsplit('.', 1)[1].lower() in current_app.config['ALLOWED_EXTENSIONS'])
     
     @staticmethod
+    @track_time
     def get_sample_files() -> List[Dict[str, str]]:
         """Liste les fichiers KML d'exemple disponibles."""
         sample_files = []
@@ -43,6 +46,7 @@ class FileService:
         return sample_files
     
     @staticmethod
+    @track_time
     def load_sample_file(filename: str) -> str:
         """Charge le contenu d'un fichier KML d'exemple."""
         secure_name = secure_filename(filename)
@@ -63,6 +67,7 @@ class FileService:
             return f.read()
     
     @staticmethod
+    @track_time
     def save_uploaded_file(file) -> str:
         """Sauvegarde un fichier uploadé et retourne son contenu."""
         if not file or not FileService.allowed_file(file.filename):

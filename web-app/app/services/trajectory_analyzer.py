@@ -6,12 +6,14 @@ Implémente les fonctionnalités d'analyse de base de la Phase 3.
 import math
 from typing import List, Dict, Any
 from geopy.distance import geodesic
+from app.services.timing_tools import track_time
 
 
 class TrajectoryAnalyzer:
     """Service d'analyse des trajectoires GPS."""
     
     @staticmethod
+    @track_time
     def calculate_distance_between_points(point1: List[float], point2: List[float]) -> float:
         """
         Calcule la distance entre deux points GPS en utilisant la formule de Haversine.
@@ -42,6 +44,7 @@ class TrajectoryAnalyzer:
         return distance_2d
     
     @staticmethod
+    @track_time
     def calculate_total_distance(coordinates: List[List[float]]) -> float:
         """
         Calcule la distance totale d'une trace GPS.
@@ -64,6 +67,7 @@ class TrajectoryAnalyzer:
         return total_distance
     
     @staticmethod
+    @track_time
     def calculate_elevation_profile(coordinates: List[List[float]]) -> Dict[str, Any]:
         """
         Calcule le profil d'élévation d'une trace.
@@ -141,6 +145,7 @@ class TrajectoryAnalyzer:
         }
     
     @staticmethod
+    @track_time
     def calculate_speed_statistics(points: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Calcule les statistiques de vitesse à partir des points GPS.
@@ -193,6 +198,7 @@ class TrajectoryAnalyzer:
         }
     
     @staticmethod
+    @track_time
     def estimate_duration_from_points(points: List[Dict[str, Any]], 
                                     avg_speed_kmh: float = None) -> Dict[str, Any]:
         """
@@ -246,6 +252,7 @@ class TrajectoryAnalyzer:
         }
     
     @staticmethod
+    @track_time
     def analyze_trajectory(features: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Analyse complète d'une trajectoire GPS.
@@ -258,7 +265,7 @@ class TrajectoryAnalyzer:
         """
         # Séparer les traces et les points
         polylines = [f for f in features if f.get('type') == 'polyline']
-        points = [f for f in features if f.get('type') == 'marker']
+        points = [f for f in features if f.get('type') == 'marker' and f.get('is_annotation')]
         
         analysis = {
             'basic_stats': {

@@ -6,9 +6,10 @@ from flask import request, jsonify
 from app.api import bp
 from app.services.kml_parser import KMLParser
 from app.services.file_service import FileService
-
+from app.services.timing_tools import track_time
 
 @bp.route('/upload', methods=['POST'])
+@track_time
 def upload_file():
     """Endpoint pour uploader et traiter un fichier KML."""
     try:
@@ -89,3 +90,17 @@ def health_check():
         'version': '2.0.0',
         'api': 'KML Viewer API'
     })
+
+@bp.route('/stats')
+def stats():
+    """Route pour afficher les statistiques des durées."""
+    from app.services.timing_tools import execution_times
+    stats_data = {}
+    for func_name, data in execution_times.items():
+        avg_time = data['total_time'] / data['count'] if data['count'] > 0 else 0
+        stats_data[func_name] = {
+            'call_count': data['count'],
+            'total_time': round(data['total_time'], 2),
+            'average_time': round(avg_time, 2)
+        }
+    return jsonify(stats_data)
