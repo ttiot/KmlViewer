@@ -6,6 +6,8 @@ Extrait du code original pour une meilleure séparation des responsabilités.
 import re
 import xml.etree.ElementTree as ET
 import logging
+from app.services.timing_tools import track_time
+from xml.etree.ElementTree import tostring
 from typing import Dict, Any
 
 # Configuration du logger
@@ -22,6 +24,7 @@ class KMLParser:
     """Service de parsing des fichiers KML."""
     
     @staticmethod
+    @track_time
     def parse_gps_description(description: str, lat: float, lon: float, alt: float) -> Dict[str, Any]:
         """
         Parse la description d'un point GPS pour extraire les informations de vol.
@@ -88,6 +91,7 @@ class KMLParser:
         return parsed_info
 
     @staticmethod
+    @track_time
     def format_point_description(parsed_info: Dict[str, Any], display_mode: str = 'double') -> str:
         """
         Formate la description d'un point selon le mode d'affichage choisi.
@@ -127,7 +131,8 @@ class KMLParser:
 
     # Fonction pour récupérer tous les <Placemark> sauf ceux dans un <Folder> avec <name>Temps
     @staticmethod
-    def get_placemarks_outside_folder(kml_content,folder_name_to_exclude):
+    @track_time
+    def get_placemarks_points(kml_content,folder_name_to_search):
         placemarks = []
         # Définir les namespaces KML
         namespaces = {
@@ -151,28 +156,15 @@ class KMLParser:
                 logger.debug(f"Folder : {folder_name}")
 
                 # Ignorer les Folders ayant pour nom "Temps"
-                if folder_name and folder_name.strip().lower() == "temps":
+                if folder_name and folder_name.strip().lower() != folder_name_to_search.strip().lower():
                     continue
             
                 #Trouver tous les Placemark dans ce Folder
                 placemarks = folder.findall('.//kml:Placemark', namespaces)
                 if not placemarks:
-                    placemarks = folder.findall('.//Placemark')
-                logger.debug(f"Nombre de Placemark Folder : {len(placemarks)}")
-            # for folder in root.findall(".//Folder"):
-            #     folder_name = folder.find("name")
-                
-            #     if folder_name is not None and folder_name.text == folder_name_to_exclude:
-            #         # Exclure les <Placemark> dans le <Folder> avec le <name> spécifié
-            #         continue
-            #     # Chercher les <Placemark> dans ce <Folder>
-            #     placemarks += folder.findall(".//Placemark")
-            #     logger.debug(f"Nombre de Placemark Folder : {len(placemarks)}")
-            
-            # Inclure aussi les <Placemark> qui ne sont pas dans un <Folder>
-            for placemark in root.findall('.//kml:Document/kml:Placemark',namespaces):
-                placemarks.append(placemark)
-            logger.debug(f"Nombre de Placemark total : {len(placemarks)}")
+                    # placemarks = folder.findall('.//Placemark')
+                    placemarks = root.findall('.//Placemark')
+                logger.debug(f"Nombre de Placemark points : {len(placemarks)}")
             
             return placemarks
         except ET.ParseError as e:
@@ -187,6 +179,7 @@ class KMLParser:
             }
 
     @staticmethod
+    @track_time
     def parse_kml_coordinates(kml_content: str, display_mode: str = 'double') -> Dict[str, Any]:
         """
         Parse un fichier KML et extrait les coordonnées des traces GPS et tous les points.
@@ -211,9 +204,12 @@ class KMLParser:
             points = []
             
             # Récupérer les placemarks
-            filtered_placemarks = KMLParser.get_placemarks_outside_folder(kml_content,'Temps')
-            logger.debug(f"Nombre de Placemark à traiter : {len(filtered_placemarks)}")
-            for i, placemark in enumerate(filtered_placemarks):
+            filtered_placemarks = KMLParser.get_placemarks_points(kml_content,'Points')
+            placemarks_cache = {tostring(pl): pl for pl in filtered_placemarks}
+            placemarks = root.findall('.//kml:Placemark', namespaces)
+            logger.debug(f"Nombre de Placemark à traiter : {len(placemarks)}")
+
+            for i, placemark in enumerate(placemarks):
                 # Récupérer le nom
                 name_elem = placemark.find('kml:name', namespaces)
                 if name_elem is None:
@@ -277,7 +273,7 @@ class KMLParser:
                             alt = float(parts[2]) if len(parts) > 2 else 0
                             
                             # Déterminer si c'est un point d'annotation ou un point principal
-                            is_annotation = KMLParser._is_annotation_point(placemark, root, namespaces)
+                            is_annotation = KMLParser._is_annotation_point(placemark, placemarks_cache)
                             
                             # Parser les informations GPS de la description
                             parsed_info = KMLParser.parse_gps_description(description, lat, lon, alt)
@@ -321,23 +317,11 @@ class KMLParser:
             }
 
     @staticmethod
-    def _is_annotation_point(placemark, root, namespaces) -> bool:
-        """Détermine si un point est une annotation."""
-        # Chercher dans tous les dossiers "Points" du document
-        folders = root.findall('.//kml:Folder', namespaces)
-        if not folders:
-            folders = root.findall('.//Folder')
-        
-        for folder in folders:
-            folder_name = folder.find('kml:name', namespaces)
-            if folder_name is None:
-                folder_name = folder.find('name')
-            if folder_name is not None and folder_name.text == "Points":
-                # Vérifier si ce placemark est dans ce dossier
-                folder_placemarks = folder.findall('.//kml:Placemark', namespaces)
-                if not folder_placemarks:
-                    folder_placemarks = folder.findall('.//Placemark')
-                if placemark in folder_placemarks:
-                    return True
+    @track_time
+    def _is_annotation_point(placemark, placemarks_cache) -> bool:
+
+        if tostring(placemark) in placemarks_cache:
+            # logger.debug(f"Placemark trouvé")
+            return True
         
         return False

@@ -6,10 +6,12 @@ Phase 3 : Analyses de trajet - Fonctionnalités de base.
 from flask import request, jsonify
 from app.services.kml_parser import KMLParser
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
+from app.services.timing_tools import track_time
 from . import bp
 
 
 @bp.route('/analysis/trajectory', methods=['POST'])
+@track_time
 def analyze_trajectory():
     """
     Analyse une trajectoire GPS à partir des données KML.
@@ -47,6 +49,7 @@ def analyze_trajectory():
 
 
 @bp.route('/analysis/upload-and-analyze', methods=['POST'])
+@track_time
 def upload_and_analyze():
     """
     Upload un fichier KML et effectue l'analyse en une seule requête.
@@ -103,6 +106,7 @@ def upload_and_analyze():
 
 
 @bp.route('/analysis/elevation-profile', methods=['POST'])
+@track_time
 def get_elevation_profile():
     """
     Calcule le profil d'élévation pour une trace donnée.
@@ -146,6 +150,7 @@ def get_elevation_profile():
 
 
 @bp.route('/analysis/speed-analysis', methods=['POST'])
+@track_time
 def get_speed_analysis():
     """
     Analyse les données de vitesse des points GPS.
@@ -183,6 +188,7 @@ def get_speed_analysis():
 
 
 @bp.route('/analysis/distance', methods=['POST'])
+@track_time
 def calculate_distance():
     """
     Calcule la distance totale d'une trace.
