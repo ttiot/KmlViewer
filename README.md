@@ -1,3 +1,5 @@
+[![Build and Push Docker Image](https://github.com/ttiot/KmlViewer/actions/workflows/docker.yml/badge.svg)](https://github.com/ttiot/KmlViewer/actions/workflows/docker.yml)
+
 # 🗺️ Visualiseur KML - Application Web Complète
 
 Application web interactive pour visualiser des fichiers KML sur une carte avec navigation entre les points et différents fonds de carte.
