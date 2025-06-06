@@ -96,7 +96,7 @@ jobs:
           tags: |
             type=ref,event=tag
             type=raw,value=unstable,enable={{is_default_branch}}
-            type=raw,value=unstable-{{branch}},enable={{is_default_branch | not}}
+            type=raw,value=unstable-{{branch}},disable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
@@ -139,6 +139,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: downcase REPO
+        run: |
+          echo "IMG=${IMAGE_NAME@L}" >> "${GITHUB_ENV}"
+
       - name: Test de l'image Docker
         run: |
           if [[ $GITHUB_REF == refs/tags/* ]]; then
@@ -153,7 +157,7 @@ jobs:
           echo "Test de l'image avec le tag: $TAG"
 
           docker run -d --name test-container -p 5000:5000 \
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:$TAG
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMG }}:$TAG
 
           sleep 30
 
