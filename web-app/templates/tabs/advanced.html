@@ -1,0 +1,73 @@
+<div class="tab-pane fade" id="advanced" role="tabpanel">
+    <div class="row g-3">
+        <div class="col-12">
+            <button class="btn btn-primary btn-sm me-2" onclick="runAdvancedAnalysis()">
+                <i class="fas fa-play"></i> Lancer l'analyse avancée
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="clearAdvancedAnalysis()">
+                <i class="fas fa-trash"></i> Effacer
+            </button>
+        </div>
+        
+        <!-- Résultats des analyses avancées -->
+        <div class="col-12" id="advancedResults" style="display: none;">
+            <div class="accordion" id="advancedAccordion">
+                <!-- Arrêts détectés -->
+                <div class="accordion-item">
+                    <h2 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#stopsCollapse">
+                            <i class="fas fa-stop-circle me-2"></i> Arrêts détectés (<span id="stopsCount">0</span>)
+                        </button>
+                    </h2>
+                    <div id="stopsCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
+                        <div class="accordion-body">
+                            <div id="stopsList"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Segments de trajectoire -->
+                <div class="accordion-item">
+                    <h2 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#segmentsCollapse">
+                            <i class="fas fa-route me-2"></i> Segments (<span id="segmentsCount">0</span>)
+                        </button>
+                    </h2>
+                    <div id="segmentsCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
+                        <div class="accordion-body">
+                            <div id="segmentsList"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Zones de vitesse -->
+                <div class="accordion-item">
+                    <h2 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#speedZonesCollapse">
+                            <i class="fas fa-palette me-2"></i> Zones de vitesse
+                        </button>
+                    </h2>
+                    <div id="speedZonesCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
+                        <div class="accordion-body">
+                            <div id="speedZonesList"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Analyse du terrain -->
+                <div class="accordion-item">
+                    <h2 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#terrainCollapse">
+                            <i class="fas fa-mountain me-2"></i> Analyse du terrain
+                        </button>
+                    </h2>
+                    <div id="terrainCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
+                        <div class="accordion-body">
+                            <div id="terrainAnalysis"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="32" height="32">
+  <!-- Fond de carte -->
+  <rect x="64" y="96" width="384" height="288" rx="16" ry="16" fill="#4a90e2" stroke="#2c5aa0" stroke-width="4"/>
+  
+  <!-- Lignes de carte (grille) -->
+  <g stroke="#ffffff" stroke-width="2" opacity="0.3">
+    <line x1="128" y1="96" x2="128" y2="384"/>
+    <line x1="192" y1="96" x2="192" y2="384"/>
+    <line x1="256" y1="96" x2="256" y2="384"/>
+    <line x1="320" y1="96" x2="320" y2="384"/>
+    <line x1="384" y1="96" x2="384" y2="384"/>
+    <line x1="64" y1="144" x2="448" y2="144"/>
+    <line x1="64" y1="192" x2="448" y2="192"/>
+    <line x1="64" y1="240" x2="448" y2="240"/>
+    <line x1="64" y1="288" x2="448" y2="288"/>
+    <line x1="64" y1="336" x2="448" y2="336"/>
+  </g>
+  
+  <!-- Marqueur principal (rouge) -->
+  <g transform="translate(200, 160)">
+    <path d="M0 0c-22.091 0-40 17.909-40 40 0 40 40 72 40 72s40-32 40-72c0-22.091-17.909-40-40-40z" fill="#e74c3c"/>
+    <circle cx="0" cy="40" r="16" fill="#ffffff"/>
+  </g>
+  
+  <!-- Marqueur secondaire (vert) -->
+  <g transform="translate(320, 200)">
+    <path d="M0 0c-16.569 0-30 13.431-30 30 0 30 30 54 30 54s30-24 30-54c0-16.569-13.431-30-30-30z" fill="#27ae60"/>
+    <circle cx="0" cy="30" r="12" fill="#ffffff"/>
+  </g>
+  
+  <!-- Marqueur tertiaire (orange) -->
+  <g transform="translate(140, 280)">
+    <path d="M0 0c-11.046 0-20 8.954-20 20 0 20 20 36 20 36s20-16 20-36c0-11.046-8.954-20-20-20z" fill="#f39c12"/>
+    <circle cx="0" cy="20" r="8" fill="#ffffff"/>
+  </g>
+  
+  <!-- Chemin/route entre les marqueurs -->
+  <path d="M200 200 Q260 220 320 230 Q280 250 140 300" stroke="#2c3e50" stroke-width="3" fill="none" stroke-dasharray="5,5" opacity="0.7"/>
+</svg>
