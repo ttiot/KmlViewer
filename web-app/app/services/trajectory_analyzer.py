@@ -275,7 +275,7 @@ class TrajectoryAnalyzer:
         """
         # Séparer les traces et les points
         polylines = [f for f in features if f.get('type') == 'polyline']
-        points = [f for f in features if f.get('type') == 'marker' and f.get('is_annotation')]
+        points = [f for f in features if f.get('type') == 'marker' and f.get('visibility') == "0"]
         
         analysis = {
             'basic_stats': {
