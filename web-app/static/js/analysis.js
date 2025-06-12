@@ -255,7 +255,7 @@ let selectedPointForEdit = null;
 
 // Lancer l'analyse avancée
 function runAdvancedAnalysis() {
-    if (!currentKmlLayer) {
+    if (!currentFileLayer) {
         showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Aucune donnée KML chargée', 'warning');
         return;
     }
