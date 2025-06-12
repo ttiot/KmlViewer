@@ -1,6 +1,6 @@
 // Variables globales
 let map;
-let currentKmlLayer;
+let currentFileLayer;
 let baseLayers = {};
 let allPoints = [];
 let allFeatures = [];
@@ -12,10 +12,10 @@ let currentAnalysis = null;
 let elevationChart = null;
 let speedChart = null;
 
-// Variables pour l'overlay de sélection KML
-let kmlOverlay = null;
-let kmlLayers = new Map(); // Stockage des couches individuelles
-let kmlData = null; // Données KML actuelles
+// Variables pour l'overlay de sélection de fichier
+let fileOverlay = null;
+let fileLayers = new Map(); // Stockage des couches individuelles
+let fileData = null; // Données du fichier actuel (KML ou GPX)
 
 // Initialisation de la carte
 function initMap() {
@@ -144,7 +144,7 @@ function loadSampleFile(filename) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                displayKmlData(data);
+                displayFileData(data);
                 showAlert(`<i class="fas fa-check me-2"></i>Fichier ${filename} chargé avec succès!`, 'success');
             } else {
                 showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${data.error}`, 'danger');
@@ -155,8 +155,8 @@ function loadSampleFile(filename) {
         });
 }
 
-// Affichage des données KML sur la carte
-function displayKmlData(data) {
+// Affichage des données de fichier (KML ou GPX) sur la carte
+function displayFileData(data) {
     // Vérifier s'il y a une erreur dans les données
     if (data.error) {
         showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${data.error}`, 'danger');
@@ -164,13 +164,13 @@ function displayKmlData(data) {
     }
     
     // Stocker les données pour l'overlay
-    kmlData = data;
+    fileData = data;
     
     // Supprimer la couche précédente et l'overlay si ils existent
-    if (currentKmlLayer) {
-        map.removeLayer(currentKmlLayer);
+    if (currentFileLayer) {
+        map.removeLayer(currentFileLayer);
     }
-    removeKmlOverlay();
+    removeFileOverlay();
     removeScreenOverlays();
     
     // Réinitialiser les variables de navigation
@@ -178,10 +178,10 @@ function displayKmlData(data) {
     allFeatures = data.features || [];
     currentPointIndex = -1;
     pointMarkers = [];
-    kmlLayers.clear();
+    fileLayers.clear();
     
-    // Créer un groupe de couches pour les features KML
-    currentKmlLayer = L.layerGroup();
+    // Créer un groupe de couches pour les features du fichier
+    currentFileLayer = L.layerGroup();
     
     let bounds = L.latLngBounds();
     let featureCount = 0;
@@ -272,15 +272,15 @@ function displayKmlData(data) {
         if (layer) {
             // Stocker la couche avec un identifiant unique
             const layerId = `feature_${index}`;
-            kmlLayers.set(layerId, layer);
+            fileLayers.set(layerId, layer);
             
             // Ajouter la couche au groupe principal et à la carte
-            currentKmlLayer.addLayer(layer);
+            currentFileLayer.addLayer(layer);
         }
     });
     
     // Ajouter la couche à la carte
-    currentKmlLayer.addTo(map);
+    currentFileLayer.addTo(map);
     
     // Ajuster la vue sur les données
     if (bounds.isValid()) {
@@ -288,7 +288,7 @@ function displayKmlData(data) {
     }
     
     // Créer l'overlay de sélection
-    createKmlOverlay(data);
+    createFileOverlay(data);
     
     // Générer le listing des points
     displayPointsList();
@@ -306,15 +306,16 @@ function displayKmlData(data) {
     analyzeTrajectory(data.features);
 }
 
-// Création de l'overlay de sélection KML
-function createKmlOverlay(data) {
+// Création de l'overlay de sélection de fichier
+function createFileOverlay(data) {
     // Supprimer l'overlay existant s'il y en a un
-    removeKmlOverlay();
+    removeFileOverlay();
     
     // Créer le conteneur de l'overlay
-    kmlOverlay = document.createElement('div');
-    kmlOverlay.id = 'kmlOverlay';
-    kmlOverlay.className = 'kml-overlay';
+    // fileOverlay = document.createElement('div');
+    kmlOverlay = document.createElement("div");
+    kmlOverlay.id = "fileOverlay";
+    kmlOverlay.className = "file-overlay";
     
     // Style CSS inline pour l'overlay
     kmlOverlay.style.cssText = `
@@ -882,12 +883,12 @@ function toggleKmlLayer(checkbox) {
         const layer = kmlLayers.get(layerId);
         if (layer) {
             if (checkbox.checked) {
-                if (!currentKmlLayer.hasLayer(layer)) {
-                    currentKmlLayer.addLayer(layer);
+                if (!currentFileLayer.hasLayer(layer)) {
+                    currentFileLayer.addLayer(layer);
                 }
             } else {
-                if (currentKmlLayer.hasLayer(layer)) {
-                    currentKmlLayer.removeLayer(layer);
+                if (currentFileLayer.hasLayer(layer)) {
+                    currentFileLayer.removeLayer(layer);
                 }
             }
         }
@@ -922,11 +923,11 @@ function toggleMetadataDisplay(metaId, show) {
     }
 }
 
-// Supprimer l'overlay KML
-function removeKmlOverlay() {
-    if (kmlOverlay && kmlOverlay.parentNode) {
-        kmlOverlay.parentNode.removeChild(kmlOverlay);
-        kmlOverlay = null;
+// Supprimer l'overlay de fichier
+function removeFileOverlay() {
+    if (fileOverlay && fileOverlay.parentNode) {
+        fileOverlay.parentNode.removeChild(fileOverlay);
+        fileOverlay = null;
     }
 }
 
@@ -1193,8 +1194,9 @@ function setupFileHandling() {
 
 // Upload de fichier
 function uploadFile(file) {
-    if (!file.name.toLowerCase().endsWith('.kml')) {
-        showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Seuls les fichiers .kml sont acceptés', 'warning');
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.kml') && !fileName.endsWith('.gpx')) {
+        showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Seuls les fichiers .kml et .gpx sont acceptés', 'warning');
         return;
     }
     
@@ -1214,7 +1216,7 @@ function uploadFile(file) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            displayKmlData(data);
+            displayFileData(data);
             showAlert(`<i class="fas fa-check me-2"></i>Fichier ${file.name} traité avec succès!`, 'success');
         } else {
             showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${data.error}`, 'danger');
@@ -1281,7 +1283,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setupSidebar();
     
     // Nettoyer l'overlay au chargement de la page
-    removeKmlOverlay();
+    removeFileOverlay();
 });
 // Fonctions pour gérer les styles et couleurs KML
 function getFeatureStyle(feature, metadata) {
@@ -1615,9 +1617,9 @@ function formatDistance(distance) {
 
 // Fonction pour centrer la carte sur un polygone
 function centerOnPolygon(polygonName) {
-    if (!currentKmlLayer) return;
+    if (!currentFileLayer) return;
     
-    currentKmlLayer.eachLayer(function(layer) {
+    currentFileLayer.eachLayer(function(layer) {
         if (layer._polygonInfo && layer._polygonInfo.name === polygonName) {
             const bounds = layer.getBounds();
             map.fitBounds(bounds, { padding: [20, 20] });
