@@ -13,6 +13,7 @@ from app.services.timing_tools import track_time
 @track_time
 def upload_file():
     """Endpoint pour uploader et traiter un fichier KML ou GPX."""
+    """Endpoint pour uploader et traiter un fichier KML ou GPX."""
     try:
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'Aucun fichier sélectionné'}), 400
@@ -24,7 +25,7 @@ def upload_file():
         # Récupérer le mode d'affichage depuis les paramètres
         display_mode = request.form.get('display_mode', 'double')
         
-        # Traiter le fichier
+        # Traiter le fichier avec détection automatique du format
         content = FileService.save_uploaded_file(file)
         ext = file.filename.rsplit('.', 1)[1].lower()
         if ext == 'gpx':
@@ -65,11 +66,12 @@ def list_sample_files():
 @bp.route('/load-sample/<filename>')
 def load_sample_file(filename):
     """Charge un fichier d'exemple (KML ou GPX)."""
+    """Charge un fichier d'exemple (KML ou GPX)."""
     try:
         # Récupérer le mode d'affichage depuis les paramètres de requête
         display_mode = request.args.get('display_mode', 'double')
         
-        # Charger le fichier
+        # Charger le fichier avec détection automatique du format
         content = FileService.load_sample_file(filename)
         ext = filename.rsplit('.', 1)[1].lower()
         if ext == 'gpx':
@@ -97,7 +99,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'version': '2.0.0',
-        'api': 'KML Viewer API'
+        'api': 'KML/GPX Viewer API'
     })
 
 @bp.route('/stats')
