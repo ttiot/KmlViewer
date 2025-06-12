@@ -6,6 +6,7 @@ from flask import request, jsonify
 from app.api import bp
 from app.services.kml_parser import KMLParser
 from app.services.gpx_parser import GPXParser
+from app.services.cache_service import parse_kml_cached, parse_gpx_cached
 from app.services.file_service import FileService
 from app.services.timing_tools import track_time
 
@@ -29,9 +30,9 @@ def upload_file():
         content = FileService.save_uploaded_file(file)
         ext = file.filename.rsplit('.', 1)[1].lower()
         if ext == 'gpx':
-            result = GPXParser.parse_gpx_coordinates(content)
+            result = parse_gpx_cached(content)
         else:
-            result = KMLParser.parse_kml_coordinates(content, display_mode)
+            result = parse_kml_cached(content, display_mode)
         
         if result['success']:
             return jsonify(result)
@@ -75,9 +76,9 @@ def load_sample_file(filename):
         content = FileService.load_sample_file(filename)
         ext = filename.rsplit('.', 1)[1].lower()
         if ext == 'gpx':
-            result = GPXParser.parse_gpx_coordinates(content)
+            result = parse_gpx_cached(content)
         else:
-            result = KMLParser.parse_kml_coordinates(content, display_mode)
+            result = parse_kml_cached(content, display_mode)
         
         return jsonify(result)
         
