@@ -15,7 +15,7 @@ class Config:
     
     # Configuration des uploads
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or 'uploads'
-    ALLOWED_EXTENSIONS = {'kml', 'kmz'}
+    ALLOWED_EXTENSIONS = {'kml', 'kmz', 'gpx'}
     
     # Configuration des fichiers d'exemple
     SAMPLE_FILES_DIR = os.environ.get('SAMPLE_FILES_DIR') or '/app/sample_files'

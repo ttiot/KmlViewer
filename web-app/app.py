@@ -24,7 +24,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # Enregistrer les blueprints
 app.register_blueprint(analysis_bp)
 
-ALLOWED_EXTENSIONS = {'kml', 'kmz'}
+ALLOWED_EXTENSIONS = {'kml', 'kmz', 'gpx'}
 
 def allowed_file(filename):
     """Vérifie si le fichier a une extension autorisée."""

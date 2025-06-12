@@ -26,7 +26,7 @@ def test_api_health(client):
     json_data = response.get_json()
     assert json_data['status'] == 'healthy'
     assert json_data['version'] == '2.0.0'
-    assert json_data['api'] == 'KML Viewer API'
+    assert json_data['api'] == 'KML/GPX Viewer API'
 
 
 def test_api_sample_files(client):

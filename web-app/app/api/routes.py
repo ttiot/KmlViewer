@@ -5,13 +5,15 @@ Routes API REST de l'application.
 from flask import request, jsonify
 from app.api import bp
 from app.services.kml_parser import KMLParser
+from app.services.gpx_parser import GPXParser
 from app.services.file_service import FileService
 from app.services.timing_tools import track_time
 
 @bp.route('/upload', methods=['POST'])
 @track_time
 def upload_file():
-    """Endpoint pour uploader et traiter un fichier KML."""
+    """Endpoint pour uploader et traiter un fichier KML ou GPX."""
+    """Endpoint pour uploader et traiter un fichier KML ou GPX."""
     try:
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'Aucun fichier sélectionné'}), 400
@@ -23,9 +25,13 @@ def upload_file():
         # Récupérer le mode d'affichage depuis les paramètres
         display_mode = request.form.get('display_mode', 'double')
         
-        # Traiter le fichier
+        # Traiter le fichier avec détection automatique du format
         content = FileService.save_uploaded_file(file)
-        result = KMLParser.parse_kml_coordinates(content, display_mode)
+        ext = file.filename.rsplit('.', 1)[1].lower()
+        if ext == 'gpx':
+            result = GPXParser.parse_gpx_coordinates(content)
+        else:
+            result = KMLParser.parse_kml_coordinates(content, display_mode)
         
         if result['success']:
             return jsonify(result)
@@ -46,7 +52,7 @@ def upload_file():
 
 @bp.route('/sample-files')
 def list_sample_files():
-    """Liste les fichiers KML d'exemple disponibles."""
+    """Liste les fichiers d'exemple disponibles."""
     try:
         sample_files = FileService.get_sample_files()
         return jsonify({'files': sample_files})
@@ -59,14 +65,19 @@ def list_sample_files():
 
 @bp.route('/load-sample/<filename>')
 def load_sample_file(filename):
-    """Charge un fichier KML d'exemple."""
+    """Charge un fichier d'exemple (KML ou GPX)."""
+    """Charge un fichier d'exemple (KML ou GPX)."""
     try:
         # Récupérer le mode d'affichage depuis les paramètres de requête
         display_mode = request.args.get('display_mode', 'double')
         
-        # Charger le fichier
+        # Charger le fichier avec détection automatique du format
         content = FileService.load_sample_file(filename)
-        result = KMLParser.parse_kml_coordinates(content, display_mode)
+        ext = filename.rsplit('.', 1)[1].lower()
+        if ext == 'gpx':
+            result = GPXParser.parse_gpx_coordinates(content)
+        else:
+            result = KMLParser.parse_kml_coordinates(content, display_mode)
         
         return jsonify(result)
         
@@ -88,7 +99,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'version': '2.0.0',
-        'api': 'KML Viewer API'
+        'api': 'KML/GPX Viewer API'
     })
 
 @bp.route('/stats')
