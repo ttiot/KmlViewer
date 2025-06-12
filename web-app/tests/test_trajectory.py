@@ -1,5 +1,6 @@
 import pytest
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
+from app.services.gpx_parser import GPXParser
 
 
 def test_calculate_elevation_profile_basic():
@@ -34,4 +35,37 @@ def test_speed_statistics_with_outlier():
 
     assert stats['max_speed_kmh'] < 50
     assert stats['avg_speed_kmh'] < 20
+
+
+def test_advanced_analysis_with_gpx():
+    gpx = """<?xml version='1.0' encoding='UTF-8'?>
+<gpx xmlns='http://www.topografix.com/GPX/1/1' version='1.1' creator='test'>
+  <trk>
+    <name>Test</name>
+    <trkseg>
+      <trkpt lat='0.0' lon='0.0'>
+        <ele>0</ele>
+        <time>2020-01-01T00:00:00Z</time>
+      </trkpt>
+      <trkpt lat='0.0' lon='0.1'>
+        <ele>0</ele>
+        <time>2020-01-01T00:05:00Z</time>
+      </trkpt>
+      <trkpt lat='0.0' lon='0.2'>
+        <ele>0</ele>
+        <time>2020-01-01T00:10:00Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
+"""
+
+    res = GPXParser.parse_gpx_coordinates(gpx)
+    features = res['features']
+    points = res['points']
+
+    analysis = TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)
+
+    assert analysis['speed_zones']['total_points'] > 0
+    assert len(analysis['segments']) >= 1
 
