@@ -7,6 +7,7 @@ from flask import request, jsonify
 from app.services.kml_parser import KMLParser
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
 from app.services.timing_tools import track_time
+from app.services.cache_service import parse_kml_cached, parse_gpx_cached
 from . import bp
 
 # Configuration du logger
@@ -83,9 +84,13 @@ def upload_and_analyze():
         # Récupérer le mode d'affichage
         display_mode = request.form.get('display_mode', 'double')
         
-        # Lire et parser le fichier KML
+        # Lire et parser le fichier en fonction de son extension
         content = file.read().decode('utf-8')
-        kml_data = KMLParser.parse_kml_coordinates(content, display_mode)
+        ext = file.filename.rsplit('.', 1)[1].lower()
+        if ext == 'gpx':
+            kml_data = parse_gpx_cached(content)
+        else:
+            kml_data = parse_kml_cached(content, display_mode)
         
         if not kml_data['success']:
             return jsonify(kml_data), 400

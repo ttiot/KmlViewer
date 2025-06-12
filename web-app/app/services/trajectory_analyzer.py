@@ -99,13 +99,19 @@ class TrajectoryAnalyzer:
         if len(coordinates) < 2:
             return 0.0
 
-        total_distance = 0.0
-        for i in range(1, len(coordinates)):
-            total_distance += TrajectoryAnalyzer.calculate_distance_between_points(
-                coordinates[i - 1], coordinates[i], include_altitude
-            )
+        coords = np.array(coordinates, dtype=float)
+        lat1 = np.radians(coords[:-1, 0])
+        lon1 = np.radians(coords[:-1, 1])
+        lat2 = np.radians(coords[1:, 0])
+        lon2 = np.radians(coords[1:, 1])
 
-        return total_distance
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+        distance_2d = 6371000 * np.sum(c)
+
+        return float(distance_2d)
 
     @staticmethod
     @track_time
