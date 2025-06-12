@@ -49,6 +49,28 @@ def test_api_upload_no_file(client):
     assert 'Aucun fichier sélectionné' in json_data['error']
 
 
+def test_api_multi_upload(client):
+    """Test de l'upload multiple."""
+    from io import BytesIO
+
+    kml = """<?xml version='1.0' encoding='UTF-8'?><kml xmlns='http://www.opengis.net/kml/2.2'><Document></Document></kml>"""
+    gpx = """<?xml version='1.0' encoding='UTF-8'?><gpx xmlns='http://www.topografix.com/GPX/1/1'><trk><trkseg><trkpt lat='0' lon='0'><ele>0</ele><time>2020-01-01T00:00:00Z</time></trkpt></trkseg></trk></gpx>"""
+
+    data = {
+        'files': [
+            (BytesIO(kml.encode('utf-8')), 'a.kml'),
+            (BytesIO(gpx.encode('utf-8')), 'b.gpx'),
+        ]
+    }
+
+    response = client.post('/api/multi-upload', data=data, content_type='multipart/form-data')
+    assert response.status_code == 200
+    json_data = response.get_json()
+    assert 'files' in json_data
+    assert len(json_data['files']) == 2
+    assert all(f['success'] for f in json_data['files'])
+
+
 def test_api_upload_empty_filename(client):
     """Test de l'upload avec nom de fichier vide."""
     data = {'file': (None, '')}

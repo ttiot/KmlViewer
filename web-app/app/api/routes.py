@@ -6,6 +6,7 @@ from flask import request, jsonify
 from app.api import bp
 from app.services.kml_parser import KMLParser
 from app.services.gpx_parser import GPXParser
+from app.services.cache_service import parse_kml_cached, parse_gpx_cached
 from app.services.file_service import FileService
 from app.services.timing_tools import track_time
 
@@ -29,9 +30,9 @@ def upload_file():
         content = FileService.save_uploaded_file(file)
         ext = file.filename.rsplit('.', 1)[1].lower()
         if ext == 'gpx':
-            result = GPXParser.parse_gpx_coordinates(content)
+            result = parse_gpx_cached(content)
         else:
-            result = KMLParser.parse_kml_coordinates(content, display_mode)
+            result = parse_kml_cached(content, display_mode)
         
         if result['success']:
             return jsonify(result)
@@ -48,6 +49,49 @@ def upload_file():
             'success': False,
             'error': f'Erreur lors du traitement du fichier: {str(e)}'
         }), 500
+
+
+@bp.route('/multi-upload', methods=['POST'])
+@track_time
+def multi_upload():
+    """Endpoint pour uploader plusieurs fichiers en une seule requête."""
+    try:
+        if 'files' not in request.files:
+            return jsonify({'success': False, 'error': 'Aucun fichier fourni'}), 400
+
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'success': False, 'error': 'Aucun fichier fourni'}), 400
+
+        display_mode = request.form.get('display_mode', 'double')
+        results = []
+        for file in files:
+            if not file or file.filename == '':
+                results.append({'filename': '', 'success': False, 'error': 'Nom de fichier invalide'})
+                continue
+
+            if not FileService.allowed_file(file.filename):
+                results.append({'filename': file.filename, 'success': False, 'error': 'Type de fichier non autorisé'})
+                continue
+
+            try:
+                content = file.read().decode('utf-8')
+            except UnicodeDecodeError:
+                results.append({'filename': file.filename, 'success': False, 'error': "Erreur d'encodage"})
+                continue
+
+            ext = file.filename.rsplit('.', 1)[1].lower()
+            if ext == 'gpx':
+                res = parse_gpx_cached(content)
+            else:
+                res = parse_kml_cached(content, display_mode)
+            res['filename'] = file.filename
+            results.append(res)
+
+        return jsonify({'files': results})
+
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'success': False, 'error': f'Erreur : {str(e)}'}), 500
 
 
 @bp.route('/sample-files')
@@ -75,9 +119,9 @@ def load_sample_file(filename):
         content = FileService.load_sample_file(filename)
         ext = filename.rsplit('.', 1)[1].lower()
         if ext == 'gpx':
-            result = GPXParser.parse_gpx_coordinates(content)
+            result = parse_gpx_cached(content)
         else:
-            result = KMLParser.parse_kml_coordinates(content, display_mode)
+            result = parse_kml_cached(content, display_mode)
         
         return jsonify(result)
         
