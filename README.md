@@ -25,6 +25,16 @@ Application web interactive pour visualiser des fichiers KML sur une carte avec 
    ./stop.sh
    ```
 
+### Tests
+
+Installez les dépendances et lancez `pytest` :
+
+```bash
+cd web-app
+pip install -r requirements.txt
+pytest
+```
+
 ## ✨ Fonctionnalités principales
 
 ### 📁 Gestion des fichiers KML
@@ -395,3 +405,10 @@ Ce projet est libre d'utilisation.
 - **Suivi** : Visualisation de flottes ou livraisons
 
 **Profitez de votre exploration cartographique avancée ! 🗺️✈️📊**
+
+## 🚀 Nouveautés Phase 5 - Optimisations
+
+- **Calculs vectorisés** pour la distance totale (numpy)
+- **Mise en cache** des parsings KML/GPX pour éviter les recalculs
+- **Tests supplémentaires** couvrant le cache
+- **Instructions de test** : `pytest`
