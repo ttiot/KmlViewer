@@ -121,23 +121,28 @@ class TrajectoryAnalyzer:
         elevation_threshold = 2.0  # mètres
         spike_threshold = 100.0  # Ignore unrealistic jumps
 
-        prev_elevation = None
-        for elevation in elevations:
-            if elevation is None:
-                continue
-            if prev_elevation is None:
-                prev_elevation = elevation
-                continue
+        prev_elevation = valid_elevations[0]
+        cumulative_diff = 0.0
+
+        for elevation in valid_elevations[1:]:
             diff = elevation - prev_elevation
+
+            # Ignorer les sauts irréalistes
             if abs(diff) > spike_threshold:
                 prev_elevation = elevation
+                cumulative_diff = 0.0
                 continue
-            if abs(diff) >= elevation_threshold:
-                if diff > 0:
-                    total_ascent += diff
-                else:
-                    total_descent += -diff
-            prev_elevation = elevation
+
+            cumulative_diff += diff
+
+            if cumulative_diff >= elevation_threshold:
+                total_ascent += cumulative_diff
+                prev_elevation = elevation
+                cumulative_diff = 0.0
+            elif cumulative_diff <= -elevation_threshold:
+                total_descent += -cumulative_diff
+                prev_elevation = elevation
+                cumulative_diff = 0.0
         
         # Calcul du profil d'élévation avec distance cumulative
         distance_cumulative = 0.0
