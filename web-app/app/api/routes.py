@@ -51,6 +51,49 @@ def upload_file():
         }), 500
 
 
+@bp.route('/multi-upload', methods=['POST'])
+@track_time
+def multi_upload():
+    """Endpoint pour uploader plusieurs fichiers en une seule requête."""
+    try:
+        if 'files' not in request.files:
+            return jsonify({'success': False, 'error': 'Aucun fichier fourni'}), 400
+
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'success': False, 'error': 'Aucun fichier fourni'}), 400
+
+        display_mode = request.form.get('display_mode', 'double')
+        results = []
+        for file in files:
+            if not file or file.filename == '':
+                results.append({'filename': '', 'success': False, 'error': 'Nom de fichier invalide'})
+                continue
+
+            if not FileService.allowed_file(file.filename):
+                results.append({'filename': file.filename, 'success': False, 'error': 'Type de fichier non autorisé'})
+                continue
+
+            try:
+                content = file.read().decode('utf-8')
+            except UnicodeDecodeError:
+                results.append({'filename': file.filename, 'success': False, 'error': "Erreur d'encodage"})
+                continue
+
+            ext = file.filename.rsplit('.', 1)[1].lower()
+            if ext == 'gpx':
+                res = parse_gpx_cached(content)
+            else:
+                res = parse_kml_cached(content, display_mode)
+            res['filename'] = file.filename
+            results.append(res)
+
+        return jsonify({'files': results})
+
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'success': False, 'error': f'Erreur : {str(e)}'}), 500
+
+
 @bp.route('/sample-files')
 def list_sample_files():
     """Liste les fichiers d'exemple disponibles."""

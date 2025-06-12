@@ -16,6 +16,9 @@ let speedChart = null;
 let fileOverlay = null;
 let fileLayers = new Map(); // Stockage des couches individuelles
 let fileData = null; // Données du fichier actuel (KML ou GPX)
+let uploadedFiles = new Map(); // id -> {name, data, layer}
+let fileCounter = 0;
+let activeFileId = null;
 
 // Initialisation de la carte
 function initMap() {
@@ -144,8 +147,7 @@ function loadSampleFile(filename) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                displayFileData(data);
-                showAlert(`<i class="fas fa-check me-2"></i>Fichier ${filename} chargé avec succès!`, 'success');
+                addUploadedFile(filename, data);
             } else {
                 showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${data.error}`, 'danger');
             }
@@ -1168,7 +1170,7 @@ function setupFileHandling() {
     // Sélection de fichier
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-            uploadFile(e.target.files[0]);
+            uploadFiles(e.target.files);
         }
     });
     
@@ -1187,7 +1189,7 @@ function setupFileHandling() {
         fileUploadArea.classList.remove('dragover');
         
         if (e.dataTransfer.files.length > 0) {
-            uploadFile(e.dataTransfer.files[0]);
+            uploadFiles(e.dataTransfer.files);
         }
     });
 }
@@ -1668,4 +1670,147 @@ function positionScreenOverlay(feature, metadata) {
     }
     
     return overlayDiv;
+}
+
+// ===== Fonctions multi-fichiers =====
+
+function createLayerGroupFromData(data) {
+    const group = L.layerGroup();
+    let bounds = L.latLngBounds();
+
+    data.features.forEach((feature) => {
+        let layer = null;
+        const style = getFeatureStyle(feature, data.metadata);
+
+        if (['polyline', 'track', 'multitrack'].includes(feature.type)) {
+            layer = L.polyline(feature.coordinates, {
+                color: style.lineColor,
+                weight: style.width,
+                opacity: 0.8,
+            });
+            bounds.extend(feature.coordinates);
+        } else if (feature.type === 'polygon') {
+            layer = drawPolygonOnMap(feature, data.metadata);
+            if (layer) {
+                bounds.extend(feature.coordinates);
+            }
+        } else if (feature.type === 'marker') {
+            const markerColor = style.color;
+            const markerIcon = L.divIcon({
+                className: 'custom-marker',
+                html: `<div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+                iconSize: [16, 16],
+                iconAnchor: [8, 8],
+            });
+            layer = L.marker(feature.coordinates, { icon: markerIcon });
+            bounds.extend(feature.coordinates);
+        }
+
+        if (layer) {
+            group.addLayer(layer);
+        }
+    });
+
+    return { group, bounds };
+}
+
+function addUploadedFile(filename, data) {
+    const { group, bounds } = createLayerGroupFromData(data);
+    const fileId = `file_${fileCounter++}`;
+    uploadedFiles.set(fileId, { name: filename, data: data, layer: group });
+    map.addLayer(group);
+    if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [20, 20] });
+    }
+
+    const container = document.getElementById('uploadedFiles');
+    const checkboxId = `chk_${fileId}`;
+    const div = document.createElement('div');
+    div.className = 'form-check';
+    div.innerHTML = `<input class="form-check-input" type="checkbox" id="${checkboxId}" data-file-id="${fileId}" checked>
+        <label class="form-check-label" for="${checkboxId}">${filename}</label>`;
+    container.appendChild(div);
+    div.querySelector('input').addEventListener('change', (e) => {
+        toggleFileVisibility(fileId, e.target.checked);
+    });
+
+    addFileTab(fileId, filename);
+    if (!activeFileId) {
+        setActiveFile(fileId);
+    }
+}
+
+function toggleFileVisibility(fileId, visible) {
+    const file = uploadedFiles.get(fileId);
+    if (!file) return;
+    if (visible) {
+        map.addLayer(file.layer);
+    } else {
+        map.removeLayer(file.layer);
+    }
+}
+
+function addFileTab(fileId, name) {
+    const tabs = document.getElementById('fileTabs');
+    const li = document.createElement('li');
+    li.className = 'nav-item';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'nav-link';
+    btn.textContent = name;
+    btn.dataset.fileId = fileId;
+    btn.addEventListener('click', () => setActiveFile(fileId));
+    li.appendChild(btn);
+    tabs.appendChild(li);
+}
+
+function setActiveFile(fileId) {
+    activeFileId = fileId;
+    document.querySelectorAll('#fileTabs .nav-link').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.fileId === fileId);
+    });
+
+    const file = uploadedFiles.get(fileId);
+    if (!file) return;
+    allPoints = file.data.points || [];
+    allFeatures = file.data.features || [];
+    displayPointsList();
+    analyzeTrajectory(file.data.features);
+}
+
+function uploadFiles(files) {
+    const formData = new FormData();
+    const validFiles = Array.from(files).filter((f) =>
+        f.name.toLowerCase().endsWith('.kml') || f.name.toLowerCase().endsWith('.gpx')
+    );
+    if (validFiles.length === 0) {
+        showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Aucun fichier valide', 'warning');
+        return;
+    }
+    validFiles.forEach((f) => formData.append('files', f));
+    const displayMode = document.querySelector('input[name="displayMode"]:checked').value;
+    formData.append('display_mode', displayMode);
+
+    showAlert(`<i class="fas fa-spinner fa-spin me-2"></i>Traitement de ${validFiles.length} fichier(s)...`, 'info');
+
+    fetch('/api/multi-upload', {
+        method: 'POST',
+        body: formData,
+    })
+        .then((response) => response.json())
+        .then((data) => {
+            if (data.files) {
+                data.files.forEach((f) => {
+                    if (f.success) {
+                        addUploadedFile(f.filename || f.name, f);
+                        showAlert(`<i class="fas fa-check me-2"></i>Fichier ${f.filename} chargé`, 'success');
+                    } else {
+                        showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur: ${f.error}`, 'danger');
+                    }
+                });
+            }
+        })
+        .catch((error) => {
+            showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>Erreur lors de l'upload: ${error.message}`, 'danger');
+        });
 }
