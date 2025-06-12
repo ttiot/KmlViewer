@@ -6,6 +6,7 @@ Implémente les fonctionnalités d'analyse de base de la Phase 3.
 import math
 import logging
 from typing import List, Dict, Any
+from statistics import mean
 from geopy.distance import geodesic
 from app.services.timing_tools import track_time
 
@@ -98,10 +99,10 @@ class TrajectoryAnalyzer:
                 'elevation_profile': []
             }
         
-        elevations = [coord[2] if len(coord) > 2 else 0 for coord in coordinates]
+        elevations = [coord[2] if len(coord) > 2 else None for coord in coordinates]
         
         # Filtrer les valeurs nulles ou aberrantes
-        valid_elevations = [alt for alt in elevations if alt is not None and alt > -1000 and alt < 10000]
+        valid_elevations = [alt for alt in elevations if alt is not None and -1000 < alt < 10000]
         
         if not valid_elevations:
             return {
@@ -113,21 +114,40 @@ class TrajectoryAnalyzer:
                 'elevation_profile': []
             }
         
+        # Lissage simple pour réduire le bruit GPS
+        def smooth(values: List[float], window: int = 3) -> List[float]:
+            half = window // 2
+            smoothed = []
+            for idx in range(len(values)):
+                start = max(0, idx - half)
+                end = min(len(values), idx + half + 1)
+                window_vals = [v for v in values[start:end] if v is not None]
+                if window_vals:
+                    smoothed.append(mean(window_vals))
+                else:
+                    smoothed.append(None)
+            return smoothed
+
+        smoothed_elevations = smooth(elevations)
+
         # Calcul des montées et descentes
         total_ascent = 0.0
         total_descent = 0.0
-        
+
         # Utiliser un seuil pour éviter le bruit GPS
         elevation_threshold = 3.0  # mètres
-        
-        for i in range(1, len(elevations)):
-            if elevations[i] is not None and elevations[i-1] is not None:
-                diff = elevations[i] - elevations[i-1]
-                if abs(diff) > elevation_threshold:
-                    if diff > 0:
-                        total_ascent += diff
-                    else:
-                        total_descent += abs(diff)
+
+        for i in range(1, len(smoothed_elevations)):
+            prev = smoothed_elevations[i-1]
+            curr = smoothed_elevations[i]
+            if prev is None or curr is None:
+                continue
+            diff = curr - prev
+            if abs(diff) >= elevation_threshold:
+                if diff > 0:
+                    total_ascent += diff
+                else:
+                    total_descent += -diff
         
         # Calcul du profil d'élévation avec distance cumulative
         distance_cumulative = 0.0
