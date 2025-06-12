@@ -20,3 +20,18 @@ def test_calculate_elevation_profile_basic():
     assert result["min_elevation"] == 0.0
     assert result["max_elevation"] == 30.0
 
+
+def test_speed_statistics_with_outlier():
+    points = []
+    speeds = [10, 12, 11, 120, 9]
+    for i, spd in enumerate(speeds):
+        points.append({
+            'parsed_info': {'speed_kmh': spd, 'speed_kts': spd / 1.852},
+            'coordinates': [0.0, 0.0],
+        })
+
+    stats = TrajectoryAnalyzer.calculate_speed_statistics(points)
+
+    assert stats['max_speed_kmh'] < 50
+    assert stats['avg_speed_kmh'] < 20
+
