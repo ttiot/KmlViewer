@@ -6,7 +6,6 @@ Implémente les fonctionnalités d'analyse de base de la Phase 3.
 import math
 import logging
 from typing import List, Dict, Any
-from statistics import mean
 from geopy.distance import geodesic
 from app.services.timing_tools import track_time
 
@@ -114,40 +113,31 @@ class TrajectoryAnalyzer:
                 'elevation_profile': []
             }
         
-        # Lissage simple pour réduire le bruit GPS
-        def smooth(values: List[float], window: int = 3) -> List[float]:
-            half = window // 2
-            smoothed = []
-            for idx in range(len(values)):
-                start = max(0, idx - half)
-                end = min(len(values), idx + half + 1)
-                window_vals = [v for v in values[start:end] if v is not None]
-                if window_vals:
-                    smoothed.append(mean(window_vals))
-                else:
-                    smoothed.append(None)
-            return smoothed
-
-        smoothed_elevations = smooth(elevations)
-
         # Calcul des montées et descentes
         total_ascent = 0.0
         total_descent = 0.0
 
         # Utiliser un seuil pour éviter le bruit GPS
-        elevation_threshold = 3.0  # mètres
+        elevation_threshold = 2.0  # mètres
+        spike_threshold = 100.0  # Ignore unrealistic jumps
 
-        for i in range(1, len(smoothed_elevations)):
-            prev = smoothed_elevations[i-1]
-            curr = smoothed_elevations[i]
-            if prev is None or curr is None:
+        prev_elevation = None
+        for elevation in elevations:
+            if elevation is None:
                 continue
-            diff = curr - prev
+            if prev_elevation is None:
+                prev_elevation = elevation
+                continue
+            diff = elevation - prev_elevation
+            if abs(diff) > spike_threshold:
+                prev_elevation = elevation
+                continue
             if abs(diff) >= elevation_threshold:
                 if diff > 0:
                     total_ascent += diff
                 else:
                     total_descent += -diff
+            prev_elevation = elevation
         
         # Calcul du profil d'élévation avec distance cumulative
         distance_cumulative = 0.0
