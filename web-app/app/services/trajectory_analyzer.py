@@ -23,6 +23,30 @@ logger = logging.getLogger(__name__)
 
 class TrajectoryAnalyzer:
     """Service d'analyse des trajectoires GPS."""
+
+    @staticmethod
+    def _filter_speed_outliers(values: List[float]) -> List[float]:
+        """Filtre les valeurs de vitesse aberrantes à l'aide de l'IQR.
+
+        Args:
+            values: Liste de vitesses en km/h.
+
+        Returns:
+            Liste de vitesses sans valeurs aberrantes. Les valeurs d'origine
+            sont renvoyées si le filtrage retire tout.
+        """
+        if len(values) < 5:
+            return values
+
+        arr = np.array(values)
+        q1 = np.percentile(arr, 25)
+        q3 = np.percentile(arr, 75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+
+        filtered = [v for v in values if lower <= v <= upper]
+        return filtered or values
     
     @staticmethod
     @track_time
@@ -175,21 +199,22 @@ class TrajectoryAnalyzer:
         """
         speeds = []
         speed_profile = []
+        raw_speeds = []
         
         for i, point in enumerate(points):
             parsed_info = point.get('parsed_info', {})
             speed_kmh = parsed_info.get('speed_kmh')
             
             if speed_kmh is not None and speed_kmh >= 0:
-                speeds.append(speed_kmh)
+                raw_speeds.append(speed_kmh)
                 speed_profile.append({
                     'index': i,
                     'speed_kmh': speed_kmh,
                     'speed_kts': parsed_info.get('speed_kts', speed_kmh / 1.852),
                     'coordinates': point.get('coordinates', [0, 0])
                 })
-        
-        if not speeds:
+
+        if not raw_speeds:
             return {
                 'avg_speed_kmh': 0.0,
                 'max_speed_kmh': 0.0,
@@ -199,7 +224,22 @@ class TrajectoryAnalyzer:
                 'min_speed_kts': 0.0,
                 'speed_profile': []
             }
-        
+
+        speeds = TrajectoryAnalyzer._filter_speed_outliers(raw_speeds)
+        if len(speeds) != len(raw_speeds) and len(raw_speeds) >= 5:
+            arr = np.array(raw_speeds)
+            q1 = np.percentile(arr, 25)
+            q3 = np.percentile(arr, 75)
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            mask = [lower <= s <= upper for s in raw_speeds]
+            filtered_profile = [entry for entry, keep in zip(speed_profile, mask) if keep]
+            if filtered_profile:
+                speed_profile = filtered_profile
+            else:
+                speeds = raw_speeds
+
         avg_speed = sum(speeds) / len(speeds)
         max_speed = max(speeds)
         min_speed = min(speeds)
@@ -524,7 +564,7 @@ class TrajectoryAnalyzer:
         
         if not points:
             return {'zones': [], 'speed_distribution': {}}
-        
+
         speeds = []
         speed_points = []
         
@@ -542,6 +582,20 @@ class TrajectoryAnalyzer:
         logger.debug("Speeds : {{speeds}}")
         if not speeds:
             return {'zones': [], 'speed_distribution': {}}
+
+        # Filtrage des vitesses aberrantes
+        if len(speeds) >= 5:
+            arr = np.array(speeds)
+            q1 = np.percentile(arr, 25)
+            q3 = np.percentile(arr, 75)
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            mask = [lower <= s <= upper for s in speeds]
+            filtered = [s for s, keep in zip(speeds, mask) if keep]
+            if filtered:
+                speeds = filtered
+                speed_points = [p for p, keep in zip(speed_points, mask) if keep]
         
         # Calculer les seuils de vitesse
         max_speed = max(speeds)
