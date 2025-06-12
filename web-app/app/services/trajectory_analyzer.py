@@ -70,13 +70,13 @@ class TrajectoryAnalyzer:
         
         distance_2d = geodesic(coord1, coord2).meters
         
-        # Ajouter la composante d'altitude si disponible
-        if len(point1) > 2 and len(point2) > 2:
-            alt_diff = abs(point1[2] - point2[2])
-            # Distance 3D en utilisant le théorème de Pythagore
-            distance_3d = math.sqrt(distance_2d**2 + alt_diff**2)
-            return distance_3d
-            
+        # Les données d'altitude de certains fichiers peuvent être très
+        # bruitées. Leur prise en compte lors de la sommation des distances
+        # entraîne une surestimation importante (par exemple plus de 50 km au
+        # lieu d'environ 42 km pour le GPX de référence).  Pour une estimation
+        # cohérente avec le parcours réel, on ignore donc la composante
+        # verticale et on se limite à la distance 2D.
+
         return distance_2d
     
     @staticmethod
