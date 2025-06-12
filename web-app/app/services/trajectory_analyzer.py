@@ -408,7 +408,9 @@ class TrajectoryAnalyzer:
         
         for i, point in enumerate(points):
             parsed_info = point.get('parsed_info', {})
-            speed_kmh = parsed_info.get('speed_kmh', 0)
+            speed_kmh = parsed_info.get('speed_kmh')
+            if speed_kmh is None:
+                speed_kmh = 0
             
             if speed_kmh <= speed_threshold:
                 if current_stop is None:
@@ -690,8 +692,8 @@ class TrajectoryAnalyzer:
             prev_point = points[i-1]
             curr_point = points[i]
             
-            prev_speed = prev_point.get('parsed_info', {}).get('speed_kmh', 0)
-            curr_speed = curr_point.get('parsed_info', {}).get('speed_kmh', 0)
+            prev_speed = prev_point.get('parsed_info', {}).get('speed_kmh') or 0
+            curr_speed = curr_point.get('parsed_info', {}).get('speed_kmh') or 0
             
             # Estimation du temps (30 secondes par point en moyenne)
             time_diff = 30  # secondes
@@ -895,9 +897,10 @@ class TrajectoryAnalyzer:
         """
         # Séparer les traces et les points
         polylines = [f for f in features if f.get('type') == 'polyline']
-        points = [f for f in points if f.get('type') == 'marker' and f.get('is_annotation')]
-        
-        for p in points:
+        # Prendre en compte tous les points GPS, qu'ils soient annotés ou non
+        markers = [f for f in points if f.get('type') == 'marker']
+
+        for p in markers:
             logger.debug(p)
 
         # Récupérer toutes les coordonnées
@@ -917,20 +920,20 @@ class TrajectoryAnalyzer:
         }
         
         # Analyse des arrêts
-        if points:
-            analysis['stops'] = TrajectoryAnalyzer.detect_stops(points)
+        if markers:
+            analysis['stops'] = TrajectoryAnalyzer.detect_stops(markers)
         
         # Segmentation de trajectoire
         if all_coordinates:
-            analysis['segments'] = TrajectoryAnalyzer.segment_trajectory(all_coordinates, points)
+            analysis['segments'] = TrajectoryAnalyzer.segment_trajectory(all_coordinates, markers)
         
         # Analyse des zones de vitesse
-        if points:
-            analysis['speed_zones'] = TrajectoryAnalyzer.analyze_speed_zones(points)
+        if markers:
+            analysis['speed_zones'] = TrajectoryAnalyzer.analyze_speed_zones(markers)
         
         # Analyse des zones d'accélération
-        if points:
-            analysis['acceleration_zones'] = TrajectoryAnalyzer.calculate_acceleration_zones(points)
+        if markers:
+            analysis['acceleration_zones'] = TrajectoryAnalyzer.calculate_acceleration_zones(markers)
         
         # Analyse du terrain
         if all_coordinates:
