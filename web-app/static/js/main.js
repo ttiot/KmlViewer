@@ -313,12 +313,12 @@ function createFileOverlay(data) {
     
     // Créer le conteneur de l'overlay
     // fileOverlay = document.createElement('div');
-    kmlOverlay = document.createElement("div");
-    kmlOverlay.id = "fileOverlay";
-    kmlOverlay.className = "file-overlay";
+    fileOverlay = document.createElement("div");
+    fileOverlay.id = "fileOverlay";
+    fileOverlay.className = "file-overlay";
     
     // Style CSS inline pour l'overlay
-    kmlOverlay.style.cssText = `
+    fileOverlay.style.cssText = `
         position: absolute;
         top: 10px;
         right: 10px;
@@ -336,20 +336,20 @@ function createFileOverlay(data) {
     `;
     
     // Empêcher la propagation des événements de scroll vers la carte
-    kmlOverlay.addEventListener('wheel', function(e) {
+    fileOverlay.addEventListener("wheel", function (e) {
         e.stopPropagation();
     });
     
     // Empêcher la propagation des événements de souris vers la carte
-    kmlOverlay.addEventListener('mousedown', function(e) {
+    fileOverlay.addEventListener("mousedown", function (e) {
         e.stopPropagation();
     });
     
-    kmlOverlay.addEventListener('mousemove', function(e) {
+    fileOverlay.addEventListener("mousemove", function (e) {
         e.stopPropagation();
     });
     
-    kmlOverlay.addEventListener('mouseup', function(e) {
+    fileOverlay.addEventListener("mouseup", function (e) {
         e.stopPropagation();
     });
     
@@ -468,26 +468,26 @@ function createFileOverlay(data) {
     
     overlayContent += `</div>`;
     
-    kmlOverlay.innerHTML = overlayContent;
+    fileOverlay.innerHTML = overlayContent;
     
     // Ajouter l'overlay à la carte
-    map.getContainer().appendChild(kmlOverlay);
+    map.getContainer().appendChild(fileOverlay);
     
     // Configurer les gestionnaires d'événements
-    setupKmlOverlayEvents();
+    setupfileOverlayEvents();
     
     // Initialiser l'état des catégories (toutes développées par défaut)
     initializeCategoryStates();
 }
 
 // Configuration des événements de l'overlay KML
-function setupKmlOverlayEvents() {
-    if (!kmlOverlay) return;
+function setupfileOverlayEvents() {
+    if (!fileOverlay) return;
     
-    const masterCheckbox = kmlOverlay.querySelector('#kmlMasterCheckbox');
-    const categoryCheckboxes = kmlOverlay.querySelectorAll('.kml-category-checkbox');
-    const featureCheckboxes = kmlOverlay.querySelectorAll('.kml-feature-checkbox');
-    const metadataCheckboxes = kmlOverlay.querySelectorAll('.kml-metadata-checkbox');
+    const masterCheckbox = fileOverlay.querySelector('#kmlMasterCheckbox');
+    const categoryCheckboxes = fileOverlay.querySelectorAll('.kml-category-checkbox');
+    const featureCheckboxes = fileOverlay.querySelectorAll('.kml-feature-checkbox');
+    const metadataCheckboxes = fileOverlay.querySelectorAll('.kml-metadata-checkbox');
     const allChildCheckboxes = [...categoryCheckboxes, ...featureCheckboxes, ...metadataCheckboxes];
     
     // Gestionnaire pour la case parent (master)
@@ -518,7 +518,7 @@ function setupKmlOverlayEvents() {
             const isChecked = this.checked;
             
             // Mettre à jour toutes les features de cette catégorie
-            const categoryFeatures = kmlOverlay.querySelectorAll(`[data-category="${category}"]`);
+            const categoryFeatures = fileOverlay.querySelectorAll(`[data-category="${category}"]`);
             categoryFeatures.forEach(checkbox => {
                 if (checkbox !== this) { // Ne pas se mettre à jour soi-même
                     checkbox.checked = isChecked;
@@ -550,10 +550,10 @@ function setupKmlOverlayEvents() {
     
     // Fonction pour mettre à jour l'état d'une case de catégorie
     function updateCategoryCheckboxState(category) {
-        const categoryCheckbox = kmlOverlay.querySelector(`[data-category="${category}"].kml-category-checkbox`);
+        const categoryCheckbox = fileOverlay.querySelector(`[data-category="${category}"].kml-category-checkbox`);
         if (!categoryCheckbox) return;
         
-        const categoryItems = kmlOverlay.querySelectorAll(`[data-category="${category}"]:not(.kml-category-checkbox)`);
+        const categoryItems = fileOverlay.querySelectorAll(`[data-category="${category}"]:not(.kml-category-checkbox)`);
         const checkedItems = Array.from(categoryItems).filter(cb => cb.checked);
         
         if (checkedItems.length === 0) {
@@ -590,8 +590,8 @@ function setupKmlOverlayEvents() {
 
 // Fonction pour basculer l'état collapse/expand d'une catégorie
 function toggleCategoryCollapse(categoryName) {
-    const categoryContent = kmlOverlay.querySelector(`.category-content[data-category="${categoryName}"]`);
-    const toggleIcon = kmlOverlay.querySelector(`[onclick="toggleCategoryCollapse('${categoryName}')"]`);
+    const categoryContent = fileOverlay.querySelector(`.category-content[data-category="${categoryName}"]`);
+    const toggleIcon = fileOverlay.querySelector(`[onclick="toggleCategoryCollapse('${categoryName}')"]`);
     
     if (!categoryContent || !toggleIcon) return;
     
@@ -624,9 +624,9 @@ function toggleCategoryCollapse(categoryName) {
 
 // Fonction pour initialiser l'état des catégories (toutes développées par défaut)
 function initializeCategoryStates() {
-    if (!kmlOverlay) return;
+    if (!fileOverlay) return;
     
-    const categoryContents = kmlOverlay.querySelectorAll('.category-content');
+    const categoryContents = fileOverlay.querySelectorAll('.category-content');
     categoryContents.forEach(content => {
         // Définir la hauteur maximale pour l'animation
         content.style.maxHeight = content.scrollHeight + 'px';
@@ -635,7 +635,7 @@ function initializeCategoryStates() {
     });
     
     // S'assurer que toutes les icônes sont dans le bon état
-    const toggleIcons = kmlOverlay.querySelectorAll('.category-toggle-icon');
+    const toggleIcons = fileOverlay.querySelectorAll('.category-toggle-icon');
     toggleIcons.forEach(icon => {
         icon.style.transform = 'rotate(0deg)';
         icon.classList.remove('fa-chevron-right');
@@ -645,11 +645,11 @@ function initializeCategoryStates() {
 
 // Fonction pour développer/réduire toutes les catégories
 function toggleAllCategories() {
-    if (!kmlOverlay) return;
+    if (!fileOverlay) return;
     
-    const toggleButton = kmlOverlay.querySelector('#toggleAllCategories');
-    const categoryContents = kmlOverlay.querySelectorAll('.category-content');
-    const toggleIcons = kmlOverlay.querySelectorAll('.category-toggle-icon');
+    const toggleButton = fileOverlay.querySelector('#toggleAllCategories');
+    const categoryContents = fileOverlay.querySelectorAll('.category-content');
+    const toggleIcons = fileOverlay.querySelectorAll('.category-toggle-icon');
     
     // Vérifier si au moins une catégorie est développée
     const hasExpandedCategory = Array.from(categoryContents).some(content =>
