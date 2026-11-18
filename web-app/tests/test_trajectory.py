@@ -67,5 +67,7 @@ def test_advanced_analysis_with_gpx():
     analysis = TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)
 
     assert analysis['speed_zones']['total_points'] > 0
-    assert len(analysis['segments']) >= 1
+    assert analysis['summary']['avg_moving_speed_kmh'] == pytest.approx(133.6, rel=0.01)
+    # Altitude nulle partout : pas de segment inventé, la raison est donnée
+    assert analysis['segments'] == [] and 'segments' in analysis['summary']['unavailable']
 

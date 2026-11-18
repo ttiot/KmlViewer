@@ -476,3 +476,22 @@
     background: none;
     border: none;
 }
+
+/* ------------------------------------------------------- Analyse avancée */
+
+.advanced-item {
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.advanced-item:hover,
+.advanced-item:focus-visible {
+    border-color: var(--viz-1);
+    background: var(--viz-1-soft);
+    outline: none;
+}
+
+.advanced-share {
+    height: 8px;
+    margin-bottom: 4px;
+}

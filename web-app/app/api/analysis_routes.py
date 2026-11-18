@@ -5,10 +5,13 @@ Les erreurs inattendues remontent au gestionnaire global (app.errors) : elles so
 journalisées et le client reçoit un message générique.
 """
 
+import math
+
 from flask import jsonify, request
 
 from app.errors import ApiError
 from app.services import file_formats
+from app.services.advanced_analysis import STOP_MIN_DURATION_S, STOP_SPEED_KMH
 from app.services.timing_tools import track_time
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
 
@@ -81,8 +84,11 @@ def get_advanced_analysis():
     points = data.get('points') or []
     if not isinstance(features, list) or not isinstance(points, list):
         raise ApiError('Features et points doivent être des listes')
-    return jsonify({'success': True,
-                    'analysis': TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)})
+    try:
+        analysis = TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)
+    except ValueError as exc:  # trace trop volumineuse
+        raise ApiError(str(exc)) from exc
+    return jsonify({'success': True, 'analysis': analysis})
 
 
 @bp.route('/analysis/stops', methods=['POST'])
@@ -92,10 +98,12 @@ def detect_stops():
     data = json_body()
     points = json_list(data, 'points', 'Points')
     try:
-        speed_threshold = float(data.get('speed_threshold', 2.0))
-        time_threshold = float(data.get('time_threshold', 300))
+        speed_threshold = float(data.get('speed_threshold', STOP_SPEED_KMH))
+        time_threshold = float(data.get('time_threshold', STOP_MIN_DURATION_S))
     except (TypeError, ValueError) as exc:
         raise ApiError('Seuils invalides') from exc
+    if not (math.isfinite(speed_threshold) and math.isfinite(time_threshold)) or speed_threshold < 0 or time_threshold < 0:
+        raise ApiError('Seuils invalides')
     stops = TrajectoryAnalyzer.detect_stops(points, speed_threshold, time_threshold)
     return jsonify({'success': True, 'stops': stops, 'stops_count': len(stops)})
 

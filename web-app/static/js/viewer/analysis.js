@@ -128,153 +128,277 @@ async function analyzeTrajectory() {
 }
 
 // ------------------------------------------------------------ Analyse avancée
+// Le serveur renvoie des synthèses compactes ; chaque élément porte de quoi être
+// montré sur la carte (coordinates, bounds ou path). Une analyse indisponible est
+// expliquée par `summary.unavailable` plutôt que remplacée par une estimation.
 
-function smallCard(title, lines) {
-    const { el } = App;
-    const body = el('small', { class: 'text-muted' });
-    lines.forEach((line, index) => {
-        if (index) body.append(el('br'));
-        body.append(line);
-    });
-    return el('div', { class: 'card mb-2' },
-        el('div', { class: 'card-body p-2' }, el('h6', { class: 'card-title mb-1' }, title), body));
+let advancedRequest = 0;
+
+const fixed = (value, digits) => (
+    value !== null && value !== undefined && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '-');
+const signed = (value, digits) => (Number(value) > 0 ? `+${fixed(value, digits)}` : fixed(value, digits));
+const known = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+
+function formatDuration(seconds) {
+    if (!known(seconds)) return '-';
+    const total = Math.round(Number(seconds));
+    if (total < 60) return `${total} s`;
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    if (hours) return `${hours} h ${String(minutes).padStart(2, '0')}`;
+    return total % 60 ? `${minutes} min ${String(total % 60).padStart(2, '0')} s` : `${minutes} min`;
 }
 
-function fillList(id, cards, emptyMessage) {
-    const { el } = App;
-    document.getElementById(id).replaceChildren(
-        ...(cards.length ? cards : [el('p', { class: 'text-muted' }, emptyMessage)]));
+function formatClock(iso) {
+    const date = iso ? new Date(iso) : null;
+    if (!date || Number.isNaN(date.getTime())) return null;
+    return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
-
-const fixed = (value, digits) => (Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '-');
 
 const TERRAIN_LABELS = { flat: 'Plat', gentle: 'Doux', moderate: 'Modéré', steep: 'Raide' };
+const TERRAIN_RANGES = { flat: '≤ 5 %', gentle: '5 – 15 %', moderate: '15 – 30 %', steep: '> 30 %' };
 const TERRAIN_BADGES = { flat: 'bg-success', gentle: 'bg-info', moderate: 'bg-warning', steep: 'bg-danger' };
 const terrainLabel = (type) => TERRAIN_LABELS[type] || String(type || '-');
 const terrainBadge = (type) => TERRAIN_BADGES[type] || 'bg-secondary';
 
-function displayStops(stops) {
-    document.getElementById('stopsCount').textContent = stops.length;
-    fillList('stopsList', stops.map((stop, index) => smallCard(`Arrêt ${index + 1}`, [
-        `Durée : ${Math.round(stop.duration_minutes)} min`,
-        `Position : ${fixed(stop.lat, 6)}, ${fixed(stop.lng, 6)}`,
-    ])), 'Aucun arrêt détecté');
+const SEGMENT_TYPES = {
+    ascent: { label: 'Montée', icon: 'arrow-trend-up', color: '#e74c3c' },
+    descent: { label: 'Descente', icon: 'arrow-trend-down', color: '#3498db' },
+    flat: { label: 'Plat', icon: 'arrow-right-long', color: '#7f8c8d' },
+};
+const POI_TYPES = {
+    highest: { icon: 'mountain', color: '#e74c3c' },
+    lowest: { icon: 'water', color: '#3498db' },
+    summit: { icon: 'caret-up', color: '#e67e22' },
+    valley: { icon: 'caret-down', color: '#2980b9' },
+    turn: { icon: 'rotate-right', color: '#8e44ad' },
+};
+const DIRECTION_ICONS = { up: 'arrow-trend-up', down: 'arrow-trend-down', flat: 'arrow-right-long' };
+
+function clearAdvancedHighlight() {
+    if (Viewer.advancedHighlight) Viewer.map.removeLayer(Viewer.advancedHighlight);
+    Viewer.advancedHighlight = null;
 }
 
-function displaySegments(segments) {
-    document.getElementById('segmentsCount').textContent = segments.length;
-    fillList('segmentsList', segments.map((segment, index) => smallCard(`Segment ${index + 1}`, [
-        `Distance : ${fixed(segment.distance_km, 2)} km`,
-        `Vitesse moy. : ${fixed(segment.avg_speed_kmh, 1)} km/h`,
-        `Type : ${segment.type}`,
-    ])), 'Aucun segment détecté');
-}
-
-function displaySpeedZones(speedZones) {
-    const { el } = App;
-    const zones = (speedZones && speedZones.zones) || [];
-    fillList('speedZonesList', zones.map((zone) => {
-        const badge = el('span', { class: 'badge' }, zone.type);
-        badge.style.backgroundColor = zone.color;
-        return smallCard(badge, [
-            `Moyenne : ${fixed(zone.avg_speed, 2)} km/h`,
-            `Min : ${fixed(zone.min_speed, 1)} km/h`,
-            `Max : ${fixed(zone.max_speed, 1)} km/h`,
-        ]);
-    }), 'Aucune zone de vitesse détectée');
-}
-
-function slopeClass(value) {
-    if (value > 0) return 'text-success';
-    return value < 0 ? 'text-danger' : '';
-}
-
-function slopeSegmentItem(segment, index) {
-    const { el } = App;
-    const slopes = segment.slopes || [];
-    const labelled = (label, value) => el('div', { class: 'col-4' },
-        el('small', { class: 'text-muted' }, label), el('div', { class: 'fw-bold' }, value));
-
-    let details = el('p', { class: 'text-muted' }, 'Aucun détail de pente disponible');
-    if (slopes.length) {
-        const rows = slopes.slice(0, 10).map((slope) => {
-            const c = slope.coordinates;
-            return el('tr', {},
-                el('td', {}, slope.index || 0),
-                el('td', {}, c ? `${fixed(c[0], 6)}, ${fixed(c[1], 6)}` : 'N/A'),
-                el('td', {}, c && c[2] ? `${fixed(c[2], 1)} m` : 'N/A'),
-                el('td', {}, slope.horizontal_distance ? `${fixed(slope.horizontal_distance, 1)} m` : 'N/A'),
-                el('td', { class: slopeClass(slope.slope_degrees) }, `${fixed(slope.slope_degrees || 0, 1)}°`),
-                el('td', { class: slopeClass(slope.slope_percent) }, `${fixed(slope.slope_percent || 0, 1)}%`));
-        });
-        if (slopes.length > 10) {
-            rows.push(el('tr', {}, el('td', { colspan: 6, class: 'text-center text-muted' },
-                el('small', {}, `… et ${slopes.length - 10} autres points`))));
-        }
-        details = el('div', { class: 'table-responsive' },
-            el('table', { class: 'table table-sm table-striped' },
-                el('thead', {}, el('tr', {}, ['Point', 'Coordonnées', 'Altitude', 'Distance H.', 'Pente (°)', 'Pente (%)']
-                    .map((title) => el('th', {}, title)))),
-                el('tbody', {}, rows)));
-    }
-
-    const collapseId = `slopeSegment${index}`;
-    return el('div', { class: 'accordion-item' },
-        el('h2', { class: 'accordion-header' },
-            el('button', { class: 'accordion-button collapsed', type: 'button',
-                'data-bs-toggle': 'collapse', 'data-bs-target': `#${collapseId}` },
-            el('span', { class: `badge ${terrainBadge(segment.type)} me-2` }, terrainLabel(segment.type)),
-            `Segment ${index + 1} - ${segment.length || 0} points - Pente moy. : ${fixed(segment.avg_slope || 0, 1)}%`)),
-        el('div', { id: collapseId, class: 'accordion-collapse collapse', 'data-bs-parent': '#slopeSegmentsAccordion' },
-            el('div', { class: 'accordion-body' },
-                el('div', { class: 'row g-2 mb-3' },
-                    labelled('Type :', terrainLabel(segment.type)),
-                    labelled('Longueur :', `${segment.length || 0} points`),
-                    labelled('Pente moyenne :', `${fixed(segment.avg_slope || 0, 1)}%`)),
-                details)));
-}
-
-function displayTerrainAnalysis(terrain) {
-    const { el } = App;
-    const container = document.getElementById('terrainAnalysis');
-    if (!terrain) {
-        container.replaceChildren(el('p', { class: 'text-muted' }, "Aucune donnée d'analyse de terrain disponible"));
+// Montre un élément de l'analyse sur la carte : tracé, emprise ou simple position.
+function focusOnMap(item, color = '#e74c3c') {
+    if (!Viewer.map || !item) return;
+    clearAdvancedHighlight();
+    const group = L.layerGroup();
+    const valid = (c) => Array.isArray(c) && known(c[0]) && known(c[1]);
+    const path = (item.path || []).filter(valid);
+    if (path.length >= 2) {
+        const line = L.polyline(path, { color, weight: 8, opacity: 0.55, interactive: false }).addTo(group);
+        Viewer.map.fitBounds(line.getBounds(), { padding: [30, 30], maxZoom: 17 });
+    } else if (Array.isArray(item.bounds) && item.bounds.length === 2 && item.bounds.every(valid) && !valid(item.coordinates)) {
+        L.rectangle(item.bounds, { color, weight: 2, fillOpacity: 0.08, interactive: false }).addTo(group);
+        Viewer.map.fitBounds(item.bounds, { padding: [30, 30], maxZoom: 17 });
+    } else if (valid(item.coordinates)) {
+        L.circleMarker(item.coordinates, { color, radius: 11, weight: 3, fillOpacity: 0.25, interactive: false }).addTo(group);
+        Viewer.map.setView(item.coordinates, Math.max(Viewer.map.getZoom(), 16));
+    } else {
         return;
     }
-    const stat = (value, label, extra = '') => el('div', { class: 'col-4' },
+    Viewer.advancedHighlight = group.addTo(Viewer.map);
+    document.getElementById('map').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Rend un nœud activable à la souris et au clavier.
+function clickable(node, action) {
+    node.classList.add('advanced-item');
+    node.setAttribute('role', 'button');
+    node.setAttribute('tabindex', '0');
+    node.title = 'Voir sur la carte';
+    node.addEventListener('click', action);
+    node.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); action(); }
+    });
+    return node;
+}
+
+function smallCard(title, lines, action) {
+    const { el } = App;
+    const body = el('small', { class: 'text-muted' });
+    lines.filter(Boolean).forEach((line, index) => {
+        if (index) body.append(el('br'));
+        body.append(line);
+    });
+    const card = el('div', { class: 'card mb-2' },
+        el('div', { class: 'card-body p-2' }, el('h6', { class: 'card-title mb-1' }, title), body));
+    return action ? clickable(card, action) : card;
+}
+
+function fillList(id, nodes, emptyMessage) {
+    const { el } = App;
+    document.getElementById(id).replaceChildren(
+        ...(nodes.length ? nodes : [el('p', { class: 'text-muted mb-0' }, emptyMessage)]));
+}
+
+function displayAdvancedSummary(summary) {
+    const { el } = App;
+    const stat = (value, label) => el('div', { class: 'col-6 col-md-4 col-xl-2' },
+        el('div', { class: 'stat-card' }, el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-label' }, label)));
+    const stats = [];
+    if (known(summary.moving_s)) stats.push(stat(formatDuration(summary.moving_s), 'En mouvement'));
+    if (known(summary.stopped_s)) stats.push(stat(formatDuration(summary.stopped_s), "À l'arrêt"));
+    if (known(summary.avg_moving_speed_kmh)) stats.push(stat(`${fixed(summary.avg_moving_speed_kmh, 1)} km/h`, 'Vitesse moy. en mouvement'));
+    if (known(summary.max_speed_kmh)) stats.push(stat(`${fixed(summary.max_speed_kmh, 1)} km/h`, 'Vitesse de pointe'));
+    if (known(summary.ascent_m)) stats.push(stat(`+${fixed(summary.ascent_m, 0)} m`, 'Dénivelé positif'));
+    if (known(summary.descent_m)) stats.push(stat(`-${fixed(summary.descent_m, 0)} m`, 'Dénivelé négatif'));
+    const notes = (summary.notes || []).map((note) => el('div', { class: 'small text-muted' },
+        el('i', { class: 'fas fa-circle-info me-1' }), String(note)));
+    document.getElementById('advancedSummary').replaceChildren(
+        ...(stats.length ? [el('div', { class: 'row g-2 mb-2' }, stats)] : []), ...notes);
+}
+
+function displayStops(stops, unavailable) {
+    document.getElementById('stopsCount').textContent = stops.length;
+    fillList('stopsList', stops.map((stop, index) => {
+        const clock = formatClock(stop.start_time);
+        const duration = known(stop.duration_s)
+            ? `Durée : ${formatDuration(stop.duration_s)}`
+            : `Durée inconnue (trace non horodatée, ${stop.points_count} points)`;
+        return smallCard(`Arrêt ${index + 1}`, [
+            duration,
+            `Au km ${fixed(stop.distance_km, 2)}${clock ? ` · ${clock}` : ''}`,
+            `Position : ${fixed(stop.lat, 6)}, ${fixed(stop.lng, 6)}`,
+        ], () => focusOnMap({ coordinates: stop.coordinates }, '#e67e22'));
+    }), unavailable || 'Aucun arrêt détecté');
+}
+
+function displaySegments(segments, unavailable) {
+    const { el } = App;
+    document.getElementById('segmentsCount').textContent = segments.length;
+    const counters = {};
+    fillList('segmentsList', segments.map((segment) => {
+        const type = SEGMENT_TYPES[segment.type] || SEGMENT_TYPES.flat;
+        counters[type.label] = (counters[type.label] || 0) + 1;
+        const title = el('span', {}, el('i', { class: `fas fa-${type.icon} me-2` }), `${type.label} ${counters[type.label]}`);
+        title.firstChild.style.color = type.color;
+        const speed = known(segment.avg_speed_kmh) ? `Vitesse moy. : ${fixed(segment.avg_speed_kmh, 1)} km/h` : null;
+        const duration = known(segment.duration_s) ? `Durée : ${formatDuration(segment.duration_s)}` : null;
+        return smallCard(title, [
+            `${fixed(segment.distance_km, 2)} km · ${signed(segment.elevation_change, 0)} m · ${fixed(segment.avg_slope, 1)} % en moyenne`
+                + (segment.type !== 'flat' && known(segment.max_slope) ? ` (max ${fixed(segment.max_slope, 1)} %)` : ''),
+            `Du km ${fixed(segment.start_km, 2)} (${fixed(segment.start_elevation, 0)} m) au km ${fixed(segment.end_km, 2)} (${fixed(segment.end_elevation, 0)} m)`,
+            [speed, duration].filter(Boolean).join(' · '),
+        ], () => focusOnMap(segment, type.color));
+    }), unavailable || 'Aucun segment détecté');
+}
+
+// Barre de répartition : le texte reste hors de la barre pour rester lisible à 0 %.
+function shareBar(percent, color, badgeClass) {
+    const { el } = App;
+    const bar = el('div', { class: `progress-bar ${badgeClass || ''}`, role: 'progressbar',
+        'aria-valuenow': fixed(percent, 0), 'aria-valuemin': 0, 'aria-valuemax': 100 });
+    bar.style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
+    if (color) bar.style.backgroundColor = color;
+    return el('div', { class: 'progress advanced-share' }, bar);
+}
+
+function displaySpeedZones(speedZones, unavailable) {
+    const { el } = App;
+    const zones = (speedZones && speedZones.zones) || [];
+    const rows = zones.map((zone) => {
+        const badge = el('span', { class: 'badge me-2' }, zone.label || zone.type);
+        badge.style.backgroundColor = zone.color;
+        const details = [
+            known(zone.time_s) ? formatDuration(zone.time_s) : null,
+            `${fixed(zone.distance_km, 2)} km`,
+            known(zone.avg_speed) ? `moy. ${fixed(zone.avg_speed, 1)} km/h` : null,
+        ].filter(Boolean).join(' · ');
+        return el('div', { class: 'mb-3' },
+            el('div', { class: 'd-flex justify-content-between align-items-baseline mb-1' },
+                el('span', {}, badge, `${fixed(zone.min_speed, 1)} – ${fixed(zone.max_speed, 1)} km/h`),
+                el('strong', {}, `${fixed(zone.percent, 0)} %`)),
+            shareBar(zone.percent, zone.color),
+            el('small', { class: 'text-muted' }, details));
+    });
+    if (rows.length) {
+        rows.unshift(el('p', { class: 'small text-muted' }, speedZones.basis === 'time'
+            ? 'Part du temps en mouvement dans chaque tiers de la vitesse de pointe (arrêts exclus).'
+            : 'Part des points en mouvement dans chaque tiers de la vitesse de pointe (trace non horodatée).'));
+    }
+    fillList('speedZonesList', rows, unavailable || 'Aucune vitesse exploitable');
+}
+
+function slopeSectionsTable(sections) {
+    const { el } = App;
+    const shown = sections.slice(0, 100);
+    const rows = shown.map((section) => clickable(el('tr', {},
+        el('td', {}, `${fixed(section.start_km, 2)} – ${fixed(section.end_km, 2)}`),
+        el('td', {},
+            el('span', { class: `badge ${terrainBadge(section.type)} me-1` }, terrainLabel(section.type)),
+            el('i', { class: `fas fa-${DIRECTION_ICONS[section.direction] || DIRECTION_ICONS.flat}` })),
+        el('td', { class: 'text-end' }, `${fixed(section.distance_m, 0)} m`),
+        el('td', { class: 'text-end' }, `${signed(section.avg_slope, 1)} %`),
+        el('td', { class: 'text-end' }, `${signed(section.elevation_change, 0)} m`)),
+    () => focusOnMap({ bounds: section.bounds })));
+    if (sections.length > shown.length) {
+        rows.push(el('tr', {}, el('td', { colspan: 5, class: 'text-center text-muted' },
+            `… et ${sections.length - shown.length} autres tronçons`)));
+    }
+    return el('div', { class: 'table-responsive' },
+        el('table', { class: 'table table-sm table-hover align-middle mb-0' },
+            el('thead', {}, el('tr', {},
+                el('th', {}, 'Km'), el('th', {}, 'Pente'), el('th', { class: 'text-end' }, 'Longueur'),
+                el('th', { class: 'text-end' }, 'Moyenne'), el('th', { class: 'text-end' }, 'Dénivelé'))),
+            el('tbody', {}, rows)));
+}
+
+function displayTerrainAnalysis(terrain, unavailable) {
+    const { el } = App;
+    const container = document.getElementById('terrainAnalysis');
+    const summary = terrain && terrain.terrain_analysis;
+    if (!summary) {
+        container.replaceChildren(el('p', { class: 'text-muted mb-0' },
+            unavailable || "Aucune donnée d'analyse de terrain disponible"));
+        return;
+    }
+    const stat = (value, label) => el('div', { class: 'col-4' },
         el('div', { class: 'stat-card' },
-            el('div', { class: `stat-value ${extra}` }, `${fixed(value || 0, 1)}%`),
+            el('div', { class: 'stat-value' }, `${signed(value, 1)} %`),
             el('div', { class: 'stat-label' }, label)));
     const blocks = [el('div', { class: 'row g-2 mb-3' },
         stat(terrain.avg_slope, 'Pente moyenne'),
-        stat(terrain.max_slope, 'Pente max', 'text-success'),
-        stat(terrain.min_slope, 'Pente min', 'text-danger'))];
+        stat(terrain.max_slope, 'Montée la plus raide'),
+        stat(terrain.min_slope, 'Descente la plus raide'))];
 
-    const summary = terrain.terrain_analysis;
-    if (summary) {
-        const distribution = summary.terrain_distribution;
-        blocks.push(el('div', { class: 'card mb-3' }, el('div', { class: 'card-body p-3' },
-            el('h6', { class: 'card-title mb-2' }, 'Résumé du terrain'),
-            el('div', { class: 'row g-2' },
-                el('div', { class: 'col-6' }, el('small', { class: 'text-muted' }, 'Terrain dominant :'),
-                    el('div', { class: 'fw-bold text-primary' }, terrainLabel(summary.dominant_terrain))),
-                el('div', { class: 'col-6' }, el('small', { class: 'text-muted' }, 'Points analysés :'),
-                    el('div', { class: 'fw-bold' }, summary.total_points || 0))),
-            distribution ? el('div', { class: 'mt-3' },
-                el('small', { class: 'text-muted d-block mb-2' }, 'Distribution du terrain :'),
-                el('div', { class: 'row g-1' }, Object.keys(TERRAIN_LABELS).map((type) =>
-                    el('div', { class: 'col-3 text-center' },
-                        el('div', { class: `badge ${terrainBadge(type)}` }, distribution[type] || 0),
-                        el('small', { class: 'd-block' }, terrainLabel(type)))))) : null)));
-    }
+    const distribution = summary.terrain_distribution || {};
+    blocks.push(el('div', { class: 'card mb-3' }, el('div', { class: 'card-body p-3' },
+        el('h6', { class: 'card-title mb-1' }, 'Répartition des pentes'),
+        el('p', { class: 'small text-muted' },
+            `En distance, sur un profil lissé (pentes mesurées sur 100 m). Terrain dominant : ${terrainLabel(summary.dominant_terrain).toLowerCase()}.`),
+        Object.keys(TERRAIN_LABELS).map((type) => {
+            const share = distribution[type] || {};
+            return el('div', { class: 'mb-2' },
+                el('div', { class: 'd-flex justify-content-between small mb-1' },
+                    el('span', {}, el('span', { class: `badge ${terrainBadge(type)} me-2` }, terrainLabel(type)), TERRAIN_RANGES[type]),
+                    el('span', {}, `${fixed(share.percent, 0)} % · ${fixed(share.distance_km, 2)} km`)),
+                shareBar(share.percent, null, terrainBadge(type)));
+        }))));
 
-    const segments = terrain.slope_segments || [];
-    if (segments.length) {
+    const sections = terrain.slope_segments || [];
+    if (sections.length) {
         blocks.push(el('div', { class: 'card' }, el('div', { class: 'card-body p-3' },
-            el('h6', { class: 'card-title mb-3' }, `Segments de pente (${segments.length})`),
-            el('div', { class: 'accordion', id: 'slopeSegmentsAccordion' }, segments.map(slopeSegmentItem)))));
+            el('h6', { class: 'card-title mb-2' }, `Tronçons de pente homogène (${sections.length})`),
+            slopeSectionsTable(sections))));
     }
-    container.replaceChildren(el('div', { class: 'mb-4' }, blocks));
+    container.replaceChildren(...blocks);
+}
+
+function displayPointsOfInterest(pois) {
+    const { el } = App;
+    document.getElementById('poiCount').textContent = pois.length;
+    fillList('poiList', pois.map((poi) => {
+        const type = POI_TYPES[poi.type] || POI_TYPES.turn;
+        const icon = el('i', { class: `fas fa-${type.icon} me-2` });
+        icon.style.color = type.color;
+        return clickable(el('div', { class: 'd-flex justify-content-between align-items-center border-bottom py-1 px-1' },
+            el('span', {}, icon, String(poi.description || poi.type)),
+            el('small', { class: 'text-muted' }, `km ${fixed(poi.distance_km, 2)}`)),
+        () => focusOnMap({ coordinates: poi.coordinates }, type.color));
+    }), 'Aucun point remarquable détecté');
 }
 
 async function runAdvancedAnalysis() {
@@ -282,23 +406,38 @@ async function runAdvancedAnalysis() {
         showAlert('Aucune trace chargée', 'warning');
         return;
     }
+    const button = document.getElementById('runAdvancedBtn');
+    const request = ++advancedRequest;
+    button.disabled = true;
     showAlert('Analyse avancée en cours…', 'info', { spinner: true });
     try {
         const data = await App.api('/api/analysis/advanced', {
             method: 'POST', body: { features: Viewer.features(), points: Viewer.points() } });
+        if (request !== advancedRequest) return; // fichier changé ou analyse effacée entre-temps
         const analysis = data.analysis || {};
+        const summary = analysis.summary || {};
+        const unavailable = summary.unavailable || {};
+        clearAdvancedHighlight();
+        displayAdvancedSummary(summary);
+        displayStops(analysis.stops || [], unavailable.stops);
+        displaySegments(analysis.segments || [], unavailable.segments);
+        displaySpeedZones(analysis.speed_zones, unavailable.speed_zones);
+        displayTerrainAnalysis(analysis.terrain, unavailable.terrain);
+        displayPointsOfInterest(analysis.points_of_interest || []);
         setVisible('advancedResults', true);
-        displayStops(analysis.stops || []);
-        displaySegments(analysis.segments || []);
-        displaySpeedZones(analysis.speed_zones);
-        displayTerrainAnalysis(analysis.terrain);
         showAlert('Analyse avancée terminée', 'success');
     } catch (error) {
+        if (request !== advancedRequest) return;
         showAlert(`Analyse avancée impossible : ${error.message}`, 'danger');
+    } finally {
+        if (request === advancedRequest) button.disabled = false;
     }
 }
 
 function clearAdvancedAnalysis({ silent = false } = {}) {
+    advancedRequest += 1; // une réponse encore en route sera ignorée
+    document.getElementById('runAdvancedBtn').disabled = false;
+    clearAdvancedHighlight();
     setVisible('advancedResults', false);
     if (!silent) showAlert('Analyse avancée effacée', 'info');
 }

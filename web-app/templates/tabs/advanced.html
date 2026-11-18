@@ -7,10 +7,12 @@
             <button type="button" class="btn btn-outline-secondary btn-sm" id="clearAdvancedBtn">
                 <i class="fas fa-trash"></i> Effacer
             </button>
+            <small class="text-muted ms-2">Cliquez sur un résultat pour le voir sur la carte.</small>
         </div>
         
         <!-- Résultats des analyses avancées -->
         <div class="col-12" id="advancedResults" style="display: none;">
+            <div id="advancedSummary" class="mb-3"></div>
             <div class="accordion" id="advancedAccordion">
                 <!-- Arrêts détectés -->
                 <div class="accordion-item">
@@ -30,7 +32,7 @@
                 <div class="accordion-item">
                     <h2 class="accordion-header">
                         <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#segmentsCollapse">
-                            <i class="fas fa-route me-2"></i> Segments (<span id="segmentsCount">0</span>)
+                            <i class="fas fa-route me-2"></i> Montées et descentes (<span id="segmentsCount">0</span>)
                         </button>
                     </h2>
                     <div id="segmentsCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
@@ -64,6 +66,20 @@
                     <div id="terrainCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
                         <div class="accordion-body">
                             <div id="terrainAnalysis"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Points remarquables -->
+                <div class="accordion-item">
+                    <h2 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#poiCollapse">
+                            <i class="fas fa-location-dot me-2"></i> Points remarquables (<span id="poiCount">0</span>)
+                        </button>
+                    </h2>
+                    <div id="poiCollapse" class="accordion-collapse collapse" data-bs-parent="#advancedAccordion">
+                        <div class="accordion-body">
+                            <div id="poiList"></div>
                         </div>
                     </div>
                 </div>

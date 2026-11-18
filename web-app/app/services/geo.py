@@ -7,14 +7,20 @@ import numpy as np
 EARTH_RADIUS_M = 6371000.0
 
 
+def haversine(lat1, lon1, lat2, lon2) -> np.ndarray:
+    """Distance haversine (m) entre deux séries de points (degrés), élément par élément."""
+    lat1_r, lat2_r = np.radians(lat1), np.radians(lat2)
+    dlat, dlon = lat2_r - lat1_r, np.radians(lon2) - np.radians(lon1)
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_r) * np.cos(lat2_r) * np.sin(dlon / 2) ** 2
+    return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+
+
 def step_distances(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """Distance haversine (m) entre points consécutifs ; tableau de taille n-1."""
     if len(lat) < 2:
         return np.zeros(0)
-    lat_r, lon_r = np.radians(lat), np.radians(lon)
-    dlat, dlon = np.diff(lat_r), np.diff(lon_r)
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat_r[:-1]) * np.cos(lat_r[1:]) * np.sin(dlon / 2) ** 2
-    return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+    lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
+    return haversine(lat[:-1], lon[:-1], lat[1:], lon[1:])
 
 
 def cumulative_distance(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:

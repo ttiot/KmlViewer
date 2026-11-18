@@ -12,6 +12,7 @@ const Viewer = {
     currentPointIndex: -1,
     analysis: null,          // dernière analyse de base (pour redessiner au changement de thème)
     charts: { elevation: null, speed: null },
+    advancedHighlight: null, // surbrillance sur la carte d'un résultat de l'analyse avancée
 
     activeFile() {
         return this.activeFileId ? this.files.get(this.activeFileId) || null : null;

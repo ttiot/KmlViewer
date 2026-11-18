@@ -56,22 +56,25 @@ def parse_timestamp(value: Any) -> Optional[float]:
     return dt.timestamp()
 
 
-def _iter_lines(features: List[Dict[str, Any]]):
+def iter_lines(features: List[Dict[str, Any]]):
     """Aplatit polylines, gx:Track et gx:MultiTrack en (feature, coordonnées, horodatages)."""
     for feature in features:
+        if not isinstance(feature, dict):
+            continue
         kind = feature.get('type')
         if kind == 'multitrack':
-            yield from _iter_lines(feature.get('tracks') or [])
+            yield from iter_lines(feature.get('tracks') or [])
         elif kind in ('polyline', 'track'):
             coords = feature.get('coordinates') or []
-            stamps = (feature.get('time_info') or {}).get('timestamps') or feature.get('timestamps') or []
+            time_info = feature.get('time_info')
+            stamps = (time_info.get('timestamps') if isinstance(time_info, dict) else None) or feature.get('timestamps') or []
             yield feature, coords, stamps
 
 
 def extract_track(parsed: Dict[str, Any]) -> Track:
     """Concatène toutes les traces d'un fichier parsé en une seule Track."""
     track = Track()
-    for feature, coords, stamps in _iter_lines(parsed.get('features') or []):
+    for feature, coords, stamps in iter_lines(parsed.get('features') or []):
         aligned = len(stamps) == len(coords)
         if not track.name and feature.get('name'):
             track.name = str(feature['name'])
