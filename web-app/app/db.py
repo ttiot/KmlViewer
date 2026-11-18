@@ -96,16 +96,46 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    """ALTER TABLE ADD COLUMN idempotent (les noms viennent du code, jamais d'une entrée)."""
+    existing = {row['name'] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+# Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
+# dernière passée. SCHEMA décrit toujours l'état final : une base neuve le reçoit directement,
+# puis chaque migration est un no-op. Règle : on ajoute en fin de liste, on ne modifie jamais
+# une migration déjà publiée.
+MIGRATIONS = [
+    # 1 - état de la correction d'altitude par MNT
+    lambda conn: _add_column(conn, 'activities', 'dem_status', 'TEXT'),
+]
+
+
+def migrate(conn: sqlite3.Connection) -> int:
+    """Applique les migrations manquantes. Retourne la version de schéma atteinte."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    for number, migration in enumerate(MIGRATIONS, start=1):
+        if number > version:
+            migration(conn)
+            conn.execute(f"PRAGMA user_version = {int(number)}")
+            conn.commit()
+            logger.info("Migration de schéma %d appliquée", number)
+    return max(version, len(MIGRATIONS))
+
+
 def init_db(db_path: str) -> None:
-    """Crée le fichier et le schéma si nécessaire (idempotent)."""
+    """Crée le fichier et le schéma si nécessaire, puis migre une base existante (idempotent)."""
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
         conn.commit()
+        version = migrate(conn)
     finally:
         conn.close()
-    logger.info("Base SQLite prête : %s", db_path)
+    logger.info("Base SQLite prête : %s (schéma v%d)", db_path, version)
 
 
 def get_db() -> sqlite3.Connection:
