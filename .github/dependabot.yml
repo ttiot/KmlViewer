@@ -1,0 +1,26 @@
+# Mises à jour automatiques : dépendances Python (verrou à empreintes), image de base
+# Docker et actions GitHub épinglées par commit.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /web-app
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns:
+          - '*'
+
+  - package-ecosystem: docker
+    directory: /web-app
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'

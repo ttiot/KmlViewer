@@ -1,169 +1,242 @@
-name: Build and Push Docker Image
+name: CI et publication de l'image
+
+# Chaîne : tests -> build -> essai de l'image -> scan de vulnérabilités -> publication.
+# Rien n'est publié tant que l'image n'a pas démarré et passé le scan.
+#
+# Tags produits :
+#   tag git vX.Y.Z      -> X.Y.Z, X.Y, X, latest
+#   branche main        -> unstable
+#   autre branche       -> unstable-<branche>
+#   chaque build        -> sha-<commit>
+#   chaque lundi (cron) -> reconstruction sans cache de la dernière release, pour embarquer
+#                          les correctifs de l'image de base : X.Y.Z, X.Y, X, latest sont rafraîchis
 
 on:
   push:
     branches:
       - '**'
     tags:
-      - 'v*'
+      - 'v*.*.*'
   pull_request:
     branches:
       - main
-      - develop
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+# Moindre privilège par défaut ; chaque job élargit ce dont il a besoin.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
   REGISTRY_GHCR: ghcr.io
-  REGISTRY_DOCKERHUB: docker.io
-  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: '3.15'
 
 jobs:
-  lint:
-    name: Lint Python Code
+  test:
+    name: Tests et audit des dépendances
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout du code
-        uses: actions/checkout@v4
-
-      - name: Configuration de Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          persist-credentials: false
 
-      - name: Installation des dépendances de linting
+      - name: Configuration de Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: web-app/requirements*.txt
+
+      - name: Installation des dépendances (verrou à empreintes)
+        working-directory: web-app
+        run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+
+      - name: Erreurs de syntaxe et noms indéfinis
         run: |
-          python -m pip install --upgrade pip
-          pip install flake8 pylint black isort
-          pip install -r web-app/requirements.txt
+          pipx run flake8 web-app/ --count --select=E9,F63,F7,F82 --show-source --statistics
 
-      - name: Linting avec flake8
-        run: |
-          flake8 web-app/ --count --select=E9,F63,F7,F82 \
-            --show-source --statistics
-          flake8 web-app/ --count --exit-zero --max-complexity=10 \
-            --max-line-length=127 --statistics
+      - name: Tests
+        working-directory: web-app
+        run: python -m pytest
 
-      - name: Linting avec pylint
-        run: |
-          pylint web-app/ --exit-zero --rcfile=.pylintrc || true
-        continue-on-error: true
+      - name: Vulnérabilités connues des dépendances
+        run: pipx run pip-audit --require-hashes --disable-pip -r web-app/requirements.txt
 
-      - name: Vérification du formatage avec black
-        run: |
-          black --check --diff web-app/
-        continue-on-error: true
-
-      - name: Vérification des imports avec isort
-        run: |
-          isort --check-only --diff web-app/
-        continue-on-error: true
-
-  build-and-push:
-    name: Build and Push Docker Image
+  image:
+    name: Build, essai, scan et publication de l'image
     runs-on: ubuntu-latest
-    needs: lint
-    if: github.event_name == 'push'
-
+    needs: test
+    permissions:
+      contents: read
+      packages: write
     steps:
+      # Cron : on reconstruit la dernière release, pas la branche principale.
+      - name: Détermination de la version
+        id: version
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          tag=""
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            tag=$(git ls-remote --tags --refs --sort=-v:refname \
+              "https://github.com/${GITHUB_REPOSITORY}.git" 'v*.*.*' | head -n 1 | sed 's#.*refs/tags/##')
+          fi
+          repo="${GITHUB_REPOSITORY#*/}"
+          {
+            echo "tag=${tag}"
+            echo "ref=${tag:-$GITHUB_SHA}"
+            echo "app_version=${tag:-unstable-${GITHUB_SHA::7}}"
+            echo "ghcr_image=${REGISTRY_GHCR}/${GITHUB_REPOSITORY,,}"
+            echo "hub_image=${DOCKERHUB_USERNAME}/${repo,,}"
+            # Release ou cron : sans cache, pour rejouer les mises à jour de sécurité système
+            if [[ -n "$tag" ]]; then echo "no_cache=true"; else echo "no_cache=false"; fi
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout du code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ steps.version.outputs.ref }}
+          persist-credentials: false
+
+      - name: Configuration de QEMU (arm64)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm64
 
       - name: Configuration de Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Build de l'image candidate (amd64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: ./web-app
+          file: ./web-app/Dockerfile
+          load: true
+          pull: true
+          no-cache: ${{ steps.version.outputs.no_cache }}
+          tags: kml-viewer:candidate
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.app_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Essai de l'image dans les conditions de production
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.app_version }}
+        run: |
+          docker run -d --name candidate \
+            --read-only --tmpfs /tmp --tmpfs /app/uploads \
+            --tmpfs /data:uid=10001,gid=10001,mode=700 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -p 127.0.0.1:5000:5000 kml-viewer:candidate
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/api/health -o health.json; then break; fi
+            sleep 2
+          done
+          cat health.json || { docker logs candidate; exit 1; }
+
+          python3 - <<'PY'
+          import json, os, urllib.request
+          health = json.load(open("health.json"))
+          assert health["status"] == "healthy", health
+          assert health["version"] == os.environ["EXPECTED_VERSION"], health
+          for path in ("/", "/dashboard", "/segments", "/api/activities"):
+              assert urllib.request.urlopen("http://127.0.0.1:5000" + path, timeout=10).status == 200, path
+          PY
+
+          if docker logs candidate 2>&1 | grep -i -E "error|traceback"; then
+            echo "Erreurs dans les logs du conteneur" >&2
+            exit 1
+          fi
+          test "$(docker exec candidate id -u)" = "10001"
+          docker rm -f candidate
+
+      - name: Scan de vulnérabilités (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: kml-viewer:candidate
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
 
       - name: Connexion à GitHub Container Registry
-        uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           registry: ${{ env.REGISTRY_GHCR }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Connexion à Docker Hub
-        uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
-          registry: ${{ env.REGISTRY_DOCKERHUB }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extraction des métadonnées
+      - name: Tags et labels de l'image
+        if: github.event_name != 'pull_request'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
         with:
           images: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+            ${{ steps.version.outputs.ghcr_image }}
+            ${{ steps.version.outputs.hub_image }}
+          flavor: |
+            latest=${{ steps.version.outputs.tag != '' }}
           tags: |
-            type=ref,event=tag
-            type=raw,value=unstable,enable={{is_default_branch}}
-            type=raw,value=unstable-{{branch}},disable={{is_default_branch}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }},enable=${{ steps.version.outputs.tag != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }},enable=${{ steps.version.outputs.tag != '' }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.tag }},enable=${{ steps.version.outputs.tag != '' }}
+            type=raw,value=unstable,enable=${{ steps.version.outputs.tag == '' && github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,prefix=unstable-,enable=${{ steps.version.outputs.tag == '' && github.ref != 'refs/heads/main' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name != 'schedule' }}
 
-      - name: Construction et publication de l'image Docker
-        uses: docker/build-push-action@v5
+      - name: Build multi-architecture et publication
+        if: github.event_name != 'pull_request'
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: ./web-app
           file: ./web-app/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          pull: true
+          no-cache: ${{ steps.version.outputs.no_cache }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.app_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
 
-      - name: Résumé de l'image construite
+      - name: Résumé
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
         run: |
-          echo "## 🐳 Image Docker construite et publiée" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags créés:**" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Registres:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 📦 GHCR: ghcr.io/${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 🐋 Docker Hub: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}" >> $GITHUB_STEP_SUMMARY
-
-  test-image:
-    name: Test Docker Image
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.event_name == 'push'
-
-    steps:
-      - name: Connexion à GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY_GHCR }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: downcase REPO
-        run: |
-          echo "IMG=${IMAGE_NAME@L}" >> "${GITHUB_ENV}"
-
-      - name: Test de l'image Docker
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            TAG=${GITHUB_REF#refs/tags/}
-          elif [[ $GITHUB_REF == refs/heads/main ]]; then
-            TAG="unstable"
-          else
-            BRANCH=${GITHUB_REF#refs/heads/}
-            TAG="unstable-${BRANCH}"
-          fi
-
-          echo "Test de l'image avec le tag: $TAG"
-
-          docker run -d --name test-container -p 5000:5000 \
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMG }}:$TAG
-
-          sleep 30
-
-          curl -f http://localhost:5000/api/health || exit 1
-
-          docker stop test-container
-          docker rm test-container
-
-          echo "✅ Test de l'image réussi!"
+          {
+            echo "## Image publiée"
+            echo ""
+            echo "- Version : \`${APP_VERSION}\`"
+            echo "- Empreinte : \`${DIGEST}\`"
+            echo ""
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
