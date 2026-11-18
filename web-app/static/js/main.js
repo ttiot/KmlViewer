@@ -20,6 +20,17 @@ let uploadedFiles = new Map(); // id -> {name, data, layer}
 let fileCounter = 0;
 let activeFileId = null;
 
+// Des données sont chargées, quel que soit le chemin (fichier unique, multi-fichiers, bibliothèque)
+function hasLoadedData() {
+    return Array.isArray(allFeatures) && allFeatures.length > 0;
+}
+
+// Couche Leaflet du fichier actif
+function getActiveLayer() {
+    const active = activeFileId ? uploadedFiles.get(activeFileId) : null;
+    return (active && active.layer) || currentFileLayer || null;
+}
+
 // Initialisation de la carte
 function initMap() {
     map = L.map('map').setView([46.603354, 1.888334], 6); // Centre de la France
@@ -1323,9 +1334,9 @@ function getFeatureStyle(feature, metadata) {
 function getDefaultStyle(featureType) {
     const defaults = {
         'marker': { color: '#4ecdc4', fillColor: '#4ecdc4', lineColor: '#4ecdc4', width: 2 },
-        'polyline': { color: '#667eea', fillColor: '#667eea', lineColor: '#667eea', width: 2 },
-        'track': { color: '#667eea', fillColor: '#667eea', lineColor: '#667eea', width: 2 },
-        'multitrack': { color: '#667eea', fillColor: '#667eea', lineColor: '#667eea', width: 2 },
+        'polyline': { color: '#2a78d6', fillColor: '#2a78d6', lineColor: '#2a78d6', width: 3 },
+        'track': { color: '#2a78d6', fillColor: '#2a78d6', lineColor: '#2a78d6', width: 3 },
+        'multitrack': { color: '#2a78d6', fillColor: '#2a78d6', lineColor: '#2a78d6', width: 3 },
         'polygon': { color: '#28a745', fillColor: '#28a745', lineColor: '#28a745', width: 2 }
     };
     
@@ -1694,7 +1705,7 @@ function createLayerGroupFromData(data) {
             if (layer) {
                 bounds.extend(feature.coordinates);
             }
-        } else if (feature.type === 'marker') {
+        } else if (feature.type === 'marker' && feature.visibility !== '0') {
             const markerColor = style.color;
             const markerIcon = L.divIcon({
                 className: 'custom-marker',

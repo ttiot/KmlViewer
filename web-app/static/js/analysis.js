@@ -94,105 +94,81 @@ function updateBasicStats(analysis) {
 }
 
 // Création du graphique d'élévation
-function createElevationChart(elevationProfile) {
-    const ctx = document.getElementById('elevationChart').getContext('2d');
-    
-    // Détruire le graphique existant s'il y en a un
-    if (elevationChart) {
-        elevationChart.destroy();
-    }
-    
-    const labels = elevationProfile.map(point => (point.distance / 1000).toFixed(1));
-    const data = elevationProfile.map(point => point.elevation);
-    
-    elevationChart = new Chart(ctx, {
+// Graphique en courbe à série unique : trait fin, pas de marqueur par point (plusieurs
+// milliers de points), grille en retrait, infobulle au survol de n'importe où sur la colonne.
+function createLineChart(canvasId, labels, data, { colorToken, softToken, xTitle, yTitle, unit }) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    return new Chart(ctx, {
         type: 'line',
         data: {
             labels: labels,
             datasets: [{
-                label: 'Élévation (m)',
+                label: yTitle,
                 data: data,
-                borderColor: '#667eea',
-                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                // Couleurs lues dans les jetons à chaque rendu : suit le thème clair / sombre
+                borderColor: () => AppTheme.color(colorToken),
+                backgroundColor: () => AppTheme.color(softToken),
+                borderWidth: 2,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHoverBackgroundColor: () => AppTheme.color(colorToken),
                 fill: true,
-                tension: 0.1
+                tension: 0.15
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: false,
+            interaction: { mode: 'index', intersect: false },
             plugins: {
-                legend: {
-                    display: false
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => `${xTitle} : ${items[0].label}`,
+                        label: (item) => `${Number(item.parsed.y).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} ${unit}`
+                    }
                 }
             },
             scales: {
                 x: {
-                    title: {
-                        display: true,
-                        text: 'Distance (km)'
-                    }
+                    grid: { display: false },
+                    border: { display: false },
+                    ticks: { maxTicksLimit: 10, maxRotation: 0 },
+                    title: { display: true, text: xTitle }
                 },
                 y: {
-                    title: {
-                        display: true,
-                        text: 'Altitude (m)'
-                    }
+                    border: { display: false },
+                    title: { display: true, text: yTitle }
                 }
             }
         }
     });
 }
 
+function createElevationChart(elevationProfile) {
+    if (elevationChart) {
+        elevationChart.destroy();
+    }
+    elevationChart = createLineChart(
+        'elevationChart',
+        elevationProfile.map(point => (point.distance / 1000).toFixed(1)),
+        elevationProfile.map(point => point.elevation),
+        { colorToken: '--viz-1', softToken: '--viz-1-soft', xTitle: 'Distance (km)', yTitle: 'Altitude (m)', unit: 'm' }
+    );
+}
+
 // Création du graphique de vitesse
 function createSpeedChart(speedProfile) {
-    const ctx = document.getElementById('speedChart').getContext('2d');
-    
-    // Détruire le graphique existant s'il y en a un
     if (speedChart) {
         speedChart.destroy();
     }
-    
-    const labels = speedProfile.map((point, index) => index + 1);
-    const data = speedProfile.map(point => point.speed_kmh);
-    
-    speedChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Vitesse (km/h)',
-                data: data,
-                borderColor: '#28a745',
-                backgroundColor: 'rgba(40, 167, 69, 0.1)',
-                fill: true,
-                tension: 0.1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                x: {
-                    title: {
-                        display: true,
-                        text: 'Point'
-                    }
-                },
-                y: {
-                    title: {
-                        display: true,
-                        text: 'Vitesse (km/h)'
-                    }
-                }
-            }
-        }
-    });
+    speedChart = createLineChart(
+        'speedChart',
+        speedProfile.map((point, index) => index + 1),
+        speedProfile.map(point => point.speed_kmh),
+        { colorToken: '--viz-2', softToken: '--viz-2-soft', xTitle: 'Point', yTitle: 'Vitesse (km/h)', unit: 'km/h' }
+    );
 }
 
 // Affichage du panneau d'analyse
@@ -255,8 +231,8 @@ let selectedPointForEdit = null;
 
 // Lancer l'analyse avancée
 function runAdvancedAnalysis() {
-    if (!currentFileLayer) {
-        showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Aucune donnée KML chargée', 'warning');
+    if (!hasLoadedData()) {
+        showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Aucune trace chargée', 'warning');
         return;
     }
     
@@ -592,3 +568,10 @@ function clearAdvancedAnalysis() {
     document.getElementById('advancedResults').style.display = 'none';
     showAlert('<i class="fas fa-check me-2"></i>Analyse avancée effacée', 'info');
 }
+// Grille, axes et infobulles prennent leurs couleurs à la création du graphique :
+// au changement de thème, on les recrée à partir de l'analyse déjà chargée.
+document.addEventListener('themechange', () => {
+    if (currentAnalysis) {
+        displayAnalysisResults(currentAnalysis);
+    }
+});

@@ -36,7 +36,7 @@
     function updateSelectionInfo() {
         const info = document.getElementById('selectionInfo');
         const ready = state.startIdx !== null && state.endIdx !== null;
-        if (!state.track) info.textContent = 'Aucune sélection.';
+        if (!state.track) info.textContent = 'Choisis une activité, puis clique deux fois sur la trace.';
         else if (state.startIdx === null) info.textContent = 'Clique sur la trace pour poser le départ.';
         else if (!ready) info.textContent = "Départ posé. Clique pour poser l'arrivée.";
         else info.textContent = `Sélection : ${state.endIdx - state.startIdx + 1} points.`;
@@ -53,11 +53,12 @@
         } else {
             [state.startIdx, state.endIdx] = idx > state.startIdx ? [state.startIdx, idx] : [idx, state.startIdx];
             const coords = state.track.coordinates.slice(state.startIdx, state.endIdx + 1);
-            state.selectionLayer = L.polyline(coords, { color: '#dc3545', weight: 6 }).addTo(state.map);
+            state.selectionLayer = L.polyline(coords, { color: AppTheme.color('--accent'), weight: 6 }).addTo(state.map);
         }
         state.markers.forEach((m) => state.map.removeLayer(m));
         state.markers = [state.startIdx, state.endIdx].filter((i) => i !== null).map((i) =>
-            L.circleMarker(state.track.coordinates[i], { radius: 7, color: '#dc3545', fillOpacity: 1 }).addTo(state.map));
+            L.circleMarker(state.track.coordinates[i], { radius: 7, color: '#fff', weight: 2,
+                fillColor: AppTheme.color('--accent'), fillOpacity: 1 }).addTo(state.map));
         updateSelectionInfo();
     }
 
@@ -68,7 +69,7 @@
         if (!activityId) { updateSelectionInfo(); return; }
         try {
             state.track = await api(`/api/activities/${activityId}/track`);
-            state.trackLayer = L.polyline(state.track.coordinates, { color: '#667eea', weight: 4 }).addTo(state.map);
+            state.trackLayer = L.polyline(state.track.coordinates, { color: AppTheme.color('--viz-1'), weight: 4 }).addTo(state.map);
             state.trackLayer.on('click', onTrackClick);
             state.map.fitBounds(state.trackLayer.getBounds(), { padding: [20, 20] });
         } catch (error) { notify(error.message, 'danger'); }
@@ -78,14 +79,16 @@
     function renderDetail(segment) {
         state.current = segment;
         clearLayer('segmentLayer');
-        state.segmentLayer = L.polyline(segment.coordinates, { color: '#198754', weight: 6 }).addTo(state.map);
+        state.segmentLayer = L.polyline(segment.coordinates, { color: AppTheme.color('--accent'), weight: 6 }).addTo(state.map);
+        document.querySelectorAll('.segment-item').forEach((item) =>
+            item.classList.toggle('active', Number(item.dataset.id) === segment.id));
         state.map.fitBounds(state.segmentLayer.getBounds(), { padding: [40, 40] });
 
         document.getElementById('segmentDetail').hidden = false;
         document.getElementById('detailTitle').textContent = `${segment.name} · ${distance(segment.distance_m)}`;
         document.getElementById('efforts').replaceChildren(...segment.efforts.map((e) =>
-            el('tr', { class: e.rank === 1 ? 'table-success' : null },
-                el('td', {}, e.rank),
+            el('tr', {},
+                el('td', {}, el('span', { class: `rank-badge ${e.rank === 1 ? 'is-first' : ''}` }, e.rank)),
                 el('td', {}, el('strong', {}, chrono(e.elapsed_s))),
                 el('td', {}, speed(segment.distance_m, e.elapsed_s)),
                 el('td', {}, date(e.start_time)),
@@ -102,9 +105,10 @@
     async function loadSegments() {
         const { segments } = await api('/api/segments');
         document.getElementById('segmentList').replaceChildren(...segments.map((s) =>
-            el('button', { type: 'button', class: 'list-group-item list-group-item-action px-0', onclick: () => showSegment(s.id) },
-                el('div', { class: 'd-flex justify-content-between' },
-                    el('strong', {}, s.name), el('span', {}, s.best_s ? chrono(s.best_s) : '—')),
+            el('button', { type: 'button', class: `segment-item ${state.current && state.current.id === s.id ? 'active' : ''}`,
+                           dataset: { id: s.id }, onclick: () => showSegment(s.id) },
+                el('div', { class: 'd-flex justify-content-between gap-2' },
+                    el('strong', {}, s.name), el('span', { class: 'segment-best' }, s.best_s ? chrono(s.best_s) : '—')),
                 el('small', { class: 'text-muted' }, `${distance(s.distance_m)} · ${s.nb_efforts} passage(s)`))));
         document.getElementById('segmentsEmpty').hidden = segments.length > 0;
     }

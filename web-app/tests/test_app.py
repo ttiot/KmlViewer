@@ -15,7 +15,7 @@ def test_main_route(client):
     """Test de la route principale."""
     response = client.get('/')
     assert response.status_code == 200
-    assert b'Visualiseur KML' in response.data
+    assert b'KmlViewer' in response.data
 
 
 def test_api_health(app, client):

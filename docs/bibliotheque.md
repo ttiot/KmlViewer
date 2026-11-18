@@ -41,6 +41,16 @@ Règle de dépendance : `api` → `services` → `db`. Les services reçoivent u
 mapping de configuration, ce qui les rend testables et réutilisables hors requête HTTP
 (le watcher et la CLI s'en servent tels quels).
 
+## Schéma de base et interface
+
+- **Migrations** : `app/db.py` porte une liste `MIGRATIONS` appliquée dans l'ordre aux bases
+  existantes (`PRAGMA user_version`). `SCHEMA` décrit toujours l'état final. Pour faire évoluer
+  le schéma : modifier `SCHEMA` et ajouter une migration en fin de liste, sans jamais retoucher
+  une migration déjà publiée.
+- **Thème** : toutes les couleurs sont des jetons définis dans `static/css/theme.css`, en clair
+  et en sombre ; les autres feuilles ne référencent que des rôles (`--surface`, `--accent`…).
+  Le mode suit le système, avec une bascule mémorisée dans le navigateur (`static/js/theme.js`).
+
 ## Dossier surveillé
 
 ```

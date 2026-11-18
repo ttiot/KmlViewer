@@ -71,7 +71,8 @@ function handleAddPoint(e) {
                 </div>
             `);
             
-            currentKmlLayer.addLayer(marker);
+            const activeLayer = getActiveLayer();
+            if (activeLayer) activeLayer.addLayer(marker);
             pointMarkers.push(marker);
             
             // Ajouter aux points
@@ -99,7 +100,7 @@ function handleAddPoint(e) {
 
 // Simplifier la trace actuelle
 function simplifyCurrentTrace() {
-    if (!currentKmlLayer) {
+    if (!hasLoadedData()) {
         showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Aucune trace chargée', 'warning');
         return;
     }
@@ -149,7 +150,7 @@ function cancelPointEdit() {
 
 // Exporter les données dans différents formats
 function exportData(format) {
-    if (!currentKmlLayer) {
+    if (!hasLoadedData()) {
         showAlert('<i class="fas fa-exclamation-triangle me-2"></i>Aucune donnée à exporter', 'warning');
         return;
     }

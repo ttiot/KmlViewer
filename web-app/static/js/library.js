@@ -44,3 +44,11 @@ document.addEventListener('DOMContentLoaded', () => {
     input.addEventListener('change', () => save(input.files));
     dropArea.addEventListener('drop', (event) => save(event.dataTransfer && event.dataTransfer.files));
 });
+
+// La carte change de largeur quand la liste des points apparaît ou que la barre latérale
+// se replie : Leaflet doit recalculer sa taille, sinon une bande grise reste affichée.
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('map');
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    new ResizeObserver(() => { if (typeof map !== 'undefined' && map) map.invalidateSize(); }).observe(container);
+});
