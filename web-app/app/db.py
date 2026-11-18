@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS activities (
     source        TEXT NOT NULL,
     activity_type TEXT,
     start_time    TEXT NOT NULL,
+    start_time_known INTEGER NOT NULL DEFAULT 1,  -- 0 : fichier sans date, start_time = date d'import
     has_time      INTEGER NOT NULL DEFAULT 0,
     duration_s    REAL,
     moving_s      REAL,
@@ -110,6 +111,8 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: s
 MIGRATIONS = [
     # 1 - état de la correction d'altitude par MNT
     lambda conn: _add_column(conn, 'activities', 'dem_status', 'TEXT'),
+    # 2 - distingue une vraie date de début d'une date d'import (fichier sans horodatage)
+    lambda conn: _add_column(conn, 'activities', 'start_time_known', 'INTEGER NOT NULL DEFAULT 1'),
 ]
 
 

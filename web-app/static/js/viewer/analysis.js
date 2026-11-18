@@ -20,10 +20,22 @@ const STAT_FIELDS = [
 function updateBasicStats(analysis) {
     STAT_FIELDS.forEach(([id, section, field, suffix, prefix]) => {
         const value = (analysis[section] || {})[field];
-        document.getElementById(id).textContent = value ? `${prefix}${value}${suffix}` : '-';
+        // Un zéro mesuré (vitesse minimale à l'arrêt, altitude au niveau de la mer) s'affiche
+        document.getElementById(id).textContent = known(value) ? `${prefix}${value}${suffix}` : '-';
     });
-    const minutes = (analysis.duration || {}).estimated_duration_minutes;
-    document.getElementById('totalDuration').textContent = minutes ? `${Math.round(minutes)} min` : '-';
+    // Durées réelles, lues dans les horodatages ; « - » pour une trace non horodatée
+    const duration = analysis.duration || {};
+    document.getElementById('totalDuration').textContent = formatDuration(duration.total_s);
+    document.getElementById('movingDuration').textContent = formatDuration(duration.moving_s);
+    const { el } = App;
+    const notes = [...(analysis.notes || [])];
+    if (analysis.basic_stats && analysis.basic_stats.total_points && !analysis.basic_stats.has_time_data) {
+        notes.push(analysis.basic_stats.has_speed_data
+            ? 'Trace non horodatée : pas de durée, vitesses lues dans le fichier.'
+            : 'Trace non horodatée : ni durée ni vitesse.');
+    }
+    document.getElementById('basicNotes').replaceChildren(...notes.map((note) =>
+        el('div', { class: 'small text-muted' }, el('i', { class: 'fas fa-circle-info me-1' }), String(note))));
 }
 
 // Courbe à série unique : trait fin, pas de marqueur par point (plusieurs milliers de
@@ -94,9 +106,9 @@ function displayAnalysisResults(analysis) {
     const speedProfile = analysis.speed && analysis.speed.speed_profile;
     if (speedProfile && speedProfile.length) {
         Viewer.charts.speed = createLineChart('speedChart',
-            speedProfile.map((point, index) => index + 1),
+            speedProfile.map((point) => (point.distance / 1000).toFixed(1)),
             speedProfile.map((point) => point.speed_kmh),
-            { colorToken: '--viz-2', softToken: '--viz-2-soft', xTitle: 'Point', yTitle: 'Vitesse (km/h)', unit: 'km/h' });
+            { colorToken: '--viz-2', softToken: '--viz-2-soft', xTitle: 'Distance (km)', yTitle: 'Vitesse (km/h)', unit: 'km/h' });
     }
 }
 

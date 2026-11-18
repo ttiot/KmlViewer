@@ -113,7 +113,8 @@
         const typeIcon = { running: 'person-running', cycling: 'person-biking', hiking: 'person-hiking',
                            walking: 'person-walking', swimming: 'person-swimming' }[(a.activity_type || '').toLowerCase()];
         return el('tr', {},
-            el('td', { class: 'text-nowrap text-muted' }, date(a.start_time)),
+            el('td', { class: 'text-nowrap text-muted' }, date(a.start_time), a.start_time_known === false
+                ? el('span', { class: 'badge-soft ms-1', title: "Fichier sans date : rangé à sa date d'import" }, 'import') : null),
             el('td', {}, el('a', { class: 'activity-name', href: `/?activity=${a.id}` }, a.name)),
             el('td', {}, a.activity_type
                 ? el('span', { class: 'type-chip' }, typeIcon ? icon(typeIcon) : null, a.activity_type) : '—'),

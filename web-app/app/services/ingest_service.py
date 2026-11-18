@@ -98,7 +98,10 @@ def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes,
         return IngestResult('error', message=str(exc))
 
     elevation = _elevation_fields(track, cfg, summary, defer_elevation)
-    start_epoch = summary['start_epoch'] or fallback_epoch or time.time()
+    # Sans date dans le fichier, l'activité est rangée à la date du fichier ou de l'import,
+    # et marquée comme telle : ce n'est pas la date de la sortie.
+    known_epoch = summary['start_epoch'] or activity_stats.file_epoch(parsed)
+    start_epoch = known_epoch or fallback_epoch or time.time()
     name = (track.name or PurePath(filename).stem)[:MAX_NAME_LENGTH]
 
     try:
@@ -108,6 +111,7 @@ def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes,
             'name': name, 'filename': filename, 'sha256': sha256, 'source': source,
             'activity_type': track.activity_type[:50] or None,
             'start_time': activity_store.epoch_to_iso(start_epoch),
+            'start_time_known': int(known_epoch is not None),
             'has_time': int(summary['has_time']),
             'duration_s': summary['duration_s'], 'moving_s': summary['moving_s'],
             'distance_m': summary['distance_m'],
@@ -154,6 +158,35 @@ def recompute_elevation(db: sqlite3.Connection, cfg: Mapping, user_id: int, acti
         ascent_m=round(ascent, 1), descent_m=round(descent, 1), elev_source='dem')
     return {'ascent_m': round(ascent, 1), 'descent_m': round(descent, 1),
             'ascent_gps_m': row['ascent_gps_m'], 'elev_source': 'dem'}
+
+
+def recompute_summaries(db: sqlite3.Connection, user_id: Optional[int] = None) -> int:
+    """
+    Recalcule distance, durées, vitesse max, D+ GPS et records des activités déjà stockées,
+    à partir de leurs points (utile après une correction du calcul). L'altitude MNT est
+    conservée. Retourne le nombre d'activités mises à jour.
+    """
+    sql, params = "SELECT id, user_id FROM activities", ()
+    if user_id is not None:
+        sql, params = sql + " WHERE user_id = ?", (user_id,)
+    updated = 0
+    for ref in db.execute(sql + " ORDER BY id", params).fetchall():
+        row = activity_store.get(db, ref['user_id'], ref['id'])
+        pts = activity_store.unpack_points(row['points'])
+        track = activity_stats.Track(lat=pts['lat'], lon=pts['lon'], ele=pts['ele'], t=pts['t'])
+        try:
+            summary = activity_stats.compute_summary(track)
+        except ValueError:
+            continue
+        values = {key: summary[key] for key in ('distance_m', 'duration_s', 'moving_s', 'max_speed_ms',
+                                                'ascent_gps_m', 'descent_gps_m', 'best_efforts')}
+        values['has_time'] = int(summary['has_time'])
+        if row['elev_source'] != 'dem':
+            values['ascent_m'], values['descent_m'] = summary['ascent_gps_m'], summary['descent_gps_m']
+        activity_store.update_summary(db, ref['user_id'], ref['id'], values)
+        updated += 1
+    db.commit()
+    return updated
 
 
 def backfill_elevation(db: sqlite3.Connection, cfg: Mapping, limit: Optional[int] = None) -> int:

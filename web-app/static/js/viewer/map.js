@@ -115,7 +115,9 @@ function buildPolygon(feature, style) {
         // [contour extérieur, trou, trou…]
         rings = coordinates[0].length >= 3 ? coordinates : null;
     } else if (Array.isArray(coordinates[0]) && typeof coordinates[0][0] === 'number') {
-        rings = coordinates.length >= 3 ? coordinates : null;
+        const holes = (Array.isArray(feature.holes) ? feature.holes : [])
+            .filter((hole) => Array.isArray(hole) && hole.length >= 3);
+        rings = coordinates.length >= 3 ? [coordinates, ...holes] : null;
     }
     if (!rings) return null;
 
@@ -152,7 +154,7 @@ function buildPolygon(feature, style) {
 function pointPopup(file, index) {
     const { el } = App;
     const point = file.data.points[index];
-    const description = descriptionNodes(point.description);
+    const description = descriptionNodes(pointDescription(point));
     return el('div', { class: 'popup-content' },
         el('strong', {}, point.name || 'Point'), el('br'),
         description.length ? description : "Point d'intérêt", el('br'),

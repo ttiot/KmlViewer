@@ -78,3 +78,29 @@ def resample_polyline(xy: np.ndarray, spacing_m: float) -> np.ndarray:
         return xy[:1]
     targets = np.linspace(0.0, total, max(2, int(np.ceil(total / spacing_m)) + 1))
     return np.column_stack((np.interp(targets, cum, xy[:, 0]), np.interp(targets, cum, xy[:, 1])))
+
+
+def median_filter(values: np.ndarray, window: int) -> np.ndarray:
+    """Médiane glissante centrée : écarte une mesure isolée aberrante."""
+    values = np.asarray(values, dtype=float)
+    if len(values) < window:
+        return values
+    padded = np.pad(values, window // 2, mode='edge')
+    return np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=1)
+
+
+def despike_steps(steps: np.ndarray, dt: np.ndarray, window: int = 11, factor: float = 3.0,
+                  margin_ms: float = 3.0) -> Tuple[np.ndarray, int]:
+    """
+    Neutralise les sauts GPS : un pas bien plus rapide que ses voisins (aller-retour d'un
+    point aberrant) est ramené à l'allure locale. Une vitesse élevée mais soutenue n'est pas
+    touchée. Retourne (pas corrigés, nombre de pas corrigés).
+    """
+    steps, dt = np.asarray(steps, dtype=float), np.asarray(dt, dtype=float)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        speed = np.where(dt > 0, steps / dt, 0.0)
+    local = median_filter(speed, window)
+    jumps = speed > factor * local + margin_ms
+    if not jumps.any():
+        return steps, 0
+    return np.where(jumps, local * dt, steps), int(jumps.sum())

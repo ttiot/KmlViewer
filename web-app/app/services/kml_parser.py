@@ -10,15 +10,19 @@ import logging
 from app.services.timing_tools import track_time
 from typing import Dict, Any, List, Optional
 
-# Configuration du logger
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
+
+# Vitesse dans la description d'un point : après un mot-clé, ou seule en début de ligne.
+# Un nombre suivi d'une unité au milieu d'une phrase (« vent de 20 km/h ») n'est pas une mesure.
+_NUMBER = r'(\d+(?:[.,]\d+)?)'
+_KMH, _KTS = r'(?:km/h|kmh|kph)', r'(?:kts|kt|knots?|n(?:oe|œ)uds?)'
+_KEYWORD = r'(?:vitesse|speed|spd|gs)\s*[:=]?\s*'
+_LINE_START = r'(?:^|<br\s*/?>|\n|[;|])\s*'
+SPEED_PATTERNS = tuple((re.compile(prefix + _NUMBER + r'\s*' + unit + r'(?![\w/])', re.IGNORECASE), knots)
+                       for prefix in (_KEYWORD, _LINE_START)
+                       for unit, knots in ((_KMH, False), (_KTS, True)))
+HEADING_PATTERN = re.compile(r'\b(?:cap|heading|hdg|course|direction|dir)\s*[:=]?\s*' + _NUMBER
+                             + r'\s*(?:°|deg(?:rees?|rés?)?)?(?![\w/.,])', re.IGNORECASE)
 
 class KMLParser:
     """Service de parsing complet des fichiers KML avec support des extensions Google."""
@@ -132,8 +136,8 @@ class KMLParser:
         if timestamps:
             metadata['timestamps'] = []
             for ts in timestamps:
-                when_elem = ts.find('kml:when', ns) or ts.find('when')
-                if when_elem is not None:
+                when_elem = ts.find('kml:when', ns)
+                if when_elem is not None and when_elem.text:
                     metadata['timestamps'].append(when_elem.text)
 
         # TimeSpan
@@ -236,7 +240,10 @@ class KMLParser:
                     style_url_elem = pair.find('kml:styleUrl', ns)
                     if key_elem is not None and style_url_elem is not None:
                         style_map_data[key_elem.text] = style_url_elem.text
-                styles[style_id] = style_map_data
+                # Une StyleMap prend les couleurs de son style « normal » : c'est elle que
+                # les placemarks référencent dans les fichiers Google Earth
+                target = styles.get(str(style_map_data.get('normal') or '').lstrip('#'))
+                styles[style_id] = {**(target or {}), **style_map_data}
 
         if styles:
             metadata['styles'] = styles
@@ -276,101 +283,61 @@ class KMLParser:
         # Trouver tous les Placemark
         placemarks = root.findall('.//kml:Placemark', ns)
         for i, placemark in enumerate(placemarks):
-            feature = KMLParser._extract_placemark_data(placemark, i)
-            if feature:
-                features.append(feature)
+            features.extend(KMLParser._extract_placemark_data(placemark, i))
 
         return features
 
     @staticmethod
-    def _extract_placemark_data(placemark: ET.Element, index: int) -> Optional[Dict[str, Any]]:
-        """Extrait les données d'un Placemark."""
+    def _extract_placemark_data(placemark: ET.Element, index: int) -> List[Dict[str, Any]]:
+        """
+        Features d'un Placemark : une par géométrie. Un MultiGeometry (plusieurs lignes,
+        un point et sa trace…) donne donc plusieurs features du même nom.
+        """
         ns = KMLParser.NAMESPACES
-        # logger.debug("placemark : %s",placemark)
-        # Informations de base
         name_elem = placemark.find('kml:name', ns)
-
-        name = name_elem.text if name_elem is not None else f"Élément {index + 1}"
-
+        name = name_elem.text if name_elem is not None and name_elem.text else f"Élément {index + 1}"
         desc_elem = placemark.find('kml:description', ns)
-        description = desc_elem.text if desc_elem is not None else ""
-        # logger.debug("Descr : %s",description)
-
-        #visibility
+        description = desc_elem.text if desc_elem is not None and desc_elem.text else ""
         visibility_elem = placemark.find('kml:visibility', ns)
         visibility = visibility_elem.text if visibility_elem is not None else "1"
-
-        # Style
         style_url_elem = placemark.find('kml:styleUrl', ns)
         style_ref = style_url_elem.text if style_url_elem is not None else None
-
-        # Informations temporelles
         time_info = KMLParser._extract_placemark_time(placemark)
-
-        # Extensions Google pour ce placemark
         extensions = KMLParser._extract_placemark_extensions(placemark)
+        properties = KMLParser._extract_extended_data(placemark)
+        common = {'name': name, 'description': description, 'style': style_ref,
+                  'time_info': time_info, 'extensions': extensions, 'properties': properties}
+        features: List[Dict[str, Any]] = []
 
-        # Géométrie - Point
-        point = placemark.find('.//kml:Point/kml:coordinates', ns)
-        if point is not None and point.text:
-            # logger.debug("Point")
-            coords = KMLParser._parse_coordinates(point.text.strip())
+        for point in placemark.findall('.//kml:Point/kml:coordinates', ns):
+            coords = KMLParser._parse_coordinates((point.text or '').strip())
             if coords:
-                # logger.debug("Point avec coord")
                 lat, lon, alt = coords[0]
-                parsed_info = KMLParser.parse_gps_description(description, lat, lon, alt)
+                features.append({
+                    'type': 'marker', **common, 'visibility': visibility,
+                    'coordinates': [lat, lon], 'altitude': alt,
+                    'parsed_info': KMLParser.parse_gps_description(description, lat, lon, alt),
+                })
 
-                return {
-                    'type': 'marker',
-                    'name': name,
-                    'visibility': visibility,
-                    'description': description,
-                    'coordinates': [lat, lon],
-                    'altitude': alt,
-                    'style': style_ref,
-                    'time_info': time_info,
-                    'extensions': extensions,
-                    'parsed_info': parsed_info,
-                    'properties': KMLParser._extract_extended_data(placemark)
-                }
-
-        # Géométrie - LineString
-        linestring = placemark.find('.//kml:LineString/kml:coordinates', ns) #or placemark.find('.//LineString/coordinates')
-        if linestring is not None and linestring.text:
-            coords = KMLParser._parse_coordinates(linestring.text.strip())
-            # logger.debug("Linestring")
+        for linestring in placemark.findall('.//kml:LineString/kml:coordinates', ns):
+            coords = KMLParser._parse_coordinates((linestring.text or '').strip())
             if coords:
-                # logger.debug("Linestring avec coord")
-                return {
-                    'type': 'polyline',
-                    'name': name,
-                    'description': description,
-                    'coordinates': coords,
-                    'style': style_ref,
-                    'time_info': time_info,
-                    'extensions': extensions,
-                    'properties': KMLParser._extract_extended_data(placemark)
-                }
+                features.append({'type': 'polyline', **common, 'coordinates': coords})
 
-        # Géométrie - Polygon
-        polygon = placemark.find('.//kml:Polygon', ns) #or placemark.find('.//Polygon')
-        if polygon is not None:
-            # logger.debug("Polygon")
-            return KMLParser._extract_polygon_data(polygon, name, description, style_ref, time_info, extensions, placemark)
+        for polygon in placemark.findall('.//kml:Polygon', ns):
+            features.append(KMLParser._extract_polygon_data(polygon, name, description, style_ref,
+                                                            time_info, extensions, placemark))
 
-        # Géométrie - gx:Track (traces GPS Google)
-        track = placemark.find('.//gx:Track', ns)
-        if track is not None:
-            # logger.debug("Track")
-            return KMLParser._extract_track_data(track, name, description, style_ref, time_info, extensions, placemark)
-
-        # Géométrie - gx:MultiTrack
-        multitrack = placemark.find('.//gx:MultiTrack', ns)
-        if multitrack is not None:
-            # logger.debug("Multitrack")
-            return KMLParser._extract_multitrack_data(multitrack, name, description, style_ref, time_info, extensions, placemark)
-
-        return None
+        multitracks = placemark.findall('.//gx:MultiTrack', ns)
+        nested = {id(track) for multitrack in multitracks for track in multitrack.findall('gx:Track', ns)}
+        for track in placemark.findall('.//gx:Track', ns):
+            if id(track) not in nested:
+                features.append(KMLParser._extract_track_data(track, name, description, style_ref,
+                                                              time_info, extensions, placemark))
+        for multitrack in multitracks:
+            features.append(KMLParser._extract_multitrack_data(multitrack, name, description, style_ref,
+                                                               time_info, extensions, placemark))
+        return features
 
     @staticmethod
     def _parse_coordinates(coord_text: str) -> List[List[float]]:
@@ -504,44 +471,33 @@ class KMLParser:
         """Extrait les données d'une trace Google (gx:Track)."""
         ns = KMLParser.NAMESPACES
 
-        # Coordonnées de la trace
+        # <when> et <gx:coord> vont par paires : un point illisible emporte son horodatage,
+        # sinon toute la suite serait décalée
         coord_elements = track.findall('gx:coord', ns)
         when_elements = track.findall('kml:when', ns)
+        paired = len(when_elements) == len(coord_elements)
 
         coordinates = []
         timestamps = []
+        kept = []
+        for position, coord_elem in enumerate(coord_elements):
+            parts = (coord_elem.text or '').strip().split()
+            try:
+                lon, lat = float(parts[0]), float(parts[1])
+                alt = float(parts[2]) if len(parts) > 2 else 0
+            except (IndexError, ValueError):
+                continue
+            coordinates.append([lat, lon, alt])
+            kept.append(position)
+            if paired:
+                timestamps.append((when_elements[position].text or '').strip() or None)
 
-        for coord_elem in coord_elements:
-            if coord_elem.text:
-                parts = coord_elem.text.strip().split()
-                if len(parts) >= 2:
-                    try:
-                        lon = float(parts[0])
-                        lat = float(parts[1])
-                        alt = float(parts[2]) if len(parts) > 2 else 0
-                        coordinates.append([lat, lon, alt])
-                    except ValueError:
-                        continue
-
-        for when_elem in when_elements:
-            if when_elem.text:
-                timestamps.append(when_elem.text)
-
-        # Données étendues de la trace (vitesse, cap, etc.)
-        extended_data_elements = track.findall('gx:ExtendedData', ns)
-        track_data = []
-
-        for ext_data in extended_data_elements:
-            schema_data = ext_data.find('gx:SchemaData', ns)
-            if schema_data is not None:
-                simple_data = schema_data.findall('gx:SimpleData', ns)
-                data_point = {}
-                for data in simple_data:
-                    name_attr = data.get('name')
-                    if name_attr and data.text:
-                        data_point[name_attr] = data.text
-                if data_point:
-                    track_data.append(data_point)
+        # Données par point (vitesse, cap, fréquence cardiaque…) : un tableau par grandeur
+        track_data: Dict[str, List[Optional[str]]] = {}
+        for array in track.findall('kml:ExtendedData/kml:SchemaData/gx:SimpleArrayData', ns):
+            values = [(value.text or '').strip() or None for value in array.findall('gx:value', ns)]
+            if array.get('name') and len(values) == len(coord_elements):
+                track_data[array.get('name')] = [values[position] for position in kept]
 
         result = {
             'type': 'track',
@@ -587,12 +543,11 @@ class KMLParser:
             'properties': KMLParser._extract_extended_data(placemark)
         }
 
-    # Méthodes utilitaires conservées pour compatibilité
     @staticmethod
     @track_time
     def parse_gps_description(description: str, lat: float, lon: float, alt: float) -> Dict[str, Any]:
         """
-        Parse la description d'un point GPS pour extraire les informations de vol.
+        Extrait vitesse et cap de la description d'un point de traceur GPS.
 
         Args:
             description: Description du point GPS
@@ -617,37 +572,19 @@ class KMLParser:
         if not description:
             return parsed_info
 
-        # Recherche de la vitesse (différents formats possibles)
-        speed_patterns = [
-            r'(?:vitesse|speed|spd)[\s:]*(\d+(?:\.\d+)?)\s*(?:km/h|kmh|kph)',
-            r'(?:vitesse|speed|spd)[\s:]*(\d+(?:\.\d+)?)\s*(?:kt|kts|knots)',
-            r'(\d+(?:\.\d+)?)\s*(?:km/h|kmh|kph)',
-            r'(\d+(?:\.\d+)?)\s*(?:kt|kts|knots)'
-        ]
-
-        for pattern in speed_patterns:
-            match = re.search(pattern, description, re.IGNORECASE)
+        for pattern, knots in SPEED_PATTERNS:
+            match = pattern.search(description)
             if match:
-                speed_value = float(match.group(1))
-                if 'kt' in pattern.lower() or 'knot' in pattern.lower():
-                    parsed_info['speed_kts'] = speed_value
-                    parsed_info['speed_kmh'] = round(speed_value * 1.852, 1)
-                else:
-                    parsed_info['speed_kmh'] = speed_value
-                    parsed_info['speed_kts'] = round(speed_value / 1.852, 1)
+                value = float(match.group(1).replace(',', '.'))
+                parsed_info['speed_kts'] = value if knots else round(value / 1.852, 1)
+                parsed_info['speed_kmh'] = round(value * 1.852, 1) if knots else value
                 break
 
-        # Recherche du cap/heading
-        heading_patterns = [
-            r'(?:cap|heading|hdg|course)[\s:]*(\d+(?:\.\d+)?)\s*(?:°|deg|degrees?)?',
-            r'(?:direction|dir)[\s:]*(\d+(?:\.\d+)?)\s*(?:°|deg|degrees?)?'
-        ]
-
-        for pattern in heading_patterns:
-            match = re.search(pattern, description, re.IGNORECASE)
-            if match:
-                parsed_info['heading'] = float(match.group(1))
-                break
+        match = HEADING_PATTERN.search(description)
+        if match:
+            heading = float(match.group(1).replace(',', '.'))
+            if 0 <= heading <= 360:
+                parsed_info['heading'] = heading
 
         # Conversion altitude en pieds
         if alt:
@@ -657,135 +594,29 @@ class KMLParser:
 
     @staticmethod
     @track_time
-    def format_point_description(parsed_info: Dict[str, Any], display_mode: str = 'double') -> str:
-        """
-        Formate la description d'un point selon le mode d'affichage choisi.
-
-        Args:
-            parsed_info: Informations parsées du point
-            display_mode: 'double' pour double unité, 'simple' pour unité simple
-
-        Returns:
-            str: Description formatée
-        """
-        lines = []
-
-        # Ligne 1: Vitesse
-        if parsed_info['speed_kmh'] is not None:
-            if display_mode == 'double':
-                lines.append(f"Vitesse: {parsed_info['speed_kmh']} km/h ({parsed_info['speed_kts']} kts)")
-            else:
-                lines.append(f"Vitesse: {parsed_info['speed_kmh']} km/h")
-
-        # Ligne 2: Altitude
-        if parsed_info['altitude_m'] is not None:
-            if display_mode == 'double':
-                lines.append(f"Altitude: {parsed_info['altitude_ft']} ft ({round(parsed_info['altitude_m'])} m)")
-            else:
-                lines.append(f"Altitude: {round(parsed_info['altitude_m'])} m")
-
-        # Ligne 3: Coordonnées
-        if parsed_info['latitude'] is not None and parsed_info['longitude'] is not None:
-            lines.append(f"Position: {parsed_info['latitude']:.6f}°, {parsed_info['longitude']:.6f}°")
-
-        # Ligne 4: Cap
-        if parsed_info['heading'] is not None:
-            lines.append(f"Cap: {parsed_info['heading']}°")
-
-        return '<br>'.join(lines) if lines else parsed_info['raw_description']
-
-    @staticmethod
-    @track_time
-    def get_placemarks_points(kml_content, folder_name_to_search):
-        """Méthode conservée pour compatibilité."""
-        placemarks = []
-        namespaces = KMLParser.NAMESPACES
-
-        try:
-            root = safe_fromstring(kml_content)
-            folders = root.findall('.//kml:Folder', namespaces)
-
-            for folder in folders:
-                folder_name_elem = folder.find('kml:name', namespaces)
-                folder_name = folder_name_elem.text if folder_name_elem is not None else None
-                logger.debug("Folder : %s", folder_name)
-
-                if folder_name and folder_name.strip().lower() != folder_name_to_search.strip().lower():
-                    continue
-
-                placemarks = folder.findall('.//kml:Placemark', namespaces)
-                if not placemarks:
-                    placemarks = root.findall('.//Placemark')
-                logger.debug("Nombre de Placemark points : %d", len(placemarks))
-
-            return placemarks
-        except ET.ParseError as e:
-            return {
-                'success': False,
-                'error': f'Erreur de parsing XML: {str(e)}'
-            }
-        except (IOError, OSError) as e:
-            return {
-                'success': False,
-                'error': f'Erreur lors du traitement: {str(e)}'
-            }
-
-    @staticmethod
-    @track_time
     def parse_kml_coordinates(kml_content: str, display_mode: str = 'double') -> Dict[str, Any]:
         """
         Parse un fichier KML et extrait les coordonnées des traces GPS et tous les points.
-        Méthode conservée pour compatibilité avec l'ancien code.
 
         Args:
             kml_content: Contenu du fichier KML
-            display_mode: Mode d'affichage ('double' ou 'simple')
+            display_mode: ignoré (les unités sont choisies à l'affichage), conservé pour l'API
 
         Returns:
             dict: Données formatées pour Leaflet avec traces et points séparés
         """
-        try:
-            # Utiliser la nouvelle méthode parse et adapter le format de sortie
-            result = KMLParser.parse(kml_content)
-
-            if not result['success']:
-                return result
-
-            features = result['features']
-            points = []
-
-            # Séparer les points des autres features et adapter le format
-            for feature in features:
-                if feature['type'] == 'marker':
-                    # Adapter le format pour compatibilité
-                    parsed_info = feature.get('parsed_info', {})
-                    formatted_description = KMLParser.format_point_description(parsed_info, display_mode)
-
-                    point_data = {
-                        'type': 'marker',
-                        'name': feature['name'],
-                        'description': formatted_description,
-                        'raw_description': feature['description'],
-                        'coordinates': feature['coordinates'],
-                        'altitude': feature.get('altitude', 0),
-                        'style': feature.get('style'),
-                        'is_annotation': False,  # Valeur par défaut
-                        'index': len(points),
-                        'parsed_info': parsed_info
-                    }
-
-                    points.append(point_data)
-
-            return {
-                'success': True,
-                'features': features,
-                'points': points,
-                'metadata': result['metadata'],
-                'total_points': len(points)
-            }
-
-        except (ValueError, AttributeError, TypeError) as e:
-            return {
-                'success': False,
-                'error': f'Erreur lors du traitement: {str(e)}'
-            }
+        result = KMLParser.parse(kml_content)
+        if not result['success']:
+            return result
+        features = result['features']
+        # Le k-ième point est le k-ième marqueur des features. La description reste celle du
+        # fichier : la mise en forme des mesures (unités) est faite à l'affichage.
+        points = [{**feature, 'raw_description': feature['description'], 'index': index}
+                  for index, feature in enumerate(f for f in features if f['type'] == 'marker')]
+        return {
+            'success': True,
+            'features': features,
+            'points': points,
+            'metadata': result['metadata'],
+            'total_points': len(points)
+        }

@@ -83,6 +83,31 @@ function descriptionNodes(description) {
     return nodes;
 }
 
+// Description affichée d'un point. Un point de mesure (vitesse ou cap connus : traceur GPS,
+// point de trace horodaté) est présenté dans les unités choisies ; tout autre point garde
+// la description de son fichier. Calculé à l'affichage : changer d'unités suffit à rafraîchir.
+function pointDescription(point) {
+    const info = point.parsed_info || {};
+    const has = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+    if (!has(info.speed_kmh) && !has(info.heading)) return point.description || '';
+    const double = Viewer.displayMode() === 'double';
+    const lines = [];
+    if (has(info.speed_kmh)) {
+        const knots = has(info.speed_kts) ? info.speed_kts : Math.round(info.speed_kmh / 1.852 * 10) / 10;
+        lines.push(`Vitesse : ${info.speed_kmh} km/h${double ? ` (${knots} kts)` : ''}`);
+    }
+    const altitude = has(point.altitude) ? Number(point.altitude) : Number(info.altitude_m);
+    if (altitude) {
+        const metres = `${Math.round(altitude)} m`;
+        lines.push(`Altitude : ${double ? `${Math.round(altitude * 3.28084)} ft (${metres})` : metres}`);
+    }
+    if (Array.isArray(point.coordinates)) {
+        lines.push(`Position : ${Number(point.coordinates[0]).toFixed(6)}°, ${Number(point.coordinates[1]).toFixed(6)}°`);
+    }
+    if (has(info.heading)) lines.push(`Cap : ${info.heading}°`);
+    return lines.join('<br>');
+}
+
 function setVisible(id, visible, display = 'block') {
     const node = document.getElementById(id);
     if (node) node.style.display = visible ? display : 'none';

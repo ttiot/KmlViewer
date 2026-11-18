@@ -30,9 +30,6 @@ STOP_MERGE_GAP_S = 30.0     # deux arrêts proches dans le temps et l'espace n'e
 STOP_MERGE_RADIUS_M = 50.0
 STOP_MIN_POINTS_NO_TIME = 3
 SPEED_WINDOW_S = 10.0       # lissage de la vitesse calculée
-JUMP_WINDOW = 11            # pas voisins servant de référence pour repérer un saut GPS
-JUMP_FACTOR = 3.0           # saut : plus de 3 fois l'allure locale…
-JUMP_MARGIN_MS = 3.0        # … plus une marge (m/s)
 
 GRID_M = 20.0               # pas du profil rééchantillonné
 MAX_GRID_CELLS = 20000
@@ -48,6 +45,7 @@ TURN_SHARP_DEG = 120.0
 ACCEL_THRESHOLD = 0.5       # m/s²
 MAX_ITEMS = 200             # plafond de chaque liste renvoyée
 PATH_POINTS = 60            # points du tracé simplifié d'un segment
+CHART_POINTS = 1500         # points des courbes d'altitude et de vitesse
 
 SLOPE_CLASSES = (('flat', 5.0), ('gentle', 15.0), ('moderate', 30.0), ('steep', math.inf))
 ZONES = (('slow', 'Lente', '#3498db'), ('medium', 'Moyenne', '#f39c12'), ('fast', 'Rapide', '#e74c3c'))
@@ -255,48 +253,27 @@ def _derive(series: Series) -> None:
     """Distances (sans les sauts d'une trace à la suivante) et vitesse lissée par point."""
     steps = geo.step_distances(series.lat, series.lon)
     steps[series.new_line[1:]] = 0.0
+    if series.t is not None:
+        # Un point aberrant ne compte ni dans la distance ni dans les vitesses
+        steps, jumps = geo.despike_steps(steps, np.diff(series.t))
+        if jumps:
+            series.notes.append(f"{jumps} saut(s) GPS ignoré(s) dans les distances et les vitesses")
     series.steps = steps
     series.cum = np.concatenate(([0.0], np.cumsum(steps)))
 
     if series.t is not None:
-        series.speed = _window_speed(series, SPEED_WINDOW_S, net=False, cum=_cum_without_jumps(series))
+        series.speed = _window_speed(series, SPEED_WINDOW_S, net=False)
         series.speed_source = 'time'
     elif series.device_speed is not None:
         speed = series.device_speed
         index = np.arange(len(speed))
         known = np.isfinite(speed)
         speed = np.interp(index, index[known], speed[known])
-        series.speed = _median_filter(speed, 5)
+        series.speed = geo.median_filter(speed, 5)
         series.speed_source = 'device'
 
 
-def _cum_without_jumps(series: Series) -> np.ndarray:
-    """
-    Distance cumulée pour le calcul des vitesses, sauts GPS neutralisés : un pas bien plus
-    rapide que ses voisins (aller-retour d'un point aberrant) est ramené à l'allure locale.
-    Une vitesse élevée mais soutenue n'est pas touchée.
-    """
-    dt = np.diff(series.t)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        step_speed = np.where(dt > 0, series.steps / dt, 0.0)
-    local = _median_filter(step_speed, JUMP_WINDOW)
-    jumps = step_speed > JUMP_FACTOR * local + JUMP_MARGIN_MS
-    if not jumps.any():
-        return series.cum
-    series.notes.append(f"{int(jumps.sum())} saut(s) GPS ignoré(s) dans le calcul des vitesses")
-    return np.concatenate(([0.0], np.cumsum(np.where(jumps, local * dt, series.steps))))
-
-
-def _median_filter(values: np.ndarray, window: int) -> np.ndarray:
-    """Médiane glissante : écarte une mesure isolée aberrante."""
-    if len(values) < window:
-        return values
-    half = window // 2
-    padded = np.pad(values, half, mode='edge')
-    return np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=1)
-
-
-def _window_speed(series: Series, window_s: float, net: bool, cum: Optional[np.ndarray] = None) -> np.ndarray:
+def _window_speed(series: Series, window_s: float, net: bool) -> np.ndarray:
     """
     Vitesse (m/s) en chaque point sur une fenêtre de temps centrée : distance parcourue
     (net=False) ou déplacement à vol d'oiseau (net=True) divisé par la durée.
@@ -311,8 +288,7 @@ def _window_speed(series: Series, window_s: float, net: bool, cum: Optional[np.n
     if net:
         dist = geo.haversine(series.lat[lo], series.lon[lo], series.lat[hi], series.lon[hi])
     else:
-        cum = series.cum if cum is None else cum
-        dist = cum[hi] - cum[lo]
+        dist = series.cum[hi] - series.cum[lo]
     with np.errstate(divide='ignore', invalid='ignore'):
         return np.where(span > 0, dist / span, 0.0)
 
@@ -781,3 +757,76 @@ def analyze(features: List[Any], points: List[Any], stop_speed_kmh: float = STOP
         'points_of_interest': points_of_interest(series, profile, stops),
         'summary': _summary(series, profile, stops),
     }
+
+
+# ------------------------------------------------------------- Analyse de base
+
+def _decimate(count: int, limit: int = CHART_POINTS) -> np.ndarray:
+    return np.unique(np.linspace(0, count - 1, min(count, limit)).astype(int))
+
+
+def basic(features: List[Any], points: Optional[List[Any]] = None) -> Dict[str, Any]:
+    """
+    Statistiques et courbes de l'onglet principal, sur les mêmes mesures que l'analyse
+    avancée : durée et vitesses réelles (jamais estimées), dénivelé à hystérésis sur un
+    profil lissé. Une section sans donnée exploitable reste vide.
+    """
+    features = features or []
+    if points is None:
+        points = [f for f in features if isinstance(f, dict) and f.get('type') == 'marker']
+    lines = sum(1 for _ in iter_lines(features))
+    analysis: Dict[str, Any] = {
+        'basic_stats': {'total_points': 0, 'total_traces': lines, 'has_elevation_data': False,
+                        'has_speed_data': False, 'has_time_data': False},
+        'distance': {'total_distance_m': 0.0, 'total_distance_km': 0.0},
+        'elevation': {}, 'speed': {}, 'duration': {}, 'notes': [],
+    }
+    series = build_series(features, points)
+    if series is None or float(series.cum[-1]) <= 0:
+        return analysis
+    profile = build_profile(series)
+    stops = detect_stops(series)
+    summary = _summary(series, profile, stops)
+    total = float(series.cum[-1])
+    analysis['notes'] = series.notes
+    analysis['basic_stats'].update({
+        'total_points': len(series), 'has_elevation_data': series.has_elevation,
+        'has_speed_data': series.speed is not None, 'has_time_data': series.t is not None,
+    })
+    analysis['distance'] = {'total_distance_m': _r(total, 1), 'total_distance_km': _r(total / 1000, 2)}
+
+    if series.has_elevation:
+        elevation = {
+            'total_ascent': summary['ascent_m'] or 0.0, 'total_descent': summary['descent_m'] or 0.0,
+            'min_elevation': _r(series.ele.min(), 1), 'max_elevation': _r(series.ele.max(), 1),
+            'elevation_gain': _r(series.ele.max() - series.ele.min(), 1), 'elevation_profile': [],
+        }
+        if profile is not None:
+            elevation['elevation_profile'] = [
+                {'distance': _r(profile.grid[i], 1), 'elevation': _r(profile.raw[i], 1), 'index': int(i)}
+                for i in _decimate(len(profile.grid))]
+        analysis['elevation'] = elevation
+
+    if series.speed is not None:
+        speed_kmh = series.speed * 3.6
+        average, top = summary['avg_moving_speed_kmh'], summary['max_speed_kmh']
+        lowest = _r(speed_kmh.min(), 1)
+        analysis['speed'] = {
+            'source': series.speed_source,
+            'avg_speed_kmh': average, 'max_speed_kmh': top, 'min_speed_kmh': lowest,
+            'avg_speed_kts': _r(average / 1.852, 1) if average is not None else None,
+            'max_speed_kts': _r(top / 1.852, 1) if top is not None else None,
+            'min_speed_kts': _r(lowest / 1.852, 1),
+            'speed_profile': [
+                {'index': int(i), 'distance': _r(series.cum[i], 1), 'speed_kmh': _r(speed_kmh[i], 1),
+                 'speed_kts': _r(speed_kmh[i] / 1.852, 1),
+                 'coordinates': [float(series.lat[i]), float(series.lon[i])]}
+                for i in _decimate(len(series))],
+        }
+
+    if series.t is not None:
+        analysis['duration'] = {
+            'total_s': summary['duration_s'], 'moving_s': summary['moving_s'], 'stopped_s': summary['stopped_s'],
+            'stops_count': len(stops), 'start_time': _iso(series.t[0]), 'end_time': _iso(series.t[-1]),
+        }
+    return analysis

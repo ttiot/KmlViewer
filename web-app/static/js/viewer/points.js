@@ -71,17 +71,18 @@ function displayPointsList() {
 
     const fragment = document.createDocumentFragment();
     points.forEach((point, index) => {
-        const description = descriptionNodes(point.description);
+        const description = descriptionNodes(pointDescription(point));
+        const tracePoint = String(point.visibility) === '0'; // point de trace, non dessiné sur la carte
         fragment.appendChild(el('div', { class: 'point-item', dataset: { pointIndex: index } },
             el('div', { class: 'd-flex align-items-start' },
                 el('div', { class: 'me-3 mt-1' },
-                    el('div', { class: `point-dot ${point.is_annotation ? 'annotation' : ''}` })),
+                    el('div', { class: `point-dot ${tracePoint ? '' : 'annotation'}` })),
                 el('div', { class: 'flex-grow-1' },
                     el('div', { class: 'point-name' }, point.name || `Point ${index + 1}`),
                     description.length ? el('div', { class: 'point-description' }, description) : null,
                     el('div', { class: 'point-meta' },
-                        el('span', { class: `badge ${point.is_annotation ? 'bg-warning' : 'bg-info'} point-badge me-2` },
-                            point.is_annotation ? 'Annotation' : 'Point principal'),
+                        el('span', { class: `badge ${tracePoint ? 'bg-info' : 'bg-warning'} point-badge me-2` },
+                            tracePoint ? 'Point de trace' : 'Repère'),
                         el('small', { class: 'text-muted' }, `Point ${index + 1}/${points.length}`),
                         point.altitude
                             ? el('small', { class: 'text-muted ms-2' }, `Alt : ${Math.round(point.altitude)} m`) : null)))));

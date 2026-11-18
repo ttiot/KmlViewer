@@ -19,48 +19,6 @@ def test_parse_gps_description():
     assert parsed['altitude_ft'] == round(1000.0 * 3.28084)
 
 
-def test_format_point_description_double():
-    """Test du formatage de description en mode double unité."""
-    parsed_info = {
-        'speed_kmh': 120.0,
-        'speed_kts': 64.8,
-        'altitude_m': 1000.0,
-        'altitude_ft': 3281,
-        'latitude': 45.0,
-        'longitude': 2.0,
-        'heading': 180.0,
-        'raw_description': 'test'
-    }
-
-    formatted = KMLParser.format_point_description(parsed_info, 'double')
-
-    assert '120.0 km/h (64.8 kts)' in formatted
-    assert '3281 ft (1000 m)' in formatted
-    assert '45.000000°, 2.000000°' in formatted
-    assert 'Cap: 180.0°' in formatted
-
-
-def test_format_point_description_simple():
-    """Test du formatage de description en mode simple unité."""
-    parsed_info = {
-        'speed_kmh': 120.0,
-        'speed_kts': 64.8,
-        'altitude_m': 1000.0,
-        'altitude_ft': 3281,
-        'latitude': 45.0,
-        'longitude': 2.0,
-        'heading': 180.0,
-        'raw_description': 'test'
-    }
-
-    formatted = KMLParser.format_point_description(parsed_info, 'simple')
-
-    assert '120.0 km/h' in formatted
-    assert 'kts' not in formatted
-    assert '1000 m' in formatted
-    assert 'ft' not in formatted
-
-
 def test_parse_kml_coordinates_invalid_xml():
     """Test du parsing avec XML invalide."""
     invalid_kml = "<?xml version='1.0'?><invalid><unclosed>"

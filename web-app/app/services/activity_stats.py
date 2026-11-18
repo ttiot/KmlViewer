@@ -97,6 +97,18 @@ def extract_track(parsed: Dict[str, Any]) -> Track:
     return track
 
 
+def file_epoch(parsed: Dict[str, Any]) -> Optional[float]:
+    """Date portée par le fichier en dehors de la trace : métadonnées, sinon premier repère daté."""
+    metadata = parsed.get('metadata') or {}
+    candidates = [metadata.get('time'), *(metadata.get('timestamps') or [])[:1]]
+    for feature in parsed.get('features') or []:
+        time_info = feature.get('time_info') if isinstance(feature, dict) else None
+        if isinstance(time_info, dict) and (time_info.get('timestamp') or time_info.get('begin')):
+            candidates.append(time_info.get('timestamp') or time_info.get('begin'))
+            break
+    return next((epoch for epoch in map(parse_timestamp, candidates) if epoch is not None), None)
+
+
 def best_efforts(dist_cum: np.ndarray, t: np.ndarray) -> Dict[str, float]:
     """Meilleur temps (s) sur chaque distance de référence, par fenêtre glissante."""
     results: Dict[str, float] = {}
@@ -128,6 +140,9 @@ def compute_summary(track: Track) -> Dict[str, Any]:
 
     lat, lon = np.asarray(track.lat), np.asarray(track.lon)
     steps = geo.step_distances(lat, lon)
+    if track.has_time:
+        # Un point aberrant gonflerait la distance et fabriquerait des records
+        steps, _ = geo.despike_steps(steps, np.diff(np.asarray(track.t, dtype=float)))
     dist_cum = np.concatenate(([0.0], np.cumsum(steps)))
 
     summary: Dict[str, Any] = {

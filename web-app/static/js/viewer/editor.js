@@ -80,7 +80,6 @@ function openPointForm(target) {
     document.getElementById('pointEditTitle').textContent = point ? 'Modifier le point' : 'Nouveau point';
     document.getElementById('editPointName').value = point ? (point.name || '') : `Nouveau point ${points.length + 1}`;
     document.getElementById('editPointDescription').value = point ? editableDescription(point.description) : '';
-    document.getElementById('editPointAnnotation').checked = point ? Boolean(point.is_annotation) : true;
     setVisible('pointEditForm', true);
     Viewer.map.getContainer().style.cursor = '';
     setEditorHint(point ? '' : 'Complète le formulaire puis enregistre le point.');
@@ -110,7 +109,6 @@ function savePointForm(event) {
     if (!file || !target) return;
     const name = document.getElementById('editPointName').value.trim().slice(0, 200);
     const text = document.getElementById('editPointDescription').value.trim().slice(0, 2000);
-    const isAnnotation = document.getElementById('editPointAnnotation').checked;
     if (!name) {
         showAlert('Donne un nom au point', 'warning');
         return;
@@ -123,9 +121,9 @@ function savePointForm(event) {
         const point = points[target.index];
         const featureIndex = markerFeatureAt(features, target.index);
         if (!point) return;
-        Object.assign(point, { name, description, raw_description: text, is_annotation: isAnnotation });
+        Object.assign(point, { name, description, raw_description: text });
         if (featureIndex !== -1) {
-            Object.assign(features[featureIndex], { name, description: text, is_annotation: isAnnotation });
+            Object.assign(features[featureIndex], { name, description: text });
         }
         showAlert('Point modifié', 'success');
     } else {
@@ -133,7 +131,7 @@ function savePointForm(event) {
         const lon = Number(target.latlng.lng.toFixed(6));
         const base = {
             type: 'marker', name, coordinates: [lat, lon], altitude: 0, style: null, visibility: '1',
-            is_annotation: isAnnotation, time_info: {}, properties: {},
+            time_info: {}, properties: {},
             parsed_info: { speed_kmh: null, speed_kts: null, altitude_ft: null, altitude_m: null,
                 latitude: lat, longitude: lon, heading: null, raw_description: text },
         };

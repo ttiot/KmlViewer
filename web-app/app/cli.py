@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 
 from app.db import connect
-from app.services import inbox_watcher
+from app.services import inbox_watcher, ingest_service
 
 
 def backup_database(db_path: str, target: Path) -> None:
@@ -37,6 +37,16 @@ def register_cli(app) -> None:
         finally:
             db.close()
         click.echo(', '.join(f"{k}={v}" for k, v in counts.items()))
+
+    @app.cli.command('recompute-stats')
+    def recompute_stats():
+        """Recalcule les résumés (distance, durées, records) de toutes les activités stockées."""
+        db = connect(app.config['DB_PATH'])
+        try:
+            count = ingest_service.recompute_summaries(db)
+        finally:
+            db.close()
+        click.echo(f"{count} activité(s) recalculée(s)")
 
     @app.cli.command('user-admin')
     @click.argument('login')

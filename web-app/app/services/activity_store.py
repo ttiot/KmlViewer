@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 SUMMARY_COLUMNS = (
-    "id, name, filename, source, activity_type, start_time, has_time, duration_s, moving_s, "
+    "id, name, filename, source, activity_type, start_time, start_time_known, has_time, duration_s, moving_s, "
     "distance_m, ascent_m, descent_m, ascent_gps_m, descent_gps_m, elev_source, dem_status, max_speed_ms, "
     "best_efforts, created_at"
 )
@@ -67,6 +67,8 @@ def insert(db: sqlite3.Connection, user_id: int, values: Dict[str, Any]) -> int:
 def to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     data = {k: row[k] for k in row.keys() if k not in ('points', 'best_efforts', 'sha256', 'user_id')}
     data['has_time'] = bool(row['has_time'])
+    if 'start_time_known' in data:
+        data['start_time_known'] = bool(data['start_time_known'])
     data['best_efforts'] = json.loads(row['best_efforts'] or '{}')
     return data
 
@@ -122,6 +124,14 @@ def update_elevation(db: sqlite3.Connection, user_id: int, activity_id: int, *, 
                "dem_status = 'ok' WHERE id = ? AND user_id = ?",
                (points, ascent_m, descent_m, elev_source, activity_id, user_id))
     db.commit()
+
+
+def update_summary(db: sqlite3.Connection, user_id: int, activity_id: int, values: Dict[str, Any]) -> None:
+    """Met à jour les colonnes de résumé recalculées (noms de colonnes fournis par le code)."""
+    values = {**values, 'best_efforts': json.dumps(values.get('best_efforts') or {})}
+    assignments = ', '.join(f"{column} = ?" for column in values)
+    db.execute(f"UPDATE activities SET {assignments} WHERE id = ? AND user_id = ?",
+               (*values.values(), activity_id, user_id))
 
 
 def set_dem_status(db: sqlite3.Connection, user_id: int, activity_id: int, status: str) -> None:

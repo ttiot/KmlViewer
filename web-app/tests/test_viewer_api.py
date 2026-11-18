@@ -134,7 +134,7 @@ def test_exports(client):
     features.append({'type': 'marker', 'name': 'Col <b>', 'description': 'Vue', 'coordinates': [45.0, 6.0],
                      'altitude': 1500, 'visibility': '1'})
     body = {'features': features, 'filename': '../ma sortie', 'metadata': {'name': 'Sortie'}}
-    expected = {'gpx': b'<trkpt', 'kml': b'<LineString>', 'geojson': b'"LineString"', 'csv': b'TracePoint'}
+    expected = {'gpx': b'<trkpt', 'kml': b'<gx:Track>', 'geojson': b'"LineString"', 'csv': b'TracePoint'}
     for fmt, marker in expected.items():
         response = client.post(f'/api/export/{fmt}', json=body)
         assert response.status_code == 200 and marker in response.data, fmt

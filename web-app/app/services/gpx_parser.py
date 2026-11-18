@@ -7,9 +7,6 @@ from typing import Dict, Any, List
 from app.services.timing_tools import track_time
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
 
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
 class GPXParser:

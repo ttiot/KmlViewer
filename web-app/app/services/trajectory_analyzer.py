@@ -1,6 +1,5 @@
 """
-Service d'analyse de trajectoires GPS.
-Implémente les fonctionnalités d'analyse de base de la Phase 3.
+Façade d'analyse des trajectoires : les calculs sont dans app.services.advanced_analysis.
 """
 
 from typing import List, Dict, Any
@@ -14,30 +13,6 @@ from app.services.timing_tools import track_time
 
 class TrajectoryAnalyzer:
     """Service d'analyse des trajectoires GPS."""
-
-    @staticmethod
-    def _filter_speed_outliers(values: List[float]) -> List[float]:
-        """Filtre les valeurs de vitesse aberrantes à l'aide de l'IQR.
-
-        Args:
-            values: Liste de vitesses en km/h.
-
-        Returns:
-            Liste de vitesses sans valeurs aberrantes. Les valeurs d'origine
-            sont renvoyées si le filtrage retire tout.
-        """
-        if len(values) < 5:
-            return values
-
-        arr = np.array(values)
-        q1 = np.percentile(arr, 25)
-        q3 = np.percentile(arr, 75)
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-
-        filtered = [v for v in values if lower <= v <= upper]
-        return filtered or values
 
     @staticmethod
     @track_time
@@ -108,270 +83,20 @@ class TrajectoryAnalyzer:
     @staticmethod
     @track_time
     def calculate_elevation_profile(coordinates: List[List[float]]) -> Dict[str, Any]:
-        """
-        Calcule le profil d'élévation d'une trace.
-
-        Args:
-            coordinates: Liste de coordonnées [lat, lon, alt]
-
-        Returns:
-            Dictionnaire avec les statistiques d'élévation
-        """
-        if len(coordinates) < 2:
-            return {
-                "total_ascent": 0.0,
-                "total_descent": 0.0,
-                "min_elevation": 0.0,
-                "max_elevation": 0.0,
-                "elevation_gain": 0.0,
-                "elevation_profile": [],
-            }
-
-        elevations = [coord[2] if len(coord) > 2 else None for coord in coordinates]
-
-        # Filtrer les valeurs nulles ou aberrantes
-        valid_elevations = [alt for alt in elevations if alt is not None and -1000 < alt < 10000]
-
-        if not valid_elevations:
-            return {
-                "total_ascent": 0.0,
-                "total_descent": 0.0,
-                "min_elevation": 0.0,
-                "max_elevation": 0.0,
-                "elevation_gain": 0.0,
-                "elevation_profile": [],
-            }
-
-        # Lisser les altitudes pour éviter le bruit GPS sur les longues traces
-        if len(valid_elevations) >= 100:
-            window_size = 31
-            kernel = np.ones(window_size) / window_size
-            smoothed_elevations = np.convolve(valid_elevations, kernel, mode='same')
-        else:
-            smoothed_elevations = valid_elevations
-
-        # Calcul des montées et descentes simples sur les données lissées
-        total_ascent = 0.0
-        total_descent = 0.0
-        prev_elevation = smoothed_elevations[0]
-
-        for elevation in smoothed_elevations[1:]:
-            diff = elevation - prev_elevation
-            if diff > 0:
-                total_ascent += diff
-            elif diff < 0:
-                total_descent += -diff
-            prev_elevation = elevation
-
-        # Calcul du profil d'élévation avec distance cumulative
-        distance_cumulative = 0.0
-        elevation_profile = []
-
-        for i, coord in enumerate(coordinates):
-            if i > 0:
-                distance_cumulative += TrajectoryAnalyzer.calculate_distance_between_points(coordinates[i - 1], coord)
-
-            elevation_profile.append(
-                {"distance": distance_cumulative, "elevation": coord[2] if len(coord) > 2 else 0, "index": i}
-            )
-
-        return {
-            "total_ascent": round(total_ascent, 1),
-            "total_descent": round(total_descent, 1),
-            "min_elevation": round(min(valid_elevations), 1),
-            "max_elevation": round(max(valid_elevations), 1),
-            "elevation_gain": round(max(valid_elevations) - min(valid_elevations), 1),
-            "elevation_profile": elevation_profile,
-        }
+        """Dénivelés, altitudes extrêmes et profil d'une liste de [lat, lon, alt] ({} sans altitude)."""
+        return advanced_analysis.basic(TrajectoryAnalyzer._line(coordinates), [])['elevation']
 
     @staticmethod
     @track_time
     def calculate_speed_statistics(points: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Calcule les statistiques de vitesse à partir des points GPS.
-
-        Args:
-            points: Liste des points avec informations parsées
-
-        Returns:
-            Dictionnaire avec les statistiques de vitesse
-        """
-        speeds = []
-        speed_profile = []
-        raw_speeds = []
-
-        for i, point in enumerate(points):
-            parsed_info = point.get("parsed_info", {})
-            speed_kmh = parsed_info.get("speed_kmh")
-
-            if speed_kmh is not None and speed_kmh >= 0:
-                raw_speeds.append(speed_kmh)
-                speed_profile.append({
-                    'index': i,
-                    'speed_kmh': speed_kmh,
-                    'speed_kts': parsed_info.get('speed_kts', speed_kmh / 1.852),
-                    'coordinates': point.get('coordinates', [0, 0])
-                })
-
-        if not raw_speeds:
-            return {
-                "avg_speed_kmh": 0.0,
-                "max_speed_kmh": 0.0,
-                "min_speed_kmh": 0.0,
-                "avg_speed_kts": 0.0,
-                "max_speed_kts": 0.0,
-                "min_speed_kts": 0.0,
-                "speed_profile": [],
-            }
-
-        speeds = TrajectoryAnalyzer._filter_speed_outliers(raw_speeds)
-        if len(speeds) != len(raw_speeds) and len(raw_speeds) >= 5:
-            arr = np.array(raw_speeds)
-            q1 = np.percentile(arr, 25)
-            q3 = np.percentile(arr, 75)
-            iqr = q3 - q1
-            lower = q1 - 1.5 * iqr
-            upper = q3 + 1.5 * iqr
-            mask = [lower <= s <= upper for s in raw_speeds]
-            filtered_profile = [entry for entry, keep in zip(speed_profile, mask) if keep]
-            if filtered_profile:
-                speed_profile = filtered_profile
-            else:
-                speeds = raw_speeds
-
-        avg_speed = sum(speeds) / len(speeds)
-        max_speed = max(speeds)
-        min_speed = min(speeds)
-
-        return {
-            "avg_speed_kmh": round(avg_speed, 1),
-            "max_speed_kmh": round(max_speed, 1),
-            "min_speed_kmh": round(min_speed, 1),
-            "avg_speed_kts": round(avg_speed / 1.852, 1),
-            "max_speed_kts": round(max_speed / 1.852, 1),
-            "min_speed_kts": round(min_speed / 1.852, 1),
-            "speed_profile": speed_profile,
-        }
-
-    @staticmethod
-    @track_time
-    def estimate_duration_from_points(points: List[Dict[str, Any]], avg_speed_kmh: float = None) -> Dict[str, Any]:
-        """
-        Estime la durée du trajet à partir des points et de la vitesse moyenne.
-
-        Args:
-            points: Liste des points GPS
-            avg_speed_kmh: Vitesse moyenne en km/h (optionnel)
-
-        Returns:
-            Dictionnaire avec les informations de durée
-        """
-        if len(points) < 2:
-            return {
-                "estimated_duration_hours": 0.0,
-                "estimated_duration_minutes": 0.0,
-                "moving_time_hours": 0.0,
-                "total_time_hours": 0.0,
-            }
-
-        # Essayer d'extraire les timestamps si disponibles
-        # Pour l'instant, on utilise une estimation basée sur la distance et la vitesse
-
-        # Calculer la distance totale entre les points
-        coordinates = []
-        for point in points:
-            lat_lon = point.get("coordinates", [0, 0])  # Valeur par défaut [0, 0]
-            altitude = point.get("altitude", 0)  # Valeur par défaut 0
-            coordinates.append(lat_lon + [altitude])
-
-        if len(coordinates) > 1:
-            total_distance = TrajectoryAnalyzer.calculate_total_distance(coordinates)
-
-        # Utiliser la vitesse moyenne des points ou une valeur par défaut
-        if avg_speed_kmh is None or avg_speed_kmh <= 0:
-            # Calculer la vitesse moyenne à partir des points
-            speed_stats = TrajectoryAnalyzer.calculate_speed_statistics(points)
-            avg_speed_kmh = speed_stats.get("avg_speed_kmh", 50.0)  # 50 km/h par défaut
-
-        if avg_speed_kmh > 0:
-            duration_hours = (total_distance / 1000) / avg_speed_kmh
-        else:
-            duration_hours = 0.0
-
-        return {
-            "estimated_duration_hours": round(duration_hours, 2),
-            "estimated_duration_minutes": round(duration_hours * 60, 1),
-            "moving_time_hours": round(duration_hours, 2),  # Pour l'instant, identique
-            "total_time_hours": round(duration_hours, 2),  # Pour l'instant, identique
-            "total_distance_km": round(total_distance / 1000, 2),
-        }
+        """Vitesses moyenne (en mouvement), de pointe et minimale d'une suite de points ({} sans vitesse)."""
+        return advanced_analysis.basic([], points)['speed']
 
     @staticmethod
     @track_time
     def analyze_trajectory(features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Analyse complète d'une trajectoire GPS.
-
-        Args:
-            features: Liste des features (polylines et points) du KML
-
-        Returns:
-            Dictionnaire avec toutes les analyses
-        """
-        # Séparer les traces et les points
-        polylines = [f for f in features if f.get('type') == 'polyline']
-        points = [f for f in features if f.get('type') == 'marker' and f.get('visibility') == "0"]
-
-        analysis = {
-            "basic_stats": {
-                "total_points": len(points),
-                "total_traces": len(polylines),
-                "has_elevation_data": False,
-                "has_speed_data": False,
-            },
-            "distance": {"total_distance_m": 0.0, "total_distance_km": 0.0},
-            "elevation": {},
-            "speed": {},
-            "duration": {},
-            "segments": [],
-        }
-
-        # Analyser chaque trace
-        all_coordinates = []
-        for polyline in polylines:
-            coordinates = polyline.get("coordinates", [])
-            if coordinates:
-                all_coordinates.extend(coordinates)
-
-                # Analyse de distance pour cette trace
-                trace_distance = TrajectoryAnalyzer.calculate_total_distance(coordinates)
-                analysis["distance"]["total_distance_m"] += trace_distance
-
-                # Vérifier si on a des données d'élévation
-                if any(len(coord) > 2 and coord[2] != 0 for coord in coordinates):
-                    analysis["basic_stats"]["has_elevation_data"] = True
-
-        # Distance totale
-        analysis["distance"]["total_distance_km"] = round(analysis["distance"]["total_distance_m"] / 1000, 2)
-
-        # Analyse d'élévation si on a des coordonnées
-        if all_coordinates and analysis["basic_stats"]["has_elevation_data"]:
-            analysis["elevation"] = TrajectoryAnalyzer.calculate_elevation_profile(all_coordinates)
-
-        # Analyse de vitesse si on a des points avec des données de vitesse
-        if points:
-            # Vérifier si on a des données de vitesse
-            has_speed = any(point.get("parsed_info", {}).get("speed_kmh") is not None for point in points)
-            analysis["basic_stats"]["has_speed_data"] = has_speed
-
-            if has_speed:
-                analysis["speed"] = TrajectoryAnalyzer.calculate_speed_statistics(points)
-
-                # Analyse de durée
-                avg_speed = analysis["speed"].get("avg_speed_kmh", 0)
-                analysis["duration"] = TrajectoryAnalyzer.estimate_duration_from_points(points, avg_speed)
-
-        return analysis
+        """Distance, durée, vitesses, dénivelés et courbes d'un fichier (toutes traces confondues)."""
+        return advanced_analysis.basic(features)
 
     # ===== Analyses avancées : calculs dans app.services.advanced_analysis =====
 

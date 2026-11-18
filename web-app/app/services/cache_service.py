@@ -5,7 +5,7 @@ from typing import Dict, Any, Tuple
 from .kml_parser import KMLParser
 from .gpx_parser import GPXParser
 
-# Cache mémoire LRU borné, indexé par (type, hash, display_mode). Sans borne, chaque
+# Cache mémoire LRU borné, indexé par (type, hash). Sans borne, chaque
 # upload distinct resterait en RAM indéfiniment (déni de service par épuisement mémoire).
 MAX_ENTRIES = 16
 _parse_cache: "OrderedDict[Tuple[str, str, str], Dict[str, Any]]" = OrderedDict()
@@ -33,7 +33,7 @@ def _hash_content(content: str) -> str:
 
 def parse_kml_cached(content: str, display_mode: str = "double") -> Dict[str, Any]:
     """Parse KML content using a cache to avoid duplicate work."""
-    key = ("kml", _hash_content(content), display_mode)
+    key = ("kml", _hash_content(content), "")  # le résultat ne dépend plus du mode d'affichage
     return _get_or_compute(key, lambda: KMLParser.parse_kml_coordinates(content, display_mode))
 
 

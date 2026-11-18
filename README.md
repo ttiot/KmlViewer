@@ -60,7 +60,7 @@ Configuration : copier `.env.example` en `.env`.
 
 ### 📊 Analyse
 
-- **Stats, Élévation, Vitesse** : distance, durée estimée, vitesses, dénivelés, profils en graphique
+- **Stats, Élévation, Vitesse** : distance, durée et temps en mouvement mesurés, vitesses, dénivelés, profils en graphique (rien n'est estimé : une trace non horodatée n'a ni durée ni vitesse)
 - **Avancé** (à la demande) : arrêts détectés, segments homogènes, zones de vitesse, pentes du terrain
 
 ### ✏️ Édition
@@ -92,6 +92,7 @@ Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 |----------|-------------|
 | `backup [--keep N]` | Copie cohérente de la base dans `/data/backups` |
 | `inbox-scan` | Passe une fois sur le dossier surveillé |
+| `recompute-stats` | Recalcule distance, durées et records des activités déjà stockées (à lancer après une mise à jour qui corrige ces calculs) |
 | `user-admin <login>` | Donne (ou retire, `--revoke`) le rôle admin |
 
 ## 🏗️ Architecture

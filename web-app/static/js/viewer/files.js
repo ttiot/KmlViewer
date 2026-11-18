@@ -58,7 +58,6 @@ async function uploadFiles(fileList) {
     }
     const form = new FormData();
     files.forEach((file) => form.append('files', file));
-    form.append('display_mode', Viewer.displayMode());
     showAlert(`Traitement de ${files.length} fichier(s)…`, 'info', { spinner: true });
 
     try {
@@ -82,7 +81,7 @@ async function loadSampleFile(filename) {
     showAlert(`Chargement de ${filename}…`, 'info', { spinner: true });
     try {
         const data = await App.api(
-            `/api/load-sample/${encodeURIComponent(filename)}?display_mode=${encodeURIComponent(Viewer.displayMode())}`);
+            `/api/load-sample/${encodeURIComponent(filename)}`);
         if (data.success) addUploadedFile(filename, data);
         else showAlert(`Erreur : ${data.error || 'fichier illisible'}`, 'danger');
     } catch (error) {
@@ -125,10 +124,10 @@ function setupFileHandling() {
     });
 
     document.querySelectorAll('input[name="displayMode"]').forEach((radio) => {
+        // Les descriptions sont composées à l'affichage : liste et popups suivent aussitôt
         radio.addEventListener('change', () => {
-            if (Viewer.points().length > 0) {
-                showAlert("Recharge ton fichier pour appliquer le nouveau mode d'affichage", 'info');
-            }
+            if (Viewer.map) Viewer.map.closePopup();
+            displayPointsList();
         });
     });
 }
