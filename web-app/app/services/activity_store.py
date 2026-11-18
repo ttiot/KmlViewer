@@ -39,7 +39,7 @@ def epoch_to_iso(epoch: float) -> str:
 
 def raw_file_path(data_dir: str, user_id: int, sha256: str, ext: str) -> Path:
     """Chemin du fichier d'origine, construit uniquement à partir de valeurs maîtrisées."""
-    if ext not in ('gpx', 'kml') or not all(c in '0123456789abcdef' for c in sha256):
+    if ext not in ('gpx', 'kml', 'kmz') or not all(c in '0123456789abcdef' for c in sha256):
         raise ValueError("Référence de fichier invalide")
     return Path(data_dir) / 'files' / str(int(user_id)) / f"{sha256}.{ext}"
 

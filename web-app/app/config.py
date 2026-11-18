@@ -27,10 +27,6 @@ class Config:
     # Nombre de reverse proxies de confiance devant l'appli (X-Forwarded-*)
     TRUST_PROXY = int(os.environ.get('TRUST_PROXY') or 0)
 
-    # Configuration des uploads
-    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or 'uploads'
-    ALLOWED_EXTENSIONS = {'kml', 'kmz', 'gpx'}
-
     # Configuration des fichiers d'exemple
     SAMPLE_FILES_DIR = os.environ.get('SAMPLE_FILES_DIR') or '/app/sample_files'
     SAMPLE_FILES_FALLBACK = str(Path(__file__).parent.parent.parent)
@@ -45,6 +41,8 @@ class Config:
     INBOX_SCAN_INTERVAL = int(os.environ.get('INBOX_SCAN_INTERVAL') or 30)
     # Propriétaire des fichiers déposés à la racine de l'inbox (username ou email)
     INBOX_DEFAULT_USER = os.environ.get('INBOX_DEFAULT_USER') or ''
+    # Activités corrigées par cycle de la tâche de fond (rattrapage d'altitude)
+    DEM_BACKFILL_BATCH = int(os.environ.get('DEM_BACKFILL_BATCH') or 25)
 
     # OIDC (FusionAuth ou autre). Sans OIDC_ISSUER : mode mono-utilisateur local.
     OIDC_ISSUER = (os.environ.get('OIDC_ISSUER') or '').rstrip('/')
@@ -70,12 +68,6 @@ class Config:
     # Version de l'application, injectée au build de l'image (ARG APP_VERSION)
     APP_VERSION = os.environ.get('APP_VERSION') or 'dev'
 
-    @staticmethod
-    def init_app(app):
-        """Initialisation spécifique à l'application."""
-        # Créer le dossier d'upload s'il n'existe pas
-        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
 
 class DevelopmentConfig(Config):
     """Configuration pour le développement."""
@@ -92,8 +84,6 @@ class ProductionConfig(Config):
 class TestingConfig(Config):
     """Configuration pour les tests."""
     TESTING = True
-    WTF_CSRF_ENABLED = False
-    UPLOAD_FOLDER = 'test_uploads'
     INBOX_ENABLED = False
     OIDC_ISSUER = ''
     DEM_URL = ''

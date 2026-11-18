@@ -94,7 +94,7 @@ class GPXParser:
                 prev = None
 
                 for seg in trk.findall('gpx:trkseg', ns):
-                    for idx, trkpt in enumerate(seg.findall('gpx:trkpt', ns)):
+                    for trkpt in seg.findall('gpx:trkpt', ns):
                         lat = float(trkpt.get('lat'))
                         lon = float(trkpt.get('lon'))
                         ele_elem = trkpt.find('gpx:ele', ns)
@@ -117,8 +117,8 @@ class GPXParser:
                                         [lat, lon, ele]
                                     )
                                     speed_kmh = dist / dt * 3.6
-                            except Exception:
-                                speed_kmh = None
+                            except (ValueError, TypeError):
+                                speed_kmh = None  # horodatage illisible : pas de vitesse pour ce point
 
                         parsed_info = GPXParser._build_parsed_info(lat, lon, ele, speed_kmh)
                         marker = {
@@ -158,5 +158,6 @@ class GPXParser:
             }
         except ET.ParseError as exc:
             return {'success': False, 'error': f'Erreur de parsing XML: {str(exc)}'}
-        except Exception as exc:  # pragma: no cover - general catch
-            return {'success': False, 'error': f'Erreur lors du traitement: {str(exc)}'}
+        except (ValueError, TypeError, AttributeError):
+            # Coordonnées absentes ou non numériques, entités interdites (defusedxml)…
+            return {'success': False, 'error': 'Fichier GPX invalide'}

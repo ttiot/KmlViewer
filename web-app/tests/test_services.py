@@ -9,7 +9,7 @@ def test_parse_gps_description():
     """Test du parsing de description GPS."""
     description = "Vitesse: 120 km/h, Cap: 180°"
     parsed = KMLParser.parse_gps_description(description, 45.0, 2.0, 1000.0)
-    
+
     assert parsed['speed_kmh'] == 120.0
     assert parsed['speed_kts'] == round(120.0 / 1.852, 1)
     assert parsed['heading'] == 180.0
@@ -31,9 +31,9 @@ def test_format_point_description_double():
         'heading': 180.0,
         'raw_description': 'test'
     }
-    
+
     formatted = KMLParser.format_point_description(parsed_info, 'double')
-    
+
     assert '120.0 km/h (64.8 kts)' in formatted
     assert '3281 ft (1000 m)' in formatted
     assert '45.000000°, 2.000000°' in formatted
@@ -52,9 +52,9 @@ def test_format_point_description_simple():
         'heading': 180.0,
         'raw_description': 'test'
     }
-    
+
     formatted = KMLParser.format_point_description(parsed_info, 'simple')
-    
+
     assert '120.0 km/h' in formatted
     assert 'kts' not in formatted
     assert '1000 m' in formatted
@@ -65,7 +65,7 @@ def test_parse_kml_coordinates_invalid_xml():
     """Test du parsing avec XML invalide."""
     invalid_kml = "<?xml version='1.0'?><invalid><unclosed>"
     result = KMLParser.parse_kml_coordinates(invalid_kml)
-    
+
     assert result['success'] is False
     assert 'Erreur de parsing XML' in result['error']
 
@@ -77,9 +77,9 @@ def test_parse_kml_coordinates_empty():
         <Document>
         </Document>
     </kml>"""
-    
+
     result = KMLParser.parse_kml_coordinates(empty_kml)
-    
+
     assert result['success'] is True
     assert result['features'] == []
     assert result['points'] == []

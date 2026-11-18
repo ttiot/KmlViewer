@@ -1,300 +1,93 @@
 """
-Service d'édition et d'export de fichiers KML.
-Phase 4 : Fonctionnalités d'édition et export multi-formats.
+Simplification de traces et export multi-formats (GPX, CSV, GeoJSON, KML).
 """
 
 import json
 import csv
 import io
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import List, Dict, Any
+from datetime import datetime, timezone
 from app.services.timing_tools import track_time
 
 
+# Features linéaires à coordonnées plates [lat, lon, alt]
+LINE_TYPES = ('polyline', 'track')
+
+
+def _is_waypoint(feature: Dict[str, Any]) -> bool:
+    """Point à exporter : les points de trace GPX (marqueurs masqués) sont déjà dans la trace."""
+    return feature.get('type') == 'marker' and str(feature.get('visibility', '1')) != '0'
+
+
 class KMLEditor:
-    """Service d'édition et d'export de données KML."""
-    
+    """Simplification et export des features du visualiseur."""
+
     @staticmethod
     @track_time
-    def add_point(features: List[Dict[str, Any]], 
-                  coordinates: List[float], 
-                  name: str = "Nouveau point", 
-                  description: str = "",
-                  is_annotation: bool = False) -> Dict[str, Any]:
+    def simplify_indices(coordinates: List[List[float]], tolerance: float = 0.0001) -> List[int]:
         """
-        Ajoute un nouveau point à la liste des features.
-        
-        Args:
-            features: Liste des features existantes
-            coordinates: [lat, lon, alt] du nouveau point
-            name: Nom du point
-            description: Description du point
-            is_annotation: True si c'est une annotation
-            
-        Returns:
-            Dictionnaire avec le résultat de l'opération
-        """
-        try:
-            new_point = {
-                'type': 'marker',
-                'name': name,
-                'description': description,
-                'coordinates': coordinates[:2],  # lat, lon
-                'altitude': coordinates[2] if len(coordinates) > 2 else 0,
-                'is_annotation': is_annotation,
-                'index': len([f for f in features if f.get('type') == 'marker']),
-                'parsed_info': {
-                    'speed_kmh': None,
-                    'speed_kts': None
-                }
-            }
-            
-            features.append(new_point)
-            
-            return {
-                'success': True,
-                'message': 'Point ajouté avec succès',
-                'point': new_point,
-                'total_points': len([f for f in features if f.get('type') == 'marker'])
-            }
-            
-        except Exception as e:
-            return {
-                'success': False,
-                'error': f'Erreur lors de l\'ajout du point: {str(e)}'
-            }
-    
-    @staticmethod
-    @track_time
-    def update_point(features: List[Dict[str, Any]], 
-                    point_index: int, 
-                    updates: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Met à jour un point existant.
-        
-        Args:
-            features: Liste des features
-            point_index: Index du point à modifier
-            updates: Dictionnaire des modifications à apporter
-            
-        Returns:
-            Dictionnaire avec le résultat de l'opération
-        """
-        try:
-            # Trouver le point à modifier
-            markers = [f for f in features if f.get('type') == 'marker']
-            
-            if point_index < 0 or point_index >= len(markers):
-                return {
-                    'success': False,
-                    'error': 'Index de point invalide'
-                }
-            
-            # Trouver l'index dans la liste complète des features
-            marker_count = 0
-            feature_index = -1
-            for i, feature in enumerate(features):
-                if feature.get('type') == 'marker':
-                    if marker_count == point_index:
-                        feature_index = i
-                        break
-                    marker_count += 1
-            
-            if feature_index == -1:
-                return {
-                    'success': False,
-                    'error': 'Point non trouvé'
-                }
-            
-            # Appliquer les modifications
-            point = features[feature_index]
-            
-            if 'name' in updates:
-                point['name'] = updates['name']
-            if 'description' in updates:
-                point['description'] = updates['description']
-            if 'coordinates' in updates:
-                coords = updates['coordinates']
-                point['coordinates'] = coords[:2]
-                if len(coords) > 2:
-                    point['altitude'] = coords[2]
-            if 'is_annotation' in updates:
-                point['is_annotation'] = updates['is_annotation']
-            
-            return {
-                'success': True,
-                'message': 'Point modifié avec succès',
-                'point': point
-            }
-            
-        except Exception as e:
-            return {
-                'success': False,
-                'error': f'Erreur lors de la modification du point: {str(e)}'
-            }
-    
-    @staticmethod
-    @track_time
-    def delete_point(features: List[Dict[str, Any]], point_index: int) -> Dict[str, Any]:
-        """
-        Supprime un point de la liste des features.
-        
-        Args:
-            features: Liste des features
-            point_index: Index du point à supprimer
-            
-        Returns:
-            Dictionnaire avec le résultat de l'opération
-        """
-        try:
-            # Trouver le point à supprimer
-            markers = [f for f in features if f.get('type') == 'marker']
-            
-            if point_index < 0 or point_index >= len(markers):
-                return {
-                    'success': False,
-                    'error': 'Index de point invalide'
-                }
-            
-            # Trouver l'index dans la liste complète des features
-            marker_count = 0
-            feature_index = -1
-            for i, feature in enumerate(features):
-                if feature.get('type') == 'marker':
-                    if marker_count == point_index:
-                        feature_index = i
-                        break
-                    marker_count += 1
-            
-            if feature_index == -1:
-                return {
-                    'success': False,
-                    'error': 'Point non trouvé'
-                }
-            
-            # Supprimer le point
-            deleted_point = features.pop(feature_index)
-            
-            # Réindexer les points restants
-            marker_count = 0
-            for feature in features:
-                if feature.get('type') == 'marker':
-                    feature['index'] = marker_count
-                    marker_count += 1
-            
-            return {
-                'success': True,
-                'message': 'Point supprimé avec succès',
-                'deleted_point': deleted_point,
-                'total_points': len([f for f in features if f.get('type') == 'marker'])
-            }
-            
-        except Exception as e:
-            return {
-                'success': False,
-                'error': f'Erreur lors de la suppression du point: {str(e)}'
-            }
-    
-    @staticmethod
-    @track_time
-    def simplify_trace(coordinates: List[List[float]], 
-                      tolerance: float = 0.0001) -> List[List[float]]:
-        """
-        Simplifie une trace en réduisant le nombre de points tout en préservant la forme.
-        Utilise l'algorithme de Douglas-Peucker.
-        
+        Indices des points conservés par une simplification de Douglas-Peucker.
+
         Args:
             coordinates: Liste de coordonnées [lat, lon, alt]
-            tolerance: Tolérance pour la simplification
-            
-        Returns:
-            Liste des coordonnées simplifiées
+            tolerance: Écart maximal toléré, en degrés
         """
-        if len(coordinates) <= 2:
-            return coordinates
-        
-        def perpendicular_distance(point, line_start, line_end):
-            """Calcule la distance perpendiculaire d'un point à une ligne."""
-            if line_start == line_end:
-                return ((point[0] - line_start[0])**2 + (point[1] - line_start[1])**2)**0.5
-            
-            # Calcul de la distance perpendiculaire
-            A = line_end[0] - line_start[0]
-            B = line_end[1] - line_start[1]
-            C = point[0] - line_start[0]
-            D = point[1] - line_start[1]
-            
-            dot = A * C + B * D
-            len_sq = A * A + B * B
-            
-            if len_sq == 0:
-                return ((point[0] - line_start[0])**2 + (point[1] - line_start[1])**2)**0.5
-            
-            param = dot / len_sq
-            
-            if param < 0:
-                xx = line_start[0]
-                yy = line_start[1]
-            elif param > 1:
-                xx = line_end[0]
-                yy = line_end[1]
-            else:
-                xx = line_start[0] + param * A
-                yy = line_start[1] + param * B
-            
-            return ((point[0] - xx)**2 + (point[1] - yy)**2)**0.5
-        
-        def douglas_peucker(points, tolerance):
-            """Algorithme de Douglas-Peucker pour la simplification."""
-            if len(points) <= 2:
-                return points
-            
-            # Trouver le point le plus éloigné de la ligne entre le premier et le dernier point
-            max_distance = 0
-            max_index = 0
-            
-            for i in range(1, len(points) - 1):
-                distance = perpendicular_distance(points[i], points[0], points[-1])
+        count = len(coordinates)
+        if count <= 2:
+            return list(range(count))
+
+        def distance_to_segment(point, start, end):
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length_sq = dx * dx + dy * dy
+            if length_sq == 0:
+                return ((point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2) ** 0.5
+            ratio = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_sq
+            ratio = max(0.0, min(1.0, ratio))
+            return ((point[0] - start[0] - ratio * dx) ** 2 + (point[1] - start[1] - ratio * dy) ** 2) ** 0.5
+
+        # Version itérative : une trace de plusieurs milliers de points ferait déborder la pile
+        keep = [False] * count
+        keep[0] = keep[-1] = True
+        stack = [(0, count - 1)]
+        while stack:
+            first, last = stack.pop()
+            max_distance, max_index = 0.0, -1
+            for i in range(first + 1, last):
+                distance = distance_to_segment(coordinates[i], coordinates[first], coordinates[last])
                 if distance > max_distance:
-                    max_distance = distance
-                    max_index = i
-            
-            # Si la distance maximale est supérieure à la tolérance, subdiviser
-            if max_distance > tolerance:
-                # Récursion sur les deux segments
-                left_points = douglas_peucker(points[:max_index + 1], tolerance)
-                right_points = douglas_peucker(points[max_index:], tolerance)
-                
-                # Combiner les résultats (éviter la duplication du point de jonction)
-                return left_points[:-1] + right_points
-            else:
-                # Tous les points sont suffisamment proches de la ligne
-                return [points[0], points[-1]]
-        
-        simplified = douglas_peucker(coordinates, tolerance)
-        return simplified
-    
+                    max_distance, max_index = distance, i
+            if max_index != -1 and max_distance > tolerance:
+                keep[max_index] = True
+                stack.append((first, max_index))
+                stack.append((max_index, last))
+        return [i for i, kept in enumerate(keep) if kept]
+
+    @staticmethod
+    def simplify_trace(coordinates: List[List[float]], tolerance: float = 0.0001) -> List[List[float]]:
+        """Trace simplifiée (Douglas-Peucker) : la forme est préservée à la tolérance près."""
+        return [coordinates[i] for i in KMLEditor.simplify_indices(coordinates, tolerance)]
+
     @staticmethod
     @track_time
-    def export_to_gpx(features: List[Dict[str, Any]], 
+    def export_to_gpx(features: List[Dict[str, Any]],
                      metadata: Dict[str, Any] = None) -> str:
         """
         Exporte les données au format GPX.
-        
+
         Args:
             features: Liste des features KML
             metadata: Métadonnées optionnelles
-            
+
         Returns:
             Contenu GPX au format string
         """
         # Créer l'élément racine GPX
         gpx = ET.Element('gpx')
         gpx.set('version', '1.1')
-        gpx.set('creator', 'KML Viewer - Phase 4')
+        gpx.set('creator', 'KmlViewer')
         gpx.set('xmlns', 'http://www.topografix.com/GPX/1/1')
-        
+
         # Ajouter les métadonnées
         if metadata:
             metadata_elem = ET.SubElement(gpx, 'metadata')
@@ -304,86 +97,86 @@ class KMLEditor:
             if 'description' in metadata:
                 desc_elem = ET.SubElement(metadata_elem, 'desc')
                 desc_elem.text = metadata['description']
-            
+
             time_elem = ET.SubElement(metadata_elem, 'time')
-            time_elem.text = datetime.utcnow().isoformat() + 'Z'
-        
+            time_elem.text = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
         # Ajouter les waypoints (points)
         for feature in features:
-            if feature.get('type') == 'marker':
+            if _is_waypoint(feature):
                 wpt = ET.SubElement(gpx, 'wpt')
                 coords = feature.get('coordinates', [0, 0])
                 wpt.set('lat', str(coords[0]))
                 wpt.set('lon', str(coords[1]))
-                
+
                 if feature.get('altitude'):
                     ele = ET.SubElement(wpt, 'ele')
                     ele.text = str(feature['altitude'])
-                
+
                 name = ET.SubElement(wpt, 'name')
                 name.text = feature.get('name', 'Point')
-                
+
                 if feature.get('description'):
                     desc = ET.SubElement(wpt, 'desc')
                     desc.text = feature['description']
-        
+
         # Ajouter les traces (tracks)
         track_count = 0
         for feature in features:
-            if feature.get('type') == 'polyline':
+            if feature.get('type') in LINE_TYPES:
                 track_count += 1
                 trk = ET.SubElement(gpx, 'trk')
-                
+
                 name = ET.SubElement(trk, 'name')
                 name.text = feature.get('name', f'Track {track_count}')
-                
+
                 if feature.get('description'):
                     desc = ET.SubElement(trk, 'desc')
                     desc.text = feature['description']
-                
+
                 trkseg = ET.SubElement(trk, 'trkseg')
-                
+
                 coordinates = feature.get('coordinates', [])
                 for coord in coordinates:
                     trkpt = ET.SubElement(trkseg, 'trkpt')
                     trkpt.set('lat', str(coord[0]))
                     trkpt.set('lon', str(coord[1]))
-                    
+
                     if len(coord) > 2 and coord[2] != 0:
                         ele = ET.SubElement(trkpt, 'ele')
                         ele.text = str(coord[2])
-        
+
         # Convertir en string
         return ET.tostring(gpx, encoding='unicode', xml_declaration=True)
-    
+
     @staticmethod
     @track_time
-    def export_to_csv(features: List[Dict[str, Any]], 
+    def export_to_csv(features: List[Dict[str, Any]],
                      include_traces: bool = True) -> str:
         """
         Exporte les données au format CSV.
-        
+
         Args:
             features: Liste des features KML
             include_traces: Inclure les points des traces
-            
+
         Returns:
             Contenu CSV au format string
         """
         output = io.StringIO()
         writer = csv.writer(output)
-        
+
         # En-têtes
-        headers = ['Type', 'Name', 'Description', 'Latitude', 'Longitude', 'Altitude', 
+        headers = ['Type', 'Name', 'Description', 'Latitude', 'Longitude', 'Altitude',
                   'Is_Annotation', 'Speed_KMH', 'Speed_KTS']
         writer.writerow(headers)
-        
+
         # Points (waypoints)
         for feature in features:
-            if feature.get('type') == 'marker':
+            if _is_waypoint(feature):
                 coords = feature.get('coordinates', [0, 0])
                 parsed_info = feature.get('parsed_info', {})
-                
+
                 row = [
                     'Point',
                     feature.get('name', ''),
@@ -396,11 +189,11 @@ class KMLEditor:
                     parsed_info.get('speed_kts', '')
                 ]
                 writer.writerow(row)
-        
+
         # Points des traces si demandé
         if include_traces:
             for feature in features:
-                if feature.get('type') == 'polyline':
+                if feature.get('type') in LINE_TYPES:
                     coordinates = feature.get('coordinates', [])
                     for i, coord in enumerate(coordinates):
                         row = [
@@ -415,20 +208,20 @@ class KMLEditor:
                             ''
                         ]
                         writer.writerow(row)
-        
+
         content = output.getvalue()
         output.close()
         return content
-    
+
     @staticmethod
     @track_time
     def export_to_geojson(features: List[Dict[str, Any]]) -> str:
         """
         Exporte les données au format GeoJSON.
-        
+
         Args:
             features: Liste des features KML
-            
+
         Returns:
             Contenu GeoJSON au format string
         """
@@ -436,9 +229,9 @@ class KMLEditor:
             "type": "FeatureCollection",
             "features": []
         }
-        
+
         for feature in features:
-            if feature.get('type') == 'marker':
+            if _is_waypoint(feature):
                 # Point GeoJSON
                 geojson_feature = {
                     "type": "Feature",
@@ -452,26 +245,26 @@ class KMLEditor:
                         "is_annotation": feature.get('is_annotation', False)
                     }
                 }
-                
+
                 coords = feature.get('coordinates', [0, 0])
                 altitude = feature.get('altitude', 0)
-                
+
                 # GeoJSON utilise [lon, lat, alt]
                 if altitude != 0:
                     geojson_feature["geometry"]["coordinates"] = [coords[1], coords[0], altitude]
                 else:
                     geojson_feature["geometry"]["coordinates"] = [coords[1], coords[0]]
-                
+
                 # Ajouter les informations de vitesse si disponibles
                 parsed_info = feature.get('parsed_info', {})
                 if parsed_info.get('speed_kmh') is not None:
                     geojson_feature["properties"]["speed_kmh"] = parsed_info['speed_kmh']
                 if parsed_info.get('speed_kts') is not None:
                     geojson_feature["properties"]["speed_kts"] = parsed_info['speed_kts']
-                
+
                 geojson["features"].append(geojson_feature)
-                
-            elif feature.get('type') == 'polyline':
+
+            elif feature.get('type') in LINE_TYPES:
                 # LineString GeoJSON
                 geojson_feature = {
                     "type": "Feature",
@@ -484,7 +277,7 @@ class KMLEditor:
                         "description": feature.get('description', '')
                     }
                 }
-                
+
                 coordinates = feature.get('coordinates', [])
                 for coord in coordinates:
                     # GeoJSON utilise [lon, lat, alt]
@@ -492,31 +285,31 @@ class KMLEditor:
                         geojson_feature["geometry"]["coordinates"].append([coord[1], coord[0], coord[2]])
                     else:
                         geojson_feature["geometry"]["coordinates"].append([coord[1], coord[0]])
-                
+
                 geojson["features"].append(geojson_feature)
-        
+
         return json.dumps(geojson, indent=2)
-    
+
     @staticmethod
     @track_time
-    def export_to_kml(features: List[Dict[str, Any]], 
+    def export_to_kml(features: List[Dict[str, Any]],
                      metadata: Dict[str, Any] = None) -> str:
         """
         Exporte les données au format KML.
-        
+
         Args:
             features: Liste des features
             metadata: Métadonnées optionnelles
-            
+
         Returns:
             Contenu KML au format string
         """
         # Créer l'élément racine KML
         kml = ET.Element('kml')
         kml.set('xmlns', 'http://www.opengis.net/kml/2.2')
-        
+
         document = ET.SubElement(kml, 'Document')
-        
+
         # Ajouter les métadonnées
         if metadata:
             if 'name' in metadata:
@@ -525,58 +318,58 @@ class KMLEditor:
             if 'description' in metadata:
                 desc = ET.SubElement(document, 'description')
                 desc.text = metadata['description']
-        
+
         # Créer les dossiers pour organiser les éléments
         points_folder = ET.SubElement(document, 'Folder')
         points_name = ET.SubElement(points_folder, 'name')
         points_name.text = 'Points'
-        
+
         traces_folder = ET.SubElement(document, 'Folder')
         traces_name = ET.SubElement(traces_folder, 'name')
         traces_name.text = 'Traces'
-        
+
         # Ajouter les points
         for feature in features:
-            if feature.get('type') == 'marker':
+            if _is_waypoint(feature):
                 placemark = ET.SubElement(points_folder, 'Placemark')
-                
+
                 name = ET.SubElement(placemark, 'name')
                 name.text = feature.get('name', 'Point')
-                
+
                 if feature.get('description'):
                     desc = ET.SubElement(placemark, 'description')
                     desc.text = feature['description']
-                
+
                 point = ET.SubElement(placemark, 'Point')
                 coordinates = ET.SubElement(point, 'coordinates')
-                
+
                 coords = feature.get('coordinates', [0, 0])
                 altitude = feature.get('altitude', 0)
                 coordinates.text = f"{coords[1]},{coords[0]},{altitude}"
-        
+
         # Ajouter les traces
         for feature in features:
-            if feature.get('type') == 'polyline':
+            if feature.get('type') in LINE_TYPES:
                 placemark = ET.SubElement(traces_folder, 'Placemark')
-                
+
                 name = ET.SubElement(placemark, 'name')
                 name.text = feature.get('name', 'Trace')
-                
+
                 if feature.get('description'):
                     desc = ET.SubElement(placemark, 'description')
                     desc.text = feature['description']
-                
+
                 linestring = ET.SubElement(placemark, 'LineString')
                 coordinates = ET.SubElement(linestring, 'coordinates')
-                
+
                 coord_list = []
                 for coord in feature.get('coordinates', []):
                     if len(coord) > 2:
                         coord_list.append(f"{coord[1]},{coord[0]},{coord[2]}")
                     else:
                         coord_list.append(f"{coord[1]},{coord[0]},0")
-                
+
                 coordinates.text = ' '.join(coord_list)
-        
+
         # Convertir en string
         return ET.tostring(kml, encoding='unicode', xml_declaration=True)

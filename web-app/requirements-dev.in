@@ -2,3 +2,5 @@
 #   uv pip compile requirements-dev.in --generate-hashes --python-version 3.15 --upgrade -o requirements-dev.txt
 -c requirements.txt
 pytest
+pytest-cov
+ruff

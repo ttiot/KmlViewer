@@ -13,7 +13,7 @@
     </div>
     <button type="button" class="btn btn-sm btn-primary" id="importButton">
         <i class="fas fa-arrow-up-from-bracket me-1"></i>Importer</button>
-    <input type="file" id="importInput" accept=".gpx,.kml" multiple hidden>
+    <input type="file" id="importInput" accept=".gpx,.kml,.kmz" multiple hidden>
 </div>
 
 <div class="row g-3 mb-3" id="totals"></div>
@@ -68,6 +68,6 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 
 STABLE_AGE_S = 5  # un fichier modifié il y a moins de 5 s est peut-être encore en cours d'écriture
 
+# Réveil anticipé de la tâche de fond (ex. après un import, pour corriger l'altitude sans attendre)
+_wake_event = threading.Event()
+
+
+def wake() -> None:
+    _wake_event.set()
+
 
 def inbox_dir(cfg: Mapping) -> Path:
     return Path(cfg.get('INBOX_DIR') or Path(cfg['DATA_DIR']) / 'inbox')
@@ -121,7 +128,10 @@ def scan_once(db: sqlite3.Connection, cfg: Mapping, warned: Optional[set] = None
 
 
 class InboxWatcher(threading.Thread):
-    """Thread de scrutation. Un verrou fichier garantit un seul watcher actif par DATA_DIR."""
+    """
+    Tâche de fond : scrutation du dossier surveillé (si INBOX_ENABLED) et rattrapage de la
+    correction d'altitude. Un verrou fichier garantit un seul thread actif par DATA_DIR.
+    """
 
     def __init__(self, cfg: Mapping):
         super().__init__(name='inbox-watcher', daemon=True)
@@ -142,27 +152,32 @@ class InboxWatcher(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        wake()
 
     def run(self) -> None:
         if not self._acquire_lock():
             logger.info("Inbox : un autre processus surveille déjà le dossier, rien à faire ici")
             return
-        root = inbox_dir(self.cfg)
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            logger.error("Inbox : création de %s impossible (%s), surveillance désactivée", root, exc)
-            return
-        logger.info("Inbox : surveillance de %s toutes les %d s", root, self.interval)
+        scan_inbox = bool(self.cfg.get('INBOX_ENABLED'))
+        if scan_inbox:
+            root = inbox_dir(self.cfg)
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+                logger.info("Inbox : surveillance de %s toutes les %d s", root, self.interval)
+            except OSError as exc:
+                logger.error("Inbox : création de %s impossible (%s), surveillance désactivée", root, exc)
+                scan_inbox = False
         warned: set = set()
         while not self._stop_event.is_set():
+            _wake_event.clear()
             try:
                 db = connect(self.cfg['DB_PATH'])
                 try:
-                    scan_once(db, self.cfg, warned)
+                    if scan_inbox:
+                        scan_once(db, self.cfg, warned)
                     ingest_service.backfill_elevation(db, self.cfg)
                 finally:
                     db.close()
             except Exception:  # noqa: BLE001 - le watcher doit survivre à tout
-                logger.exception("Inbox : passage en erreur, nouvel essai au prochain cycle")
-            self._stop_event.wait(self.interval)
+                logger.exception("Tâche de fond : passage en erreur, nouvel essai au prochain cycle")
+            _wake_event.wait(self.interval)

@@ -57,13 +57,13 @@ jobs:
         working-directory: web-app
         run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
 
-      - name: Erreurs de syntaxe et noms indéfinis
-        run: |
-          pipx run flake8 web-app/ --count --select=E9,F63,F7,F82 --show-source --statistics
-
-      - name: Tests
+      - name: Lint (ruff)
         working-directory: web-app
-        run: python -m pytest
+        run: python -m ruff check .
+
+      - name: Tests et couverture
+        working-directory: web-app
+        run: python -m pytest --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=75
 
       - name: Vulnérabilités connues des dépendances
         run: pipx run pip-audit --require-hashes --disable-pip -r web-app/requirements.txt
@@ -133,7 +133,7 @@ jobs:
           EXPECTED_VERSION: ${{ steps.version.outputs.app_version }}
         run: |
           docker run -d --name candidate \
-            --read-only --tmpfs /tmp --tmpfs /app/uploads \
+            --read-only --tmpfs /tmp \
             --tmpfs /data:uid=10001,gid=10001,mode=700 \
             --cap-drop ALL --security-opt no-new-privileges \
             -p 127.0.0.1:5000:5000 kml-viewer:candidate

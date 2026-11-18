@@ -16,6 +16,12 @@
         if (state[key]) { state.map.removeLayer(state[key]); state[key] = null; }
     }
 
+    // Le tracé affiché peut être allégé : `indices` donne la position de chaque point
+    // dans la trace complète, seule référence comprise par l'API.
+    function fullIndex(i) {
+        return state.track.indices ? state.track.indices[i] : i;
+    }
+
     function nearestIndex(latlng) {
         let best = 0, bestDist = Infinity;
         state.track.coordinates.forEach(([lat, lon], i) => {
@@ -39,7 +45,7 @@
         if (!state.track) info.textContent = 'Choisis une activité, puis clique deux fois sur la trace.';
         else if (state.startIdx === null) info.textContent = 'Clique sur la trace pour poser le départ.';
         else if (!ready) info.textContent = "Départ posé. Clique pour poser l'arrivée.";
-        else info.textContent = `Sélection : ${state.endIdx - state.startIdx + 1} points.`;
+        else info.textContent = `Sélection : ${fullIndex(state.endIdx) - fullIndex(state.startIdx) + 1} points.`;
         document.getElementById('createButton').disabled = !ready;
     }
 
@@ -125,7 +131,8 @@
         if (!name) { notify('Donne un nom au tronçon.', 'warning'); return; }
         try {
             const data = await api('/api/segments', { method: 'POST', body: {
-                name, activity_id: state.track.id, start_idx: state.startIdx, end_idx: state.endIdx } });
+                name, activity_id: state.track.id,
+                start_idx: fullIndex(state.startIdx), end_idx: fullIndex(state.endIdx) } });
             notify(`Tronçon créé : ${data.segment.efforts.length} passage(s) trouvé(s).`, 'success');
             document.getElementById('segmentName').value = '';
             resetSelection();

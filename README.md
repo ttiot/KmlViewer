@@ -1,8 +1,9 @@
 [![Build and Push Docker Image](https://github.com/ttiot/KmlViewer/actions/workflows/docker.yml/badge.svg)](https://github.com/ttiot/KmlViewer/actions/workflows/docker.yml)
 
-# 🗺️ Visualiseur KML - Application Web Complète
+# 🗺️ KmlViewer
 
-Application web interactive pour visualiser des fichiers KML sur une carte avec navigation entre les points et différents fonds de carte.
+Application web auto-hébergée pour visualiser, analyser et archiver des traces GPS (KML, KMZ, GPX) :
+un visualiseur cartographique, et une bibliothèque d'activités avec tableau de bord et tronçons chronométrés.
 
 ## 🚀 Démarrage rapide
 
@@ -27,85 +28,53 @@ Application web interactive pour visualiser des fichiers KML sur une carte avec 
 
 ### Tests
 
-Installez les dépendances et lancez `pytest` :
-
 ```bash
 cd web-app
-pip install -r requirements.txt
-pytest
+pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+python -m ruff check .
+python -m pytest --cov=app
 ```
 
 ## 🏃 Bibliothèque, tableau de bord, tronçons et comptes
 
 Dossier surveillé, import depuis l'interface, statistiques par semaine / mois / année, tronçons
-personnels chronométrés, correction d'altitude par MNT et authentification OIDC (FusionAuth) :
-voir [docs/bibliotheque.md](docs/bibliotheque.md). Configuration : copier `.env.example` en `.env`.
+personnels chronométrés, correction d'altitude par MNT, authentification OIDC (FusionAuth),
+sécurité et sauvegarde : voir [docs/bibliotheque.md](docs/bibliotheque.md).
+Configuration : copier `.env.example` en `.env`.
 
-## ✨ Fonctionnalités principales
+## ✨ Visualiseur
 
-### 📁 Gestion des fichiers KML
+### 📁 Fichiers
 
-- **Upload par glisser-déposer** ou sélection de fichiers
-- **Fichiers d'exemple** intégrés pour test rapide
-- **Support complet** des éléments KML (traces GPS, points, annotations)
-- **Parsing intelligent** des métadonnées (nom, description, altitude)
-- **Modes d'affichage** : Double unité (km/h + kts, ft + m) ou unité simple
+- **Formats** : KML, KMZ et GPX, jusqu'à 16 Mo, plusieurs fichiers à la fois (glisser-déposer ou sélection)
+- **Fichiers d'exemple** : les traces placées à la racine du dépôt sont proposées dans la barre latérale
+- **Multi-fichiers** : chaque fichier a sa case d'affichage et son onglet ; l'onglet actif alimente
+  la liste des points, l'analyse, l'édition et l'export
+- **Modes d'affichage** : double unité (km/h + kts, ft + m) ou unité simple
 
-### 🗺️ Visualisation cartographique
+### 🗺️ Carte
 
-- **5 fonds de carte** différents :
-  - OpenStreetMap (par défaut)
-  - Satellite (Esri)
-  - Terrain topographique (OpenTopoMap)
-  - CartoDB Positron (minimaliste)
-  - Stamen Toner (noir et blanc)
-- **Affichage optimisé** des traces GPS et points d'intérêt
-- **Marqueurs colorés** selon le type (points principaux vs annotations)
-- **Popups informatifs** avec détails complets
+- **5 fonds de carte** : OpenStreetMap, Satellite (Esri), Terrain (OpenTopoMap), CartoDB Positron, CartoDB Dark Matter
+- Traces, polygones et points aux couleurs des styles KML, popups de détail
+- **Navigation entre les points** : flèches ← → du clavier, boutons Précédent/Suivant, clic dans la liste ou sur un marqueur
 
-### 🧭 Navigation entre les points
+### 📊 Analyse
 
-- **Navigation au clavier** : Flèches ← → pour passer d'un point à l'autre
-- **Contrôles visuels** : Boutons Précédent/Suivant
-- **Centrage automatique** sur le point sélectionné
-- **Informations contextuelles** : Position actuelle (Point X/Y)
-- **Clic sur marqueur** pour sélection directe
-- **Liste interactive** des points avec navigation
+- **Stats, Élévation, Vitesse** : distance, durée estimée, vitesses, dénivelés, profils en graphique
+- **Avancé** (à la demande) : arrêts détectés, segments homogènes, zones de vitesse, pentes du terrain
 
-### 📊 Analyse de trajectoire avancée
+### ✏️ Édition
 
-- **Statistiques complètes** : Distance, durée, vitesses, dénivelés
-- **Graphiques interactifs** : Profils d'élévation et de vitesse
-- **Détection d'arrêts** automatique avec durée et position
-- **Segmentation intelligente** de la trajectoire par type de mouvement
-- **Zones de vitesse** colorées avec pourcentages de répartition
-- **Analyse du terrain** : Montées, descentes, sections plates
-- **Points d'intérêt** détectés automatiquement
+Les modifications portent sur le fichier affiché, dans le navigateur ; l'export les enregistre.
 
-### ✏️ Édition de trajectoires
+- **Ajouter un point** : bouton, puis clic sur la carte, puis nom et description
+- **Modifier / supprimer un point** : bouton, puis clic sur le point (carte ou liste) ; Échap annule
+- **Simplifier les traces** : algorithme de Douglas-Peucker, tolérance réglable en mètres
 
-- **Ajout de points** : Clic sur la carte pour créer de nouveaux points
-- **Modification de points** : Édition des noms, descriptions et métadonnées
-- **Suppression de points** : Retrait de points indésirables
-- **Simplification de traces** : Réduction automatique du nombre de points
-- **Interface intuitive** avec modes d'édition dédiés
+### 📤 Export
 
-### 📤 Export multi-formats
-
-- **Format GPX** : Compatible avec les appareils GPS et applications de randonnée
-- **Format CSV** : Pour analyse dans Excel ou autres outils
-- **Format GeoJSON** : Standard web pour applications cartographiques
-- **Format KML** : Compatible Google Earth et autres visualiseurs
-- **Options personnalisables** : Inclusion/exclusion des traces, nom de fichier
-
-### 📱 Interface utilisateur
-
-- **Design responsive** compatible mobile/desktop
-- **Interface moderne** avec Bootstrap 5
-- **Icônes Font Awesome** pour une meilleure UX
-- **Messages d'état** informatifs et colorés
-- **Panneau d'analyse** avec onglets organisés
-- **Sidebar rétractable** pour optimiser l'espace
+GPX, CSV, GeoJSON ou KML, avec nom de fichier au choix. Les points de trace peuvent être
+exclus du CSV.
 
 ## 🛠️ Scripts utilitaires
 
@@ -117,304 +86,76 @@ voir [docs/bibliotheque.md](docs/bibliotheque.md). Configuration : copier `.env.
 | `./logs.sh` | Affiche les logs en temps réel |
 | `./cleanup.sh` | Nettoyage complet (conteneurs, images, volumes) |
 
-## 🏗️ Architecture technique
+Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 
-### Backend (Python Flask)
+| Commande | Description |
+|----------|-------------|
+| `backup [--keep N]` | Copie cohérente de la base dans `/data/backups` |
+| `inbox-scan` | Passe une fois sur le dossier surveillé |
+| `user-admin <login>` | Donne (ou retire, `--revoke`) le rôle admin |
 
-- **Framework** : Flask 2.3.3 avec architecture modulaire par blueprints
-- **Parsing KML** : xml.etree.ElementTree avec validation avancée
-- **Analyse GPS** : Algorithmes de calcul de distance (Haversine), vitesse, dénivelé
-- **Services métier** :
-  - `TrajectoryAnalyzer` : Analyses avancées et détection d'arrêts
-  - `KMLEditor` : Édition et simplification de traces (Douglas-Peucker)
-  - Export multi-formats (GPX, CSV, GeoJSON, KML)
-- **API REST** : Endpoints organisés par fonctionnalité
-  - `/api/upload` et `/api/load-sample` : Gestion des fichiers
-  - `/api/analysis/*` : Analyses de trajectoires
-  - `/api/editor/*` : Édition de points et traces
-  - `/api/export/*` : Export multi-formats
-- **Sécurité** : Validation des fichiers, noms sécurisés, gestion d'erreurs
+## 🏗️ Architecture
 
-### Frontend (JavaScript/HTML/CSS)
-
-- **Cartes** : Leaflet.js avec gestion avancée des couches
-- **Graphiques** : Chart.js pour profils d'élévation et vitesse
-- **UI** : Bootstrap 5 + Font Awesome avec interface à onglets
-- **JavaScript ES6** :
-  - Navigation entre points avec clavier/souris
-  - Modes d'édition interactifs
-  - Gestion des analyses avancées
-  - Export de données avec téléchargement automatique
-- **Responsive design** : Sidebar rétractable, compatible tous écrans
-
-### Déploiement (Docker)
-
-- **Conteneurisation** : Docker + Docker Compose
-- **Port** : 8080 (configurable)
-- **Volumes** : Montage des fichiers d'exemple et données temporaires
-- **Health checks** : Surveillance automatique de l'application
-- **Optimisations** : Image légère, cache des dépendances
-
-## 📋 Utilisation détaillée
-
-### 1. Charger un fichier KML
-
-**Option A : Upload de fichier**
-
-- Glissez-déposez votre fichier .kml dans la zone prévue
-- Ou cliquez pour sélectionner un fichier
-- Le fichier est automatiquement traité et affiché
-
-**Option B : Fichiers d'exemple**
-
-- Cliquez sur un des boutons des fichiers d'exemple
-- Parfait pour tester sans avoir ses propres fichiers
-
-### 2. Changer le fond de carte
-
-- Utilisez les boutons radio dans le panneau de gauche
-- 5 options disponibles selon vos préférences
-- Changement instantané sans rechargement
-
-### 3. Naviguer entre les points
-
-**Navigation au clavier :**
-
-- **Flèche gauche (←)** : Point précédent
-- **Flèche droite (→)** : Point suivant
-
-**Navigation à la souris :**
-
-- **Cliquez sur un marqueur** pour le sélectionner
-- **Boutons Précédent/Suivant** dans le panneau de navigation
-- **Bouton "Centrer"** dans les popups
-- **Liste des points** : Cliquez sur un point dans la liste pour y naviguer
-
-### 4. Analyser une trajectoire
-
-**Onglet "Stats" :**
-
-- Statistiques générales : distance, durée, vitesses, dénivelés
-- Mise à jour automatique lors du chargement d'un fichier
-
-**Onglet "Élévation" :**
-
-- Graphique du profil d'élévation
-- Statistiques détaillées (altitude min/max)
-
-**Onglet "Vitesse" :**
-
-- Graphique du profil de vitesse
-- Statistiques détaillées (vitesse min/moy/max)
-
-**Onglet "Avancé" :**
-
-- **Cliquez sur "Lancer l'analyse avancée"** pour obtenir :
-  - Détection automatique des arrêts
-  - Segmentation de la trajectoire
-  - Zones de vitesse colorées
-  - Analyse du terrain (montées/descentes/plat)
-- **Cliquez sur "Effacer"** pour nettoyer les résultats
-
-### 5. Éditer une trajectoire
-
-**Onglet "Édition" :** 🚧 Work in progress 🚧
-
-- **Ajouter un point** : Cliquez sur le bouton puis sur la carte
-- **Modifier un point** : Activez le mode puis cliquez sur un point existant
-- **Supprimer un point** : Activez le mode puis cliquez sur le point à supprimer
-- **Simplifier la trace** : Réduit automatiquement le nombre de points
-
-**Formulaire d'édition :**
-
-- Modifiez le nom, la description
-- Marquez comme point d'annotation si nécessaire
-- Sauvegardez ou annulez les modifications
-
-### 6. Exporter les données
-
-**Onglet "Export" :**
-
-- **GPX** : Format standard pour GPS et applications de randonnée
-- **CSV** : Tableau pour analyse dans Excel
-- **GeoJSON** : Format web pour développeurs
-- **KML** : Compatible Google Earth
-
-**Options d'export :**
-
-- Cochez "Inclure les points de trace" selon vos besoins
-- Personnalisez le nom du fichier
-- Le téléchargement démarre automatiquement
-
-### 7. Consulter les informations
-
-- **Cliquez sur un marqueur** pour voir ses détails
-- **Panneau d'analyse** avec onglets organisés
-- **Liste des points** interactive avec recherche visuelle
-- **Distinction visuelle** entre points principaux et annotations
-
-## 🎨 Types de points affichés
-
-| Type | Couleur | Description |
-|------|---------|-------------|
-| **Points principaux** | 🔵 Bleu | Points d'intérêt principaux |
-| **Annotations** | 🔴 Rouge | Points du dossier "Points" (détails) |
-| **Traces GPS** | 🟣 Violet | Lignes de trajectoire |
-
-## 🔧 Configuration avancée
-
-### Variables d'environnement
-
-```bash
-FLASK_ENV=production          # Mode de l'application
-FLASK_APP=app.py             # Point d'entrée
+```text
+web-app/
+├── kml_viewer.py          point d'entrée (gunicorn kml_viewer:app)
+├── app/
+│   ├── __init__.py        factory Flask
+│   ├── errors.py          réponses d'erreur JSON, sans détail interne
+│   ├── security.py        CSP, en-têtes, contrôle d'origine (CSRF)
+│   ├── auth/              OIDC, sessions, contrôle d'accès
+│   ├── api/               routes REST (visualiseur, analyse, export, bibliothèque, tronçons)
+│   ├── services/          parsing KML/GPX/KMZ, analyse, ingestion, MNT, tâche de fond
+│   ├── db.py              SQLite et migrations
+│   └── cli.py             commandes d'exploitation
+├── static/
+│   ├── js/viewer/         visualiseur : core, map, points, files, analysis, editor, main
+│   ├── js/                pages bibliothèque (dashboard, segments, users) et utilitaires
+│   └── vendor/            Leaflet, Bootstrap, Chart.js, Font Awesome (embarqués, sans CDN)
+├── templates/
+└── tests/
 ```
 
-### Ports personnalisés
+- **Backend** : Python 3.15, Flask, gunicorn, SQLite, numpy ; dépendances verrouillées avec empreintes
+- **Frontend** : JavaScript sans framework ni étape de build ; toute donnée issue d'un fichier est
+  insérée comme texte, et la CSP n'autorise que les scripts de l'application
+- **Déploiement** : image non-root, système de fichiers en lecture seule, port publié sur
+  `127.0.0.1:8080` (à placer derrière un reverse proxy TLS)
 
-Modifiez le fichier `docker-compose.yml` :
+### API du visualiseur
 
-```yaml
-ports:
-  - "VOTRE_PORT:5000"  # Remplacez VOTRE_PORT
-```
+| Route | Rôle |
+|-------|------|
+| `POST /api/upload`, `POST /api/multi-upload` | Parse un ou plusieurs fichiers |
+| `GET /api/sample-files`, `GET /api/load-sample/<nom>` | Fichiers d'exemple |
+| `POST /api/analysis/*` | Analyses de trajectoire |
+| `POST /api/editor/simplify-trace` | Simplification d'une trace |
+| `POST /api/export/<gpx\|csv\|geojson\|kml>` | Export |
+| `GET /api/health` | Santé et version |
+| `GET /api/stats` | Temps d'exécution cumulés (admin) |
 
-### Ajout de fonds de carte
+L'API de la bibliothèque est décrite dans [docs/bibliotheque.md](docs/bibliotheque.md).
 
-Modifiez le fichier `web-app/templates/index.html` dans la section `baseLayers`.
+## 🔧 Configuration
+
+Tout passe par des variables d'environnement, listées et commentées dans `.env.example`
+(clé de session, OIDC, dossier surveillé, correction d'altitude, fuseau horaire).
+Pour changer le port, modifier `ports` dans `docker-compose.yml`.
+
+Les fonds de carte se déclarent dans `web-app/static/js/viewer/map.js` (`initMap`) et
+`web-app/templates/sidebar.html`.
 
 ## 🐛 Dépannage
 
-### Problèmes courants
-
-**1. Port déjà utilisé**
-
-```bash
-# Changer le port dans docker-compose.yml
-# Ou arrêter le service utilisant le port 8080
-sudo lsof -i :8080
-```
-
-**2. Fichier KML non reconnu**
-
-- Vérifiez que le fichier est un KML valide
-- Assurez-vous de l'encodage UTF-8
-- Consultez les logs : `./logs.sh`
-
-**3. Carte ne s'affiche pas**
-
-- Vérifiez votre connexion internet
-- Ouvrez la console du navigateur (F12)
-- Redémarrez l'application : `./restart.sh`
-
-**4. Navigation clavier ne fonctionne pas**
-
-- Cliquez sur la carte pour donner le focus
-- Assurez-vous qu'un fichier KML avec des points est chargé
-
-### Logs et diagnostic
-
-```bash
-./logs.sh                    # Logs en temps réel
-docker ps                    # État des conteneurs
-docker-compose ps            # État spécifique au projet
-```
-
-## 📊 Performances
-
-- **Fichiers KML** : Jusqu'à 16MB supportés
-- **Points** : Navigation optimisée pour milliers de points
-- **Mémoire** : Conteneur léger (~100MB)
-- **Démarrage** : ~10-30 secondes selon la machine
-
-## 🔒 Sécurité
-
-- **Validation des fichiers** : Extensions et taille limitées
-- **Noms sécurisés** : Protection contre path traversal
-- **Parsing sécurisé** : Protection contre XML bombs
-- **Pas de persistance** : Fichiers uploadés temporaires
-
-## 🤝 Contribution
-
-1. Fork du projet
-2. Créer une branche feature
-3. Commit des modifications
-4. Push vers la branche
-5. Créer une Pull Request
+- **Port déjà utilisé** : changer le port dans `docker-compose.yml`, ou trouver le service qui
+  l'occupe (`sudo lsof -i :8080`).
+- **Fichier refusé** : le message indique la cause (extension, encodage UTF-8 attendu, archive
+  KMZ illisible). Les détails d'une erreur interne sont dans les logs : `./logs.sh`.
+- **Fond de carte vide** : les tuiles viennent de serveurs tiers, une connexion Internet est
+  nécessaire ; le reste de l'application fonctionne hors ligne.
+- **Flèches du clavier sans effet** : un fichier contenant des points doit être chargé, et le
+  curseur ne doit pas être dans un champ de saisie.
 
 ## 📄 Licence
 
 Ce projet est libre d'utilisation.
-
----
-
-## 🆕 Nouveautés Phase 4 - Analyse et Édition Avancées
-
-### 🔬 Analyses automatisées
-
-- **Détection d'arrêts** : Identification automatique des pauses avec durée et localisation
-- **Segmentation intelligente** : Division de la trajectoire en segments homogènes
-- **Zones de vitesse** : Classification colorée des sections selon la vitesse
-- **Analyse du terrain** : Répartition automatique montées/descentes/plat
-- **Points d'intérêt** : Détection des lieux remarquables sur le parcours
-
-### ✏️ Édition interactive
-
-- **Ajout de points** : Création de nouveaux waypoints par clic sur carte
-- **Modification en temps réel** : Édition des métadonnées (nom, description)
-- **Suppression sélective** : Retrait de points indésirables
-- **Simplification Douglas-Peucker** : Optimisation automatique des traces
-- **Interface intuitive** : Modes d'édition avec feedback visuel
-
-### 📊 Export professionnel
-
-- **Multi-formats** : GPX, CSV, GeoJSON, KML avec options personnalisables
-- **Compatibilité étendue** : Support des principaux logiciels GPS et SIG
-- **Métadonnées préservées** : Conservation des informations d'origine
-- **Téléchargement direct** : Export instantané sans rechargement
-
-## 🎯 Cas d'usage typiques
-
-### 🛩️ Aviation
-
-- **Plans de vol** : Visualisation et édition de routes aériennes
-- **Waypoints** : Gestion des points de navigation
-- **Analyse de performance** : Vitesses, altitudes, temps de vol
-- **Export vers GPS** : Formats compatibles équipements de bord
-
-### 🥾 Randonnée et Outdoor
-
-- **Traces GPS** : Visualisation de parcours avec profils d'élévation
-- **Points d'intérêt** : Refuges, sommets, points de vue
-- **Analyse d'effort** : Dénivelés, vitesses, temps d'arrêt
-- **Partage** : Export vers applications mobiles (GPX)
-
-### 🔬 Recherche et Géologie
-
-- **Points de mesure** : Localisation précise d'échantillons
-- **Parcours terrain** : Optimisation des itinéraires de collecte
-- **Analyse spatiale** : Export vers SIG (GeoJSON, CSV)
-- **Documentation** : Métadonnées détaillées par point
-
-### 🏃‍♂️ Sport et Fitness
-
-- **Entraînements** : Analyse de performances (vitesse, dénivelé)
-- **Zones d'effort** : Identification des sections difficiles
-- **Progression** : Comparaison de parcours similaires
-- **Partage** : Export vers plateformes sportives
-
-### 🚗 Transport et Logistique
-
-- **Optimisation de routes** : Analyse de trajets commerciaux
-- **Points d'arrêt** : Détection automatique des pauses
-- **Rapports** : Export de données pour analyse (CSV)
-- **Suivi** : Visualisation de flottes ou livraisons
-
-**Profitez de votre exploration cartographique avancée ! 🗺️✈️📊**
-
-## 🚀 Nouveautés Phase 5 - Optimisations
-
-- **Calculs vectorisés** pour la distance totale (numpy)
-- **Mise en cache** des parsings KML/GPX pour éviter les recalculs
-- **Tests supplémentaires** couvrant le cache
-- **Instructions de test** : `pytest`

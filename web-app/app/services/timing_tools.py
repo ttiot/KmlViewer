@@ -1,33 +1,34 @@
-import time
-from functools import wraps  # Import pour conserver le nom de la fonction d'origine
+"""Mesure cumulée des temps d'exécution (diagnostic, exposée aux admins par /api/stats)."""
 
-# Dictionnaire global pour stocker les durées cumulées des fonctions
-execution_times = {}
+import threading
+import time
+from functools import wraps
+from typing import Dict
+
+_lock = threading.Lock()
+_execution_times: Dict[str, Dict[str, float]] = {}
+
 
 def track_time(func):
-    """
-    Décorateur pour suivre le temps d'exécution d'une fonction et le cumuler.
-    """
-    @wraps(func)  # Conserve le nom et les métadonnées de la fonction décorée
+    """Décorateur : cumule la durée et le nombre d'appels de la fonction."""
+    name = func.__qualname__
+
+    @wraps(func)
     def wrapper(*args, **kwargs):
-        # Heure de début
-        start_time = time.time()
-        # Appel de la fonction originale
-        result = func(*args, **kwargs)
-        # Heure de fin
-        end_time = time.time()
-        
-        # Temps d'exécution
-        duration = end_time - start_time
-        
-        # Cumuler la durée dans le dictionnaire
-        func_name = func.__name__
-        if func_name not in execution_times:
-            execution_times[func_name] = {'total_time': 0, 'count': 0}
-            
-        execution_times[func_name]['total_time'] += duration
-        execution_times[func_name]['count'] += 1
-        
-        return result
+        start = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            duration = time.perf_counter() - start
+            with _lock:  # gunicorn sert les requêtes sur plusieurs threads
+                entry = _execution_times.setdefault(name, {'total_time': 0.0, 'count': 0})
+                entry['total_time'] += duration
+                entry['count'] += 1
 
     return wrapper
+
+
+def snapshot() -> Dict[str, Dict[str, float]]:
+    """Copie cohérente des compteurs."""
+    with _lock:
+        return {name: dict(entry) for name, entry in _execution_times.items()}

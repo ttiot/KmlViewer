@@ -4,7 +4,7 @@
 
 | Fonction | Où | Détail |
 |---|---|---|
-| Dossier surveillé | `INBOX_DIR` | Chaque `.gpx`/`.kml` déposé est parsé, résumé puis stocké en SQLite. Les fichiers ne sont jamais déplacés ni modifiés. |
+| Dossier surveillé | `INBOX_DIR` | Chaque `.gpx`/`.kml`/`.kmz` déposé est parsé, résumé puis stocké en SQLite. Les fichiers ne sont jamais déplacés ni modifiés. |
 | Import depuis l'UI | Tableau de bord → « Importer », ou glisser-déposer du visualiseur (case « Enregistrer dans ma bibliothèque ») | Même pipeline que le dossier surveillé. |
 | Tableau de bord | `/dashboard` | km, D+ et temps par semaine / mois / année, records, liste des activités. |
 | Tronçons | `/segments` | Un tronçon se définit en deux clics sur une trace ; il est recherché dans toutes les traces, existantes et futures. |
@@ -125,11 +125,16 @@ Sans `OIDC_ISSUER`, l'application tourne en mono-utilisateur local **sans authen
 - XML : parsing via `defusedxml` (XXE, bombes d'entités).
 - Fichiers : noms de stockage dérivés du SHA-256, jamais du nom fourni ; droits `0600`.
 - En-têtes : CSP, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`.
+- Scripts : la CSP n'autorise que ceux servis par l'application (`script-src 'self'`). Les
+  bibliothèques front sont embarquées dans `static/vendor` (aucun CDN) et aucun template ne
+  contient de script ou de gestionnaire inline ; un test le vérifie. Les données issues des
+  fichiers (noms, descriptions) sont toujours insérées comme texte, jamais comme HTML.
+- KMZ : décompression bornée (64 Mo), seul le document KML est lu.
+- Erreurs : une erreur inattendue de l'API est journalisée ; le client ne reçoit qu'un message générique.
 - Conteneur : gunicorn, utilisateur non-root, racine en lecture seule, capacités supprimées,
   port publié sur `127.0.0.1` (à placer derrière un reverse proxy TLS).
 
-Limite connue : le visualiseur historique (`static/js/main.js`) utilise des handlers inline et
-`innerHTML`, ce qui impose `'unsafe-inline'` dans la CSP.
+Limite connue : `style-src` garde `'unsafe-inline'`, les templates utilisant des attributs `style`.
 
 ## Correction d'altitude
 
@@ -150,10 +155,29 @@ docker compose --profile dem up -d
 - `opentopodata` : API d'altitude, construite depuis le dépôt du projet (pas d'image publiée),
   épinglée sur un commit. Aucun port publié : seul `kml-viewer` peut l'appeler.
 
-Un point tous les 20 m est interrogé, le reste est interpolé. Si le service est indisponible
-au moment de l'ingestion (démarrage, panne), l'activité est enregistrée avec l'altitude GPS
-puis corrigée automatiquement en tâche de fond. Une trace hors des dalles disponibles garde
+Un point tous les 20 m est interrogé, le reste est interpolé. Un import depuis l'interface
+n'attend pas le MNT : l'activité est enregistrée avec l'altitude GPS, puis corrigée par la
+tâche de fond, réveillée aussitôt (`DEM_BACKFILL_BATCH` activités par cycle, 25 par défaut).
+Il en va de même si le service est indisponible au moment de l'ingestion (démarrage, panne). Une trace hors des dalles disponibles garde
 son altitude GPS ; le bouton montagne du tableau de bord relance la correction à la demande.
+
+## Sauvegarde
+
+Deux choses sont à conserver : la base SQLite et les fichiers d'origine (`/data/files`).
+
+```bash
+# Copie cohérente de la base, application en marche ; --keep limite le nombre de copies gardées
+docker compose exec kml-viewer flask backup --keep 7      # -> /data/backups/kmlviewer-<date>.sqlite3
+
+# Archive du volume complet (base sauvegardée + fichiers d'origine)
+docker run --rm -v kmlviewer_kml-viewer-data:/data:ro -v "$PWD":/out alpine \
+    tar czf /out/kmlviewer-data.tgz -C /data backups files
+```
+
+Le nom du volume dépend du dossier du projet (`docker volume ls`). Ne pas copier
+`kmlviewer.sqlite3` à chaud avec `cp` : en mode WAL, la copie peut être incohérente.
+Restauration : arrêter l'application, remettre la copie à la place de
+`/data/kmlviewer.sqlite3` (supprimer les fichiers `-wal` et `-shm`), restaurer `files/`, relancer.
 
 ## Dépendances et image
 
@@ -166,7 +190,7 @@ son altitude GPS ; le bouton montagne du tableau de bord relance la correction �
 
 ## Intégration continue
 
-`.github/workflows/docker.yml` enchaîne tests, audit des dépendances, build, essai de l'image
+`.github/workflows/docker.yml` enchaîne lint (ruff), tests avec seuil de couverture, audit des dépendances, build, essai de l'image
 en conditions de production (racine en lecture seule, sans capacités), scan Trivy, puis
 publication multi-architecture sur GHCR et Docker Hub. Rien n'est publié si une étape échoue.
 
@@ -184,5 +208,6 @@ publication multi-architecture sur GHCR et Docker Hub. Rien n'est publié si une
 ```bash
 cd web-app
 pip install --require-hashes -r requirements.txt -r requirements-dev.txt
-python -m pytest
+python -m ruff check .
+python -m pytest --cov=app
 ```

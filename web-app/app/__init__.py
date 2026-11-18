@@ -36,6 +36,9 @@ def create_app(config_class=Config, overrides=None):
     from app.security import init_security
     init_security(app)
 
+    from app.errors import init_errors
+    init_errors(app)
+
     from app.auth import init_auth
     init_auth(app)
 
@@ -53,8 +56,13 @@ def create_app(config_class=Config, overrides=None):
 
 
 def _start_inbox_watcher(app) -> None:
-    """Démarre la surveillance du dossier, sauf en test, en CLI et dans le parent du reloader."""
-    if not app.config.get('INBOX_ENABLED') or app.config.get('TESTING'):
+    """
+    Démarre la tâche de fond (dossier surveillé et rattrapage d'altitude), sauf en test,
+    en CLI et dans le parent du reloader.
+    """
+    if app.config.get('TESTING'):
+        return
+    if not app.config.get('INBOX_ENABLED') and not app.config.get('DEM_URL'):
         return
     if os.environ.get('FLASK_RUN_FROM_CLI') == 'true' and os.environ.get('KMLVIEWER_WATCHER') != '1':
         return
@@ -62,4 +70,4 @@ def _start_inbox_watcher(app) -> None:
         return
     from app.services.inbox_watcher import InboxWatcher
     InboxWatcher(app.config).start()
-    logging.getLogger(__name__).info("Surveillance du dossier d'import démarrée")
+    logging.getLogger(__name__).info("Tâche de fond démarrée (dossier surveillé, rattrapage d'altitude)")

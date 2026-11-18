@@ -2,7 +2,6 @@
 Tests de base pour l'application.
 """
 
-import pytest
 
 
 def test_app_creation(app):
@@ -22,7 +21,7 @@ def test_api_health(app, client):
     """Test de l'endpoint de santé de l'API."""
     response = client.get('/api/health')
     assert response.status_code == 200
-    
+
     json_data = response.get_json()
     assert json_data['status'] == 'healthy'
     assert json_data['version'] == app.config['APP_VERSION']
@@ -33,7 +32,7 @@ def test_api_sample_files(client):
     """Test de l'endpoint de listing des fichiers d'exemple."""
     response = client.get('/api/sample-files')
     assert response.status_code == 200
-    
+
     json_data = response.get_json()
     assert 'files' in json_data
     assert isinstance(json_data['files'], list)
@@ -43,7 +42,7 @@ def test_api_upload_no_file(client):
     """Test de l'upload sans fichier."""
     response = client.post('/api/upload')
     assert response.status_code == 400
-    
+
     json_data = response.get_json()
     assert json_data['success'] is False
     assert 'Aucun fichier sélectionné' in json_data['error']
@@ -76,7 +75,7 @@ def test_api_upload_empty_filename(client):
     data = {'file': (None, '')}
     response = client.post('/api/upload', data=data)
     assert response.status_code == 400
-    
+
     json_data = response.get_json()
     assert json_data['success'] is False
     assert 'Aucun fichier sélectionné' in json_data['error']

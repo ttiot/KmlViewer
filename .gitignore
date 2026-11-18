@@ -5,3 +5,6 @@ data/
 inbox/
 .env
 .venv/
+.coverage
+.ruff_cache/
+.pytest_cache/

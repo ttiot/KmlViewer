@@ -35,8 +35,7 @@ def line(n, lat0=45.0, lon0=6.0, dlat=0.0003, dlon=0.0, ele=lambda i: 100.0):
 @pytest.fixture
 def app(tmp_path):
     """Application de test en mode mono-utilisateur local, données isolées."""
-    app = create_app(TestingConfig, overrides={'DATA_DIR': str(tmp_path / 'data'),
-                                               'UPLOAD_FOLDER': str(tmp_path / 'uploads')})
+    app = create_app(TestingConfig, overrides={'DATA_DIR': str(tmp_path / 'data')})
     with app.app_context():
         yield app
 

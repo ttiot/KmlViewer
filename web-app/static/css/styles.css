@@ -455,3 +455,24 @@
     background: var(--warn-soft) !important;
     color: var(--warn) !important;
 }
+
+/* ------------------------------------------------------- Marqueurs et points */
+
+.marker-dot,
+.point-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    background-color: #4ecdc4;
+}
+
+.point-dot.annotation {
+    background-color: #ff6b6b;
+}
+
+.custom-marker {
+    background: none;
+    border: none;
+}

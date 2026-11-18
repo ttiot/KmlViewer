@@ -7,4 +7,4 @@ from flask import Blueprint
 bp = Blueprint('main', __name__)
 
 # Import des routes après la création du blueprint pour éviter les imports circulaires
-from . import routes
+from . import routes  # noqa: E402,F401

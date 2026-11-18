@@ -25,7 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!input || !dropArea || !toggle) return;
 
     function save(fileList) {
-        const files = Array.from(fileList || []).filter((f) => /\.(gpx|kml)$/i.test(f.name));
+        const files = Array.from(fileList || []).filter((f) => /\.(gpx|kml|kmz)$/i.test(f.name));
         if (!toggle.checked || files.length === 0) return;
         const form = new FormData();
         files.forEach((f) => form.append('files', f));
@@ -50,5 +50,5 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('map');
     if (!container || typeof ResizeObserver === 'undefined') return;
-    new ResizeObserver(() => { if (typeof map !== 'undefined' && map) map.invalidateSize(); }).observe(container);
+    new ResizeObserver(() => { if (Viewer.map) Viewer.map.invalidateSize(); }).observe(container);
 });

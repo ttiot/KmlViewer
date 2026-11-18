@@ -46,7 +46,7 @@ class TrajectoryAnalyzer:
 
         filtered = [v for v in values if lower <= v <= upper]
         return filtered or values
-    
+
     @staticmethod
     @track_time
     def calculate_distance_between_points(
@@ -72,7 +72,7 @@ class TrajectoryAnalyzer:
         coord2 = (point2[0], point2[1])
 
         distance_2d = geodesic(coord1, coord2).meters
-        
+
         # Les données d'altitude de certains fichiers peuvent être très
         # bruitées. Leur prise en compte lors de la sommation des distances
         # entraîne une surestimation importante (par exemple plus de 50 km au
@@ -134,12 +134,12 @@ class TrajectoryAnalyzer:
                 "elevation_gain": 0.0,
                 "elevation_profile": [],
             }
-        
+
         elevations = [coord[2] if len(coord) > 2 else None for coord in coordinates]
-        
+
         # Filtrer les valeurs nulles ou aberrantes
         valid_elevations = [alt for alt in elevations if alt is not None and -1000 < alt < 10000]
-        
+
         if not valid_elevations:
             return {
                 "total_ascent": 0.0,
@@ -149,7 +149,7 @@ class TrajectoryAnalyzer:
                 "elevation_gain": 0.0,
                 "elevation_profile": [],
             }
-        
+
         # Lisser les altitudes pour éviter le bruit GPS sur les longues traces
         if len(valid_elevations) >= 100:
             window_size = 31
@@ -170,7 +170,7 @@ class TrajectoryAnalyzer:
             elif diff < 0:
                 total_descent += -diff
             prev_elevation = elevation
-        
+
         # Calcul du profil d'élévation avec distance cumulative
         distance_cumulative = 0.0
         elevation_profile = []
@@ -207,7 +207,7 @@ class TrajectoryAnalyzer:
         speeds = []
         speed_profile = []
         raw_speeds = []
-        
+
         for i, point in enumerate(points):
             parsed_info = point.get("parsed_info", {})
             speed_kmh = parsed_info.get("speed_kmh")
@@ -329,7 +329,7 @@ class TrajectoryAnalyzer:
         # Séparer les traces et les points
         polylines = [f for f in features if f.get('type') == 'polyline']
         points = [f for f in features if f.get('type') == 'marker' and f.get('visibility') == "0"]
-        
+
         analysis = {
             "basic_stats": {
                 "total_points": len(points),
@@ -407,7 +407,7 @@ class TrajectoryAnalyzer:
             speed_kmh = parsed_info.get('speed_kmh')
             if speed_kmh is None:
                 speed_kmh = 0
-            
+
             if speed_kmh <= speed_threshold:
                 if current_stop is None:
                     # Début d'un nouvel arrêt
@@ -590,7 +590,7 @@ class TrajectoryAnalyzer:
             if filtered:
                 speeds = filtered
                 speed_points = [p for p, keep in zip(speed_points, mask) if keep]
-        
+
         # Calculer les seuils de vitesse
         max_speed = max(speeds)
         min_speed = min(speeds)
@@ -683,10 +683,10 @@ class TrajectoryAnalyzer:
         for i in range(1, len(points)):
             prev_point = points[i - 1]
             curr_point = points[i]
-            
+
             prev_speed = prev_point.get('parsed_info', {}).get('speed_kmh') or 0
             curr_speed = curr_point.get('parsed_info', {}).get('speed_kmh') or 0
-            
+
             # Estimation du temps (30 secondes par point en moyenne)
             time_diff = 30  # secondes
 
@@ -908,19 +908,19 @@ class TrajectoryAnalyzer:
         # Analyse des arrêts
         if markers:
             analysis['stops'] = TrajectoryAnalyzer.detect_stops(markers)
-        
+
         # Segmentation de trajectoire
         if all_coordinates:
             analysis['segments'] = TrajectoryAnalyzer.segment_trajectory(all_coordinates, markers)
-        
+
         # Analyse des zones de vitesse
         if markers:
             analysis['speed_zones'] = TrajectoryAnalyzer.analyze_speed_zones(markers)
-        
+
         # Analyse des zones d'accélération
         if markers:
             analysis['acceleration_zones'] = TrajectoryAnalyzer.calculate_acceleration_zones(markers)
-        
+
         # Analyse du terrain
         if all_coordinates:
             analysis["terrain"] = TrajectoryAnalyzer.analyze_terrain(all_coordinates)

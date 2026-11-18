@@ -10,13 +10,15 @@ logger = logging.getLogger(__name__)
 
 UNSAFE_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 
-# Les templates existants utilisent des handlers inline et des CDN : la CSP borne
-# au moins les origines autorisées et interdit l'encadrement et l'exfiltration.
+# Scripts : uniquement ceux servis par l'application (bibliothèques embarquées dans
+# static/vendor, aucun gestionnaire inline). Un contenu injecté ne peut donc rien exécuter.
+# Styles : 'unsafe-inline' reste nécessaire pour les attributs style des templates.
+# Images : https: pour les tuiles des fonds de carte.
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
-    "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
-    "font-src 'self' data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
     "img-src 'self' data: blob: https:",
     "connect-src 'self'",
     "object-src 'none'",

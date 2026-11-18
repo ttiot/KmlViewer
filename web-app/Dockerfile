@@ -28,7 +28,7 @@ COPY . .
 
 # Le code reste en lecture seule pour l'appli ; seul /data est inscriptible
 # /dem : cible du téléchargeur de dalles (service dem-tiles), le volume hérite de ces droits
-RUN mkdir -p /data /dem /app/uploads && chown -R appuser:appuser /data /dem /app/uploads && chmod 700 /data
+RUN mkdir -p /data /dem && chown -R appuser:appuser /data /dem && chmod 700 /data
 
 USER appuser
 

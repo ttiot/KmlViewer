@@ -25,7 +25,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      - /app/uploads
     cap_drop:
       - ALL
     security_opt:

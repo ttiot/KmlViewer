@@ -25,7 +25,7 @@ def test_calculate_elevation_profile_basic():
 def test_speed_statistics_with_outlier():
     points = []
     speeds = [10, 12, 11, 120, 9]
-    for i, spd in enumerate(speeds):
+    for spd in speeds:
         points.append({
             'parsed_info': {'speed_kmh': spd, 'speed_kts': spd / 1.852},
             'coordinates': [0.0, 0.0],

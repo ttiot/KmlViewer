@@ -1,0 +1,13 @@
+# Lint : erreurs réelles et pièges courants, sans imposer de reformatage.
+line-length = 130
+target-version = "py313"
+extend-exclude = ["static"]
+
+[lint]
+select = ["E", "F", "W", "B"]
+# B905 : zip() sans strict= est voulu (séries parallèles de même longueur par construction)
+ignore = ["B905"]
+
+[lint.per-file-ignores]
+# Fixtures XML sur une ligne
+"tests/*" = ["E501"]

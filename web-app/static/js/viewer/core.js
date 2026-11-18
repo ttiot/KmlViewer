@@ -1,0 +1,88 @@
+// Visualiseur : état partagé et utilitaires d'affichage.
+// Règle : toute donnée venant d'un fichier ou du serveur est insérée en nœud texte
+// (App.el / textContent), jamais en HTML. Un nom de point reste donc du texte.
+'use strict';
+
+const Viewer = {
+    map: null,
+    baseLayers: {},
+    files: new Map(),        // id -> { id, name, data, layer, markers, visible }
+    fileCounter: 0,
+    activeFileId: null,
+    currentPointIndex: -1,
+    analysis: null,          // dernière analyse de base (pour redessiner au changement de thème)
+    charts: { elevation: null, speed: null },
+
+    activeFile() {
+        return this.activeFileId ? this.files.get(this.activeFileId) || null : null;
+    },
+    points() {
+        const file = this.activeFile();
+        return file ? file.data.points : [];
+    },
+    features() {
+        const file = this.activeFile();
+        return file ? file.data.features : [];
+    },
+    hasData() {
+        return this.features().length > 0;
+    },
+    displayMode() {
+        const checked = document.querySelector('input[name="displayMode"]:checked');
+        return checked ? checked.value : 'double';
+    },
+};
+
+const ALERT_ICONS = { success: 'check', danger: 'triangle-exclamation', warning: 'triangle-exclamation', info: 'circle-info' };
+
+function repositionAlerts() {
+    let bottomOffset = 20;
+    document.querySelectorAll('.alert-popup').forEach((alert) => {
+        alert.style.bottom = `${bottomOffset}px`;
+        bottomOffset += alert.offsetHeight + 10;
+    });
+}
+
+// Notification empilée en bas à droite. `message` est du texte brut.
+function showAlert(message, type = 'info', { spinner = false } = {}) {
+    const container = document.getElementById('alertContainer');
+    if (!container) return;
+    const { el } = App;
+    const iconClass = spinner ? 'fas fa-spinner fa-spin me-2' : `fas fa-${ALERT_ICONS[type] || ALERT_ICONS.info} me-2`;
+    const alert = el('div', { class: `alert-popup alert-${type}`, role: 'status' },
+        el('div', { class: 'alert-content' }, el('i', { class: iconClass }), String(message)),
+        el('button', { type: 'button', class: 'btn-close', 'aria-label': 'Fermer',
+            onclick: () => { alert.remove(); repositionAlerts(); } }, '×'));
+    container.appendChild(alert);
+    repositionAlerts();
+    setTimeout(() => alert.classList.add('show'), 50);
+    setTimeout(() => {
+        alert.classList.remove('show');
+        setTimeout(() => { alert.remove(); repositionAlerts(); }, 300);
+    }, spinner ? 2000 : 4000);
+}
+
+// Texte brut d'un fragment potentiellement HTML (descriptions KML) : le document créé
+// par DOMParser est inerte, rien n'y est exécuté ni chargé.
+function plainText(value) {
+    const text = String(value === null || value === undefined ? '' : value);
+    if (!/[<&]/.test(text)) return text;
+    return new DOMParser().parseFromString(text, 'text/html').body.textContent || '';
+}
+
+// Description affichable : seuls les sauts de ligne <br> sont conservés, le reste devient du texte.
+function descriptionNodes(description) {
+    const nodes = [];
+    String(description || '').split(/<br\s*\/?>/i).forEach((part) => {
+        const text = plainText(part).trim();
+        if (!text) return;
+        if (nodes.length) nodes.push(document.createElement('br'));
+        nodes.push(document.createTextNode(text));
+    });
+    return nodes;
+}
+
+function setVisible(id, visible, display = 'block') {
+    const node = document.getElementById(id);
+    if (node) node.style.display = visible ? display : 'none';
+}

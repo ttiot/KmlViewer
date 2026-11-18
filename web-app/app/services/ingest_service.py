@@ -14,13 +14,13 @@ from typing import Any, Dict, Mapping, Optional
 
 import numpy as np
 
-from app.services import activity_stats, activity_store, dem_service, segment_service
+from app.services import activity_stats, activity_store, dem_service, file_formats, segment_service
 from app.services.gpx_parser import GPXParser
 from app.services.kml_parser import KMLParser
 
 logger = logging.getLogger(__name__)
 
-INGEST_EXTENSIONS = ('gpx', 'kml')
+INGEST_EXTENSIONS = file_formats.SUPPORTED_EXTENSIONS
 MAX_NAME_LENGTH = 200
 
 
@@ -32,20 +32,25 @@ class IngestResult:
 
 
 def file_extension(filename: str) -> str:
-    return PurePath(filename).suffix.lower().lstrip('.')
+    return file_formats.extension(filename)
 
 
-def parse_content(content: str, ext: str) -> Dict[str, Any]:
-    if ext == 'gpx':
+def parse_raw(raw: bytes, filename: str) -> Dict[str, Any]:
+    """Parse un fichier brut (GPX, KML ou KMZ). Lève FileFormatError s'il est refusé."""
+    content, fmt = file_formats.decode(raw, filename)
+    if fmt == 'gpx':
         return GPXParser.parse_gpx_coordinates(content)
     return KMLParser.parse_kml_coordinates(content, 'double')
 
 
-def _elevation_fields(track, cfg: Mapping, summary: Dict[str, Any]) -> Dict[str, Any]:
-    """D+/D- retenus : MNT si disponible, sinon GPS. Une panne du MNT ne bloque pas l'ingestion."""
+def _elevation_fields(track, cfg: Mapping, summary: Dict[str, Any], defer: bool) -> Dict[str, Any]:
+    """
+    D+/D- retenus : MNT si disponible, sinon GPS. Une panne du MNT ne bloque pas l'ingestion.
+    Avec defer, le MNT n'est pas interrogé : dem_status reste NULL et la tâche de fond s'en charge.
+    """
     fields = {'ascent_m': summary['ascent_gps_m'], 'descent_m': summary['descent_gps_m'],
               'elev_source': 'gps', 'ele_dem': None, 'dem_status': None}
-    if not dem_service.is_enabled(cfg):
+    if defer or not dem_service.is_enabled(cfg):
         return fields
     try:
         ele_dem = dem_service.corrected_profile(track.lat, track.lon, cfg)
@@ -62,12 +67,17 @@ def _elevation_fields(track, cfg: Mapping, summary: Dict[str, Any]) -> Dict[str,
 
 
 def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, filename: str,
-                 source: str, fallback_epoch: Optional[float] = None) -> IngestResult:
-    """Ingère un fichier. Ne lève pas : toute erreur est renvoyée dans IngestResult."""
+                 source: str, fallback_epoch: Optional[float] = None,
+                 defer_elevation: bool = False) -> IngestResult:
+    """
+    Ingère un fichier. Ne lève pas : toute erreur est renvoyée dans IngestResult.
+    defer_elevation : laisse la correction d'altitude à la tâche de fond (import interactif,
+    où interroger le MNT fichier par fichier ferait expirer la requête HTTP).
+    """
     filename = PurePath(filename).name[:MAX_NAME_LENGTH] or 'fichier'
     ext = file_extension(filename)
     if ext not in INGEST_EXTENSIONS:
-        return IngestResult('error', message="Seuls les fichiers .gpx et .kml sont pris en charge")
+        return IngestResult('error', message="Seuls les fichiers .gpx, .kml et .kmz sont pris en charge")
     if not raw:
         return IngestResult('error', message="Fichier vide")
     if len(raw) > cfg.get('MAX_CONTENT_LENGTH', 16 * 1024 * 1024):
@@ -79,18 +89,15 @@ def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes,
         return IngestResult('duplicate', existing['id'], "Fichier déjà importé")
 
     try:
-        content = raw.decode('utf-8-sig')
-        parsed = parse_content(content, ext)
+        parsed = parse_raw(raw, filename)
         if not parsed.get('success'):
             return IngestResult('error', message=str(parsed.get('error') or 'Fichier illisible'))
         track = activity_stats.extract_track(parsed)
         summary = activity_stats.compute_summary(track)
-    except UnicodeDecodeError:
-        return IngestResult('error', message="Encodage invalide (UTF-8 attendu)")
-    except ValueError as exc:
+    except ValueError as exc:  # FileFormatError comprise
         return IngestResult('error', message=str(exc))
 
-    elevation = _elevation_fields(track, cfg, summary)
+    elevation = _elevation_fields(track, cfg, summary, defer_elevation)
     start_epoch = summary['start_epoch'] or fallback_epoch or time.time()
     name = (track.name or PurePath(filename).stem)[:MAX_NAME_LENGTH]
 
@@ -149,7 +156,7 @@ def recompute_elevation(db: sqlite3.Connection, cfg: Mapping, user_id: int, acti
             'ascent_gps_m': row['ascent_gps_m'], 'elev_source': 'dem'}
 
 
-def backfill_elevation(db: sqlite3.Connection, cfg: Mapping, limit: int = 5) -> int:
+def backfill_elevation(db: sqlite3.Connection, cfg: Mapping, limit: Optional[int] = None) -> int:
     """
     Rattrapage : corrige les activités ingérées pendant que le MNT était indisponible
     (ou avant son activation). Retourne le nombre d'activités corrigées. S'arrête à la
@@ -157,6 +164,7 @@ def backfill_elevation(db: sqlite3.Connection, cfg: Mapping, limit: int = 5) -> 
     """
     if not dem_service.is_enabled(cfg):
         return 0
+    limit = limit if limit is not None else int(cfg.get('DEM_BACKFILL_BATCH', 25))
     corrected = 0
     for row in activity_store.pending_dem(db, limit):
         try:
