@@ -1,0 +1,11 @@
+/* Pages bibliothèque : tableau de bord, tronçons, administration */
+.navbar .nav-link { color: rgba(255, 255, 255, 0.85); }
+.navbar .nav-link.active, .navbar .nav-link:hover { color: #fff; }
+.navbar .nav-link.active { font-weight: 600; }
+
+.library-page { max-width: 1400px; }
+.stat-tile .stat-value { font-size: 1.6rem; font-weight: 600; line-height: 1.2; }
+.stat-tile .stat-label { color: #6c757d; font-size: 0.85rem; }
+.chart-box { position: relative; height: 320px; }
+.segment-map { height: 480px; border-radius: 0.375rem; border: 1px solid #dee2e6; }
+.badge-dem { background-color: #e7f1ff; color: #0a58ca; font-weight: 500; }

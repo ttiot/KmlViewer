@@ -23,17 +23,11 @@
     
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}"/>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/library.css') }}"/>
 </head>
 <body>
     <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg">
-        <div class="container">
-            <a class="navbar-brand" href="#">
-                <i class="fas fa-map-marked-alt me-2"></i>
-                Visualiseur KML/GPX
-            </a>
-        </div>
-    </nav>
+    {% include '_navbar.html' %}
 
     <!-- Sidebar -->
     {% include 'sidebar.html' %}
@@ -171,5 +165,6 @@
     <script src="{{ url_for('static', filename='js/main.js') }}"/>></script>
     <script src="{{ url_for('static', filename='js/analysis.js') }}"/>></script>
     <script src="{{ url_for('static', filename='js/editor.js') }}"/>></script>
+    <script src="{{ url_for('static', filename='js/library.js') }}"></script>
 </body>
 </html>

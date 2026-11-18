@@ -1,24 +1,97 @@
-version: '3.8'
-
 services:
   kml-viewer:
     build: ./web-app
+    image: kml-viewer:local
     container_name: kml-viewer-app
     ports:
-      - "8080:5000"
-    volumes:
-      # Monter les fichiers KML du projet pour les utiliser comme exemples
-      - .:/app/sample_files:ro
+      # Écoute locale uniquement : exposer via un reverse proxy TLS (HAProxy, Traefik…)
+      - "127.0.0.1:8080:5000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - FLASK_ENV=development
-      - FLASK_APP=kml_viewer.py
+      - FLASK_ENV=production
+      - DATA_DIR=/data
+      - INBOX_DIR=/inbox
+      # Correction d'altitude : http://opentopodata:5000/v1/copernicus30 avec le profil « dem »
+      - DEM_URL=${DEM_URL:-}
+    volumes:
+      # Base SQLite + fichiers d'origine
+      - kml-viewer-data:/data
+      # Dossier surveillé : un sous-dossier par utilisateur (username ou email)
+      - ./inbox:/inbox:ro
+      # Fichiers KML du projet utilisés comme exemples
+      - .:/app/sample_files:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/uploads
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
+
+  # --- Correction d'altitude (optionnel) : docker compose --profile dem up -d ---------
+
+  # Tâche ponctuelle : télécharge les dalles Copernicus GLO-30 couvrant DEM_BBOX
+  # (~45 Mo par dalle de 1°x1°). Relançable sans risque : seules les dalles manquantes sont prises.
+  dem-tiles:
+    profiles: ["dem"]
+    build: ./web-app
+    image: kml-viewer:local
+    command: ["python", "-m", "app.services.dem_tiles"]
+    environment:
+      - DEM_BBOX=${DEM_BBOX:-}
+      - DEM_TILES_DIR=/dem/copernicus30
+    volumes:
+      - dem-data:/dem
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # API d'altitude locale : les traces ne sortent pas de la machine. Pas d'image publiée
+  # par le projet : build depuis le dépôt, épinglé sur un commit (version 1.10.2).
+  opentopodata:
+    profiles: ["dem"]
+    build:
+      context: https://github.com/ajnisbet/opentopodata.git#2f365f8d9018aea7b3d70a762bc8c29515c9dd1b
+      dockerfile: docker/Dockerfile
+    image: opentopodata:1.10.2
+    depends_on:
+      dem-tiles:
+        condition: service_completed_successfully
+    volumes:
+      # nocopy : ce conteneur (root) ne doit pas initialiser le volume, sinon le
+      # téléchargeur non-root ne pourrait plus y écrire
+      - type: volume
+        source: dem-data
+        target: /app/data
+        read_only: true
+        volume:
+          nocopy: true
+      - ./dem/opentopodata.yaml:/app/config.yaml:ro
+    # Aucun port publié : joignable uniquement par kml-viewer sur le réseau interne
+    expose:
+      - "5000"
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  kml-viewer-data:
+  dem-data:
 
 networks:
   default:

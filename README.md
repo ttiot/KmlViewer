@@ -35,6 +35,12 @@ pip install -r requirements.txt
 pytest
 ```
 
+## 🏃 Bibliothèque, tableau de bord, tronçons et comptes
+
+Dossier surveillé, import depuis l'interface, statistiques par semaine / mois / année, tronçons
+personnels chronométrés, correction d'altitude par MNT et authentification OIDC (FusionAuth) :
+voir [docs/bibliotheque.md](docs/bibliotheque.md). Configuration : copier `.env.example` en `.env`.
+
 ## ✨ Fonctionnalités principales
 
 ### 📁 Gestion des fichiers KML

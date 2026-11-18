@@ -1,0 +1,12 @@
+# Configuration de l'instance OpenTopoData (profil compose « dem »).
+# Les dalles sont déposées par le service dem-tiles dans le volume dem-data.
+max_locations_per_request: 100
+
+# Pas d'en-tête CORS : le service n'est appelé que par le backend, jamais par un navigateur.
+access_control_allow_origin: null
+
+datasets:
+  - name: copernicus30
+    path: data/copernicus30/
+    filename_epsg: 4326
+    filename_tile_size: 1

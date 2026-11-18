@@ -57,4 +57,15 @@ Thumbs.db
 *.temp
 
 # Documentation
-README.md
+README.mddata/
+inbox/
+.env
+.venv/
+
+# Inutile dans l image
+tests/
+pytest.ini
+requirements-dev.in
+requirements-dev.txt
+requirements.in
+.pytest_cache/

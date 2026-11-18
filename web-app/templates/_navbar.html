@@ -1,0 +1,35 @@
+<nav class="navbar navbar-expand navbar-dark">
+    <div class="container-fluid px-3">
+        <a class="navbar-brand" href="{{ url_for('main.index') }}">
+            <i class="fas fa-map-marked-alt me-2"></i>
+            Visualiseur KML/GPX
+        </a>
+        <ul class="navbar-nav me-auto">
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if active_page == 'viewer' }}" href="{{ url_for('main.index') }}">
+                    <i class="fas fa-map me-1"></i>Carte</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if active_page == 'dashboard' }}" href="{{ url_for('main.dashboard') }}">
+                    <i class="fas fa-chart-column me-1"></i>Tableau de bord</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if active_page == 'segments' }}" href="{{ url_for('main.segments') }}">
+                    <i class="fas fa-stopwatch me-1"></i>Tronçons</a>
+            </li>
+            {% if current_user and current_user['is_admin'] and oidc_enabled %}
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if active_page == 'users' }}" href="{{ url_for('main.users') }}">
+                    <i class="fas fa-users-cog me-1"></i>Utilisateurs</a>
+            </li>
+            {% endif %}
+        </ul>
+        {% if current_user and oidc_enabled %}
+        <span class="navbar-text text-white me-3">
+            <i class="fas fa-user me-1"></i>{{ current_user['display_name'] or current_user['username'] }}
+        </span>
+        <a class="btn btn-sm btn-outline-light" href="{{ url_for('auth.logout') }}">
+            <i class="fas fa-right-from-bracket me-1"></i>Déconnexion</a>
+        {% endif %}
+    </div>
+</nav>

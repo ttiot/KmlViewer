@@ -1728,7 +1728,8 @@ function addUploadedFile(filename, data) {
     const div = document.createElement('div');
     div.className = 'form-check';
     div.innerHTML = `<input class="form-check-input" type="checkbox" id="${checkboxId}" data-file-id="${fileId}" checked>
-        <label class="form-check-label" for="${checkboxId}">${filename}</label>`;
+        <label class="form-check-label" for="${checkboxId}"></label>`;
+    div.querySelector('label').textContent = filename; // nom issu du fichier : jamais en innerHTML
     container.appendChild(div);
     div.querySelector('input').addEventListener('change', (e) => {
         toggleFileVisibility(fileId, e.target.checked);

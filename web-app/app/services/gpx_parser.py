@@ -1,6 +1,7 @@
 """GPX parsing service."""
 import logging
 import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring as safe_fromstring  # anti XXE / bombes d'entités
 from datetime import datetime
 from typing import Dict, Any, List
 from app.services.timing_tools import track_time
@@ -36,7 +37,7 @@ class GPXParser:
         """Parse GPX content and return features and points."""
         try:
             ns = GPXParser.NAMESPACES
-            root = ET.fromstring(gpx_content)
+            root = safe_fromstring(gpx_content)
 
             metadata: Dict[str, Any] = {}
             meta_elem = root.find('gpx:metadata', ns)
@@ -85,6 +86,8 @@ class GPXParser:
                 trk_desc_elem = trk.find('gpx:desc', ns)
                 trk_name = trk_name_elem.text if trk_name_elem is not None else 'Track'
                 trk_desc = trk_desc_elem.text if trk_desc_elem is not None else ''
+                trk_type_elem = trk.find('gpx:type', ns)
+                trk_type = (trk_type_elem.text or '').strip() if trk_type_elem is not None else ''
 
                 coordinates: List[List[float]] = []
                 timestamps: List[str] = []
@@ -142,7 +145,7 @@ class GPXParser:
                     'style': None,
                     'time_info': {'timestamps': timestamps},
                     'extensions': {},
-                    'properties': {}
+                    'properties': {'activity_type': trk_type} if trk_type else {}
                 }
                 features.append(polyline)
 

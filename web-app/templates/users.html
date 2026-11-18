@@ -1,0 +1,22 @@
+{% extends 'layout.html' %}
+{% block title %}Utilisateurs{% endblock %}
+{% block content %}
+<h1 class="h4 mb-3">Utilisateurs</h1>
+{% if admin_role %}
+<p class="text-muted small">Le rôle administrateur est piloté par l'IdP (rôle « {{ admin_role }} »).</p>
+{% endif %}
+<div class="card">
+    <div class="card-body table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead>
+                <tr><th>Nom</th><th>Identifiant</th><th>Email</th><th class="text-end">Activités</th>
+                    <th>Dernière connexion</th><th>Actif</th><th>Admin</th><th></th></tr>
+            </thead>
+            <tbody id="users"></tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/users.js') }}"></script>
+{% endblock %}

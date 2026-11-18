@@ -1,0 +1,19 @@
+# Dépendances directes. requirements.txt en est le verrou complet (transitives + empreintes) :
+#   uv pip compile requirements.in --generate-hashes --python-version 3.15 --upgrade -o requirements.txt
+Flask
+gunicorn
+requests
+
+# Authentification OIDC
+Authlib
+joserfc
+
+# Parsing XML durci (XXE, bombes d'entités)
+defusedxml
+
+# Fuseaux horaires (image slim sans tzdata système)
+tzdata
+
+# Calcul géospatial
+geopy
+numpy

@@ -1,0 +1,71 @@
+{% extends 'layout.html' %}
+{% block title %}Tableau de bord{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <h1 class="h4 mb-0 me-auto">Tableau de bord</h1>
+    <select id="typeFilter" class="form-select form-select-sm w-auto" aria-label="Type d'activité">
+        <option value="">Tous les types</option>
+    </select>
+    <div class="btn-group btn-group-sm" role="group" aria-label="Période" id="periodSwitch">
+        <button type="button" class="btn btn-outline-primary active" data-period="week">Semaine</button>
+        <button type="button" class="btn btn-outline-primary" data-period="month">Mois</button>
+        <button type="button" class="btn btn-outline-primary" data-period="year">Année</button>
+    </div>
+    <button type="button" class="btn btn-sm btn-primary" id="importButton">
+        <i class="fas fa-upload me-1"></i>Importer</button>
+    <input type="file" id="importInput" accept=".gpx,.kml" multiple hidden>
+</div>
+
+<div class="row g-3 mb-3" id="totals"></div>
+
+<div class="row g-3 mb-3">
+    <div class="col-lg-8">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <h2 class="h6 mb-0 me-auto">Volume par période</h2>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Mesure" id="metricSwitch">
+                        <button type="button" class="btn btn-outline-secondary active" data-metric="distance_km">Distance</button>
+                        <button type="button" class="btn btn-outline-secondary" data-metric="ascent_m">D+</button>
+                        <button type="button" class="btn btn-outline-secondary" data-metric="time_s">Temps</button>
+                    </div>
+                </div>
+                <div class="chart-box"><canvas id="volumeChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h2 class="h6">Records</h2>
+                <ul class="list-group list-group-flush" id="records"></ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <h2 class="h6">Activités</h2>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Date</th><th>Nom</th><th>Type</th>
+                        <th class="text-end">Distance</th><th class="text-end">D+</th>
+                        <th class="text-end">Temps</th><th class="text-end">Vitesse moy.</th><th></th>
+                    </tr>
+                </thead>
+                <tbody id="activities"></tbody>
+            </table>
+        </div>
+        <p class="text-muted small mt-2 mb-0" id="activitiesEmpty" hidden>
+            Aucune activité. Dépose des GPX dans le dossier surveillé ou utilise « Importer ».
+        </p>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

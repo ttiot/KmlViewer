@@ -1,3 +1,7 @@
 .history
 *.kml
 __pycache__
+data/
+inbox/
+.env
+.venv/

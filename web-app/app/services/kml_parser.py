@@ -5,6 +5,7 @@ Extrait toutes les informations pertinentes des fichiers KML, y compris les exte
 
 import re
 import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring as safe_fromstring  # anti XXE / bombes d'entités
 import logging
 from app.services.timing_tools import track_time
 from xml.etree.ElementTree import tostring
@@ -43,7 +44,7 @@ class KMLParser:
             dict: Structure complète avec success, features, metadata et error
         """
         try:
-            root = ET.fromstring(kml_content)
+            root = safe_fromstring(kml_content)
             
             # Extraire les métadonnées globales
             metadata = KMLParser._extract_metadata(root)
@@ -702,7 +703,7 @@ class KMLParser:
         namespaces = KMLParser.NAMESPACES
         
         try:
-            root = ET.fromstring(kml_content)
+            root = safe_fromstring(kml_content)
             folders = root.findall('.//kml:Folder', namespaces)
 
             for folder in folders:

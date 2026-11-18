@@ -1,54 +1,56 @@
 # Stage 1: Build stage
-FROM python:3.11-slim AS builder
+FROM python:3.15-slim AS builder
 
-# Installer les outils de build nécessaires
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
 
-# Définir le répertoire de travail
 WORKDIR /app
-
-# Copier et installer les dépendances
 COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+# --require-hashes : chaque paquet, transitif compris, doit correspondre au verrou
+RUN pip install --no-cache-dir --user --require-hashes -r requirements.txt
 
 # Stage 2: Production stage
-FROM python:3.11-slim
+FROM python:3.15-slim
 
-# Créer un utilisateur non-root pour la sécurité
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Utilisateur non-root à UID fixe (pratique pour les droits des volumes montés).
+# pip est retiré : inutile à l'exécution, et ses bibliothèques embarquées traînent des CVE.
+# apt-get upgrade : applique les correctifs de sécurité Debian parus depuis la dernière
+# publication de l'image de base (la CI reconstruit chaque semaine pour les récupérer).
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser appuser && \
+    python -m pip uninstall -y --root-user-action=ignore pip && \
+    rm -rf /usr/local/lib/python3.15/ensurepip
 
-# Copier les dépendances installées depuis le stage de build
-COPY --from=builder /root/.local /home/appuser/.local
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
-# Définir le répertoire de travail
 WORKDIR /app
-
-# Copier le code de l'application
 COPY . .
 
-# Créer les dossiers nécessaires et ajuster les permissions
-RUN mkdir -p uploads && \
-    chown -R appuser:appuser /app
+# Le code reste en lecture seule pour l'appli ; seul /data est inscriptible
+# /dem : cible du téléchargeur de dalles (service dem-tiles), le volume hérite de ces droits
+RUN mkdir -p /data /dem /app/uploads && chown -R appuser:appuser /data /dem /app/uploads && chmod 700 /data
 
-# Passer à l'utilisateur non-root
 USER appuser
 
-# Ajouter le répertoire local des packages Python au PATH
-ENV PATH=/home/appuser/.local/bin:$PATH
+# Version publiée par /api/health ; la CI y met le tag de release
+ARG APP_VERSION=dev
 
-# Définir les variables d'environnement
-ENV FLASK_APP=kml_viewer.py
-ENV FLASK_ENV=production
-ENV PYTHONPATH=/app
+ENV PATH=/home/appuser/.local/bin:$PATH \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    FLASK_APP=kml_viewer.py \
+    FLASK_ENV=production \
+    DATA_DIR=/data \
+    APP_VERSION=${APP_VERSION}
 
-# Exposer le port sur lequel l'application s'exécute
+VOLUME ["/data"]
 EXPOSE 5000
 
-# Vérification de santé
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/api/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health', timeout=5)" || exit 1
 
-# Commande pour démarrer l'application
-CMD ["python", "kml_viewer.py"]
+# Un seul worker : l'éditeur et le cache gardent de l'état en mémoire, et le dossier
+# surveillé tourne dans ce processus. Les threads absorbent la concurrence.
+# Pas de socket de contrôle : inutile ici, et le système de fichiers est en lecture seule.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", \
+     "--timeout", "120", "--access-logfile", "-", "--no-control-socket", "kml_viewer:app"]

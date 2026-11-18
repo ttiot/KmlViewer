@@ -1,0 +1,4 @@
+# Outils de test, non installés dans l'image. Verrou : requirements-dev.txt
+#   uv pip compile requirements-dev.in --generate-hashes --python-version 3.15 --upgrade -o requirements-dev.txt
+-c requirements.txt
+pytest

@@ -2,7 +2,7 @@
 Routes API REST de l'application.
 """
 
-from flask import request, jsonify
+from flask import current_app, request, jsonify
 from app.api import bp
 from app.services.kml_parser import KMLParser
 from app.services.gpx_parser import GPXParser
@@ -142,7 +142,7 @@ def health_check():
     """Endpoint de vérification de santé de l'API."""
     return jsonify({
         'status': 'healthy',
-        'version': '2.0.0',
+        'version': current_app.config['APP_VERSION'],
         'api': 'KML/GPX Viewer API'
     })
 

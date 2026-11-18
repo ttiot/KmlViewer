@@ -1,0 +1,54 @@
+{% extends 'layout.html' %}
+{% block title %}Tronçons{% endblock %}
+{% block content %}
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-body">
+                <h1 class="h5">Mes tronçons</h1>
+                <div class="list-group list-group-flush" id="segmentList"></div>
+                <p class="text-muted small mb-0" id="segmentsEmpty" hidden>Aucun tronçon pour l'instant.</p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6">Nouveau tronçon</h2>
+                <p class="text-muted small">Choisis une activité, puis clique sur la trace pour poser le départ et l'arrivée.</p>
+                <select id="activitySelect" class="form-select form-select-sm mb-2" aria-label="Activité de référence">
+                    <option value="">— Activité de référence —</option>
+                </select>
+                <input type="text" id="segmentName" class="form-control form-control-sm mb-2"
+                       maxlength="100" placeholder="Nom du tronçon">
+                <p class="small mb-2" id="selectionInfo">Aucune sélection.</p>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" id="createButton" disabled>Créer</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="resetButton">Réinitialiser</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div id="segmentMap" class="segment-map mb-3"></div>
+        <div class="card" id="segmentDetail" hidden>
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <h2 class="h6 mb-0 me-auto" id="detailTitle"></h2>
+                    <button type="button" class="btn btn-sm btn-outline-secondary me-2" id="rescanButton">
+                        <i class="fas fa-rotate me-1"></i>Rechercher à nouveau</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" id="deleteButton">
+                        <i class="fas fa-trash me-1"></i>Supprimer</button>
+                </div>
+                <table class="table table-sm align-middle mb-0">
+                    <thead><tr><th>#</th><th>Temps</th><th>Vitesse moy.</th><th>Date</th><th>Activité</th></tr></thead>
+                    <tbody id="efforts"></tbody>
+                </table>
+                <p class="text-muted small mt-2 mb-0" id="effortsEmpty" hidden>Aucun passage trouvé sur ce tronçon.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='js/segments.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,77 @@
+// Utilitaires partagés par les pages bibliothèque.
+// Règle : toute donnée venant du serveur est insérée via textContent, jamais innerHTML.
+'use strict';
+
+const App = (() => {
+    async function api(path, options = {}) {
+        const init = { credentials: 'same-origin', ...options };
+        if (init.body && !(init.body instanceof FormData)) {
+            init.headers = { 'Content-Type': 'application/json', ...(init.headers || {}) };
+            init.body = JSON.stringify(init.body);
+        }
+        const response = await fetch(path, init);
+        if (response.status === 401) {
+            window.location.assign('/auth/login?next=' + encodeURIComponent(window.location.pathname));
+            throw new Error('Session expirée');
+        }
+        let data = null;
+        try { data = await response.json(); } catch (_) { /* réponse non JSON */ }
+        if (!response.ok) {
+            throw new Error((data && data.error) || `Erreur ${response.status}`);
+        }
+        return data;
+    }
+
+    // Crée un élément DOM ; les enfants textuels passent par des nœuds texte.
+    function el(tag, attrs = {}, ...children) {
+        const node = document.createElement(tag);
+        for (const [key, value] of Object.entries(attrs)) {
+            if (value === null || value === undefined || value === false) continue;
+            if (key === 'class') node.className = value;
+            else if (key === 'dataset') Object.assign(node.dataset, value);
+            else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+            else node.setAttribute(key, value === true ? '' : value);
+        }
+        for (const child of children.flat()) {
+            if (child === null || child === undefined) continue;
+            node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+        }
+        return node;
+    }
+
+    function icon(name) { return el('i', { class: `fas fa-${name}` }); }
+
+    function notify(message, type = 'info') {
+        const box = document.getElementById('pageAlert');
+        if (!box) return;
+        box.className = `alert alert-${type}`;
+        box.textContent = message;
+        clearTimeout(notify.timer);
+        notify.timer = setTimeout(() => box.classList.add('d-none'), 6000);
+    }
+
+    const number = (value, digits = 0) =>
+        Number(value || 0).toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+    function duration(seconds) {
+        if (seconds === null || seconds === undefined) return '—';
+        const s = Math.round(seconds);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        const pad = (v) => String(v).padStart(2, '0');
+        return h > 0 ? `${h} h ${pad(m)} min` : `${m} min ${pad(sec)} s`;
+    }
+
+    function chrono(seconds) {
+        const s = Math.round(seconds);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        const pad = (v) => String(v).padStart(2, '0');
+        return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+    }
+
+    const distance = (meters) => `${number(meters / 1000, 1)} km`;
+    const speed = (meters, seconds) => (seconds > 0 ? `${number(meters / seconds * 3.6, 1)} km/h` : '—');
+    const date = (iso) => (iso ? new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+    const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+
+    return { api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime };
+})();

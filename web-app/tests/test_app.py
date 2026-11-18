@@ -18,14 +18,14 @@ def test_main_route(client):
     assert b'Visualiseur KML' in response.data
 
 
-def test_api_health(client):
+def test_api_health(app, client):
     """Test de l'endpoint de santé de l'API."""
     response = client.get('/api/health')
     assert response.status_code == 200
     
     json_data = response.get_json()
     assert json_data['status'] == 'healthy'
-    assert json_data['version'] == '2.0.0'
+    assert json_data['version'] == app.config['APP_VERSION']
     assert json_data['api'] == 'KML/GPX Viewer API'
 
 
