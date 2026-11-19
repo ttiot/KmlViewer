@@ -94,7 +94,7 @@ Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 | `backup [--keep N]` | Copie cohérente de la base dans `/data/backups` |
 | `inbox-scan` | Passe une fois sur le dossier surveillé |
 | `recompute-stats` | Recalcule distance, durées et records des activités déjà stockées (à lancer après une mise à jour qui corrige ces calculs) |
-| `user-admin <login>` | Donne (ou retire, `--revoke`) le rôle admin |
+| `user-admin <login>` | Donne le rôle admin et active le compte (c'est ainsi que se désigne le premier admin) ; `--revoke` retire le rôle |
 
 ## 🏗️ Architecture
 
@@ -111,7 +111,8 @@ web-app/
 │   ├── db.py              SQLite et migrations
 │   └── cli.py             commandes d'exploitation
 ├── static/
-│   ├── js/viewer/         visualiseur : core, map, points, files, analysis, editor, main
+│   ├── js/viewer/         visualiseur : core, prefs, map, settings, payload, points, files, opener,
+│   │                      analysis, editor, library, main
 │   ├── js/                pages bibliothèque (dashboard, segments, users) et utilitaires
 │   └── vendor/            Leaflet, Bootstrap, Chart.js, Font Awesome (embarqués, sans CDN)
 ├── templates/
@@ -141,11 +142,15 @@ L'API de la bibliothèque est décrite dans [docs/bibliotheque.md](docs/biblioth
 ## 🔧 Configuration
 
 Tout passe par des variables d'environnement, listées et commentées dans `.env.example`
-(clé de session, OIDC, dossier surveillé, correction d'altitude, fuseau horaire).
+(mode d'authentification, clé de session, OIDC, dossier surveillé, correction d'altitude,
+fuseau horaire). Sans aucune variable, l'application tourne en mode local sans
+authentification, joignable uniquement sous le nom `localhost`. En production, renseigner
+`AUTH_MODE=oidc`, `TRUSTED_HOSTS` et les variables OIDC : une configuration incomplète ou
+dangereuse empêche le démarrage (détail dans [docs/bibliotheque.md](docs/bibliotheque.md)).
 Pour changer le port, modifier `ports` dans `docker-compose.yml`.
 
 Les fonds de carte se déclarent dans `web-app/static/js/viewer/map.js` (`initMap`) et
-`web-app/templates/sidebar.html`.
+`web-app/templates/viewer/map_settings.html`.
 
 ## 🐛 Dépannage
 

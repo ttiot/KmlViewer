@@ -5,72 +5,9 @@
 
 /* ------------------------------------------------------------ Structure */
 
-.sidebar {
-    position: fixed;
-    top: var(--navbar-h);
-    left: 0;
-    width: 340px;
-    height: calc(100vh - var(--navbar-h));
-    background: var(--surface);
-    border-right: 1px solid var(--border);
-    transform: translateX(0);
-    transition: transform 0.25s ease;
-    z-index: 999;
-    overflow-y: auto;
-}
-
-.sidebar.collapsed {
-    transform: translateX(-340px);
-}
-
-.sidebar-content {
-    padding: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 22px;
-}
-
-.sidebar-toggle {
-    position: fixed;
-    top: calc(var(--navbar-h) + 18px);
-    left: 340px;
-    width: 26px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--surface);
-    color: var(--text-2);
-    border: 1px solid var(--border);
-    border-left: 0;
-    border-radius: 0 10px 10px 0;
-    box-shadow: var(--shadow-1);
-    cursor: pointer;
-    z-index: 1001;
-    font-size: 0.75rem;
-    transition: left 0.25s ease, color 0.15s ease, background-color 0.15s ease;
-}
-
-.sidebar-toggle:hover {
-    background: var(--surface-3);
-    color: var(--text);
-}
-
-.sidebar.collapsed + .main-content .sidebar-toggle,
-.sidebar.collapsed ~ .sidebar-toggle {
-    left: 0;
-}
-
 .main-content {
-    margin-left: 340px;
-    transition: margin-left 0.25s ease;
     padding: 20px 24px 32px;
     min-height: calc(100vh - var(--navbar-h));
-}
-
-.main-content.expanded {
-    margin-left: 0;
-    padding-left: 44px;
 }
 
 /* Carte seule, ou carte + liste des points quand celle-ci est affichée */
@@ -81,8 +18,16 @@
     margin-bottom: 20px;
 }
 
-.viewer-grid:has(#pointsList:not([style*="none"])) {
+.viewer-grid:has(#pointsList:not([hidden])) {
     grid-template-columns: minmax(0, 1fr) 330px;
+}
+
+/* isolation : les couches et contrôles Leaflet (z-index jusqu'à 1000) restent empilés
+   entre eux, sans passer devant le menu « Ouvrir » ni les notifications de la page. */
+.map-area {
+    position: relative;
+    isolation: isolate;
+    min-width: 0;
 }
 
 #map {
@@ -94,17 +39,6 @@
     overflow: hidden;
 }
 
-/* --------------------------------------------------- Panneaux de la barre latérale */
-
-.control-panel,
-.layer-control {
-    background: transparent;
-    padding: 0;
-    margin: 0;
-}
-
-.control-panel h5,
-.layer-control h6,
 .section-title {
     display: flex;
     align-items: center;
@@ -117,94 +51,268 @@
     color: var(--text-3);
 }
 
-.control-panel h5 i,
-.layer-control h6 i,
 .section-title i {
     margin: 0 !important;
     font-size: 0.8rem;
     color: var(--accent-text);
 }
 
-.control-panel h6 {
-    font-size: 0.74rem;
+/* ------------------------------------------- Barre du visualiseur et onglets */
+
+.viewer-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.viewer-bar .dropdown {
+    flex: none;
+}
+
+.open-menu {
+    min-width: 260px;
+    max-width: min(340px, calc(100vw - 32px));
+}
+
+.open-menu-option {
+    margin: 4px 16px 0 16px;
+    font-size: 0.9rem;
+}
+
+.sample-file-item {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.9rem;
+}
+
+/* Beaucoup de fichiers ouverts : la barre défile horizontalement, sans retour à la ligne */
+.file-tabs {
+    flex: 1;
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 3px;
+    scrollbar-width: thin;
+}
+
+/* Un onglet = une pastille portant le nom du fichier, l'œil et la croix */
+.file-tab {
+    flex: none;
+    display: flex;
+    align-items: center;
+    padding-right: 4px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    color: var(--text-2);
+}
+
+.file-tab.active {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+}
+
+.file-tab .nav-link,
+.file-tab .nav-link.active {
+    max-width: 220px;
+    margin: 0;
+    padding: 6px 6px 6px 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: transparent;
+    color: inherit;
+}
+
+.file-tab.is-hidden .nav-link {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+/* Modifications non exportées : pastille devant le nom */
+.file-tab.is-unsaved .nav-link::before {
+    content: "●";
+    margin-right: 6px;
+    font-size: 0.6rem;
+    vertical-align: middle;
+    color: var(--warn);
+}
+
+.file-tab-action {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    font-size: 0.78rem;
+    opacity: 0.75;
+}
+
+.file-tab-action:hover,
+.file-tab-action:focus-visible {
+    background: var(--surface);
+    opacity: 1;
+}
+
+.file-tab-close:hover {
+    color: var(--bad);
+}
+
+/* ----------------------------------------------- État vide et dépôt de fichiers */
+
+/* Posé sur la carte ; seul l'encart capte la souris, la carte reste manipulable autour.
+   z-index : au-dessus des couches Leaflet (700 au plus), sous ses contrôles (1000). */
+.viewer-empty {
+    position: absolute;
+    inset: 0;
+    z-index: 750;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    pointer-events: none;
+}
+
+.viewer-empty-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    max-width: min(360px, 100%);
+    padding: 22px 26px;
+    text-align: center;
+    background: var(--surface);
+    color: var(--text);
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius-l);
+    box-shadow: var(--shadow-2);
+    pointer-events: auto;
+}
+
+.viewer-empty-box > i,
+.drop-overlay-box > i {
+    font-size: 2rem;
+    color: var(--accent-text);
+}
+
+.viewer-empty-box .text-muted {
+    font-size: 0.85rem;
+}
+
+.viewer-empty-box .btn-primary {
+    margin-top: 8px;
+}
+
+/* Voile plein écran pendant le survol avec des fichiers. Il ne capte pas la souris :
+   le dépôt est reçu par la page, et le voile n'émet aucun dragenter / dragleave. */
+.drop-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    pointer-events: none;
+}
+
+.drop-overlay-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 40px 48px;
+    max-width: 100%;
+    text-align: center;
+    font-size: 1.1rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-l);
+    box-shadow: var(--shadow-3);
+}
+
+/* ---------------------------------------- Réglages de la carte (fond, unités) */
+
+/* Bouton au gabarit des boutons de zoom Leaflet (26 px, 30 px sur écran tactile) */
+.map-settings {
+    position: relative;
+}
+
+.map-settings-toggle {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s);
+    box-shadow: var(--shadow-2);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.leaflet-touch .map-settings-toggle {
+    width: 32px;
+    height: 32px;
+}
+
+.map-settings-toggle:hover,
+.map-settings-toggle[aria-expanded="true"] {
+    background: var(--surface-3);
+}
+
+.map-settings-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: max-content;
+    max-width: min(280px, calc(100vw - 64px));
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 12px 14px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    box-shadow: var(--shadow-3);
+    font-size: 0.875rem;
+    cursor: default;
+}
+
+.map-settings-panel fieldset + fieldset {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.map-settings-panel legend {
+    float: none;
+    width: auto;
+    margin: 0 0 6px;
+    font-size: 0.72rem;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-3);
-    margin-bottom: 8px;
 }
 
-.layer-control {
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-}
-
-.layer-control .form-check {
-    padding: 6px 8px 6px 2rem;
-    margin: 0 -8px;
-    border-radius: var(--radius-s);
-    transition: background-color 0.12s ease;
-}
-
-.layer-control .form-check:hover {
-    background: var(--surface-2);
-}
-
-.layer-control .form-check-label {
-    font-size: 0.9rem;
-    color: var(--text);
-    cursor: pointer;
-}
-
-.file-upload-area {
-    border: 1.5px dashed var(--border-strong);
-    border-radius: var(--radius-m);
-    background: var(--surface-2);
-    padding: 26px 16px;
-    text-align: center;
-    transition: border-color 0.15s ease, background-color 0.15s ease;
-    cursor: pointer;
-}
-
-.file-upload-area i {
-    color: var(--accent-text) !important;
-    opacity: 0.9;
-}
-
-.file-upload-area h6 {
-    font-size: 0.92rem;
-    font-weight: 600;
-    text-transform: none;
-    letter-spacing: 0;
-    color: var(--text);
-    margin-bottom: 2px;
-}
-
-.file-upload-area p {
-    font-size: 0.82rem;
+.map-settings-panel .form-check {
     margin: 0;
+    padding-top: 3px;
+    padding-bottom: 3px;
 }
 
-.file-upload-area:hover,
-.file-upload-area.dragover {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-}
-
-.sample-file-btn {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 4px 12px;
-    font-size: 0.8rem;
-    border-radius: 999px;
-}
-
-#uploadedFiles .form-check-label {
-    font-size: 0.9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.map-settings-panel .form-check-label {
+    color: var(--text);
+    cursor: pointer;
 }
 
 /* ----------------------------------------------------- Panneaux du contenu */
@@ -406,7 +514,7 @@
 /* ------------------------------------------------------------- Responsive */
 
 @media (max-width: 991px) {
-    .viewer-grid:has(#pointsList:not([style*="none"])) {
+    .viewer-grid:has(#pointsList:not([hidden])) {
         grid-template-columns: minmax(0, 1fr);
     }
 
@@ -417,30 +525,23 @@
 }
 
 @media (max-width: 768px) {
-    .sidebar {
-        width: 300px;
-    }
-
-    .sidebar.collapsed {
-        transform: translateX(-300px);
-    }
-
-    .sidebar-toggle {
-        left: 300px;
-    }
-
     .main-content {
-        margin-left: 0;
         padding: 16px 16px 24px;
     }
 
     .app-navbar .nav-link span {
         display: none;
     }
-}
 
-.layer-control .form-check.mb-2 {
-    margin-bottom: 0 !important;
+    .file-tab .nav-link,
+    .file-tab .nav-link.active {
+        max-width: 140px;
+    }
+
+    .alert-popup {
+        min-width: 0;
+        max-width: calc(100vw - 40px);
+    }
 }
 
 /* Étiquettes de la liste des points : teintes douces du thème plutôt que les aplats Bootstrap */

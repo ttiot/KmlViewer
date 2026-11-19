@@ -2,6 +2,7 @@
 'use strict';
 
 const LINE_TYPES = ['polyline', 'track', 'multitrack'];
+const METERS_PER_DEGREE = 111000; // 1° ≈ 111 km : ordre de grandeur, pas une mesure
 
 function initMap() {
     Viewer.map = L.map('map').setView([46.603354, 1.888334], 6); // centre de la France
@@ -18,16 +19,22 @@ function initMap() {
         toner: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             maxZoom: 20, attribution: '© OpenStreetMap contributors © CARTO' }),
     };
-    Viewer.baseLayers.osm.addTo(Viewer.map);
+    setBaseLayer('osm');
 
-    document.querySelectorAll('input[name="baseLayer"]').forEach((radio) => {
-        radio.addEventListener('change', () => {
-            const next = Viewer.baseLayers[radio.value];
-            if (!next) return;
-            Object.values(Viewer.baseLayers).forEach((layer) => Viewer.map.removeLayer(layer));
-            next.addTo(Viewer.map);
-        });
-    });
+    // La carte change de largeur quand la liste des points apparaît : Leaflet doit
+    // recalculer sa taille, sinon une bande grise reste affichée.
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => Viewer.map.invalidateSize()).observe(Viewer.map.getContainer());
+    }
+}
+
+// Affiche le fond de carte demandé (nom inconnu : sans effet). Retourne true s'il est affiché.
+function setBaseLayer(name) {
+    const next = Object.prototype.hasOwnProperty.call(Viewer.baseLayers, name) ? Viewer.baseLayers[name] : null;
+    if (!next) return false;
+    Object.values(Viewer.baseLayers).forEach((layer) => { if (layer !== next) Viewer.map.removeLayer(layer); });
+    if (!Viewer.map.hasLayer(next)) next.addTo(Viewer.map);
+    return true;
 }
 
 // ----------------------------------------------------------------- Styles KML
@@ -88,23 +95,18 @@ function outerRing(coordinates) {
 function polygonMetrics(coordinates) {
     const ring = outerRing(coordinates);
     if (!ring) return { area: null, perimeter: null };
-    const metersPerDegree = 111000;
     let area = 0, perimeter = 0;
     for (let i = 0; i < ring.length; i++) {
         const j = (i + 1) % ring.length;
         area += ring[i][0] * ring[j][1] - ring[j][0] * ring[i][1];
         perimeter += Math.hypot(ring[j][0] - ring[i][0], ring[j][1] - ring[i][1]);
     }
-    return { area: Math.abs(area) / 2 * metersPerDegree ** 2, perimeter: perimeter * metersPerDegree };
+    return { area: Math.abs(area) / 2 * METERS_PER_DEGREE ** 2, perimeter: perimeter * METERS_PER_DEGREE };
 }
 
 function formatArea(area) {
     if (area < 1e6) return `${Math.round(area)} m²`;
     return `${(area / 1e6).toFixed(area < 1e9 ? 2 : 0)} km²`;
-}
-
-function formatDistance(distance) {
-    return distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(2)} km`;
 }
 
 function buildPolygon(feature, style) {
@@ -136,7 +138,7 @@ function buildPolygon(feature, style) {
     const { area, perimeter } = polygonMetrics(coordinates);
     const stats = el('small', { class: 'text-muted' }, el('i', { class: 'fas fa-draw-polygon me-1' }), 'Polygone');
     if (area) stats.append(el('br'), el('i', { class: 'fas fa-expand-arrows-alt me-1' }), `Surface : ~${formatArea(area)}`);
-    if (perimeter) stats.append(el('br'), el('i', { class: 'fas fa-ruler me-1' }), `Périmètre : ~${formatDistance(perimeter)}`);
+    if (perimeter) stats.append(el('br'), el('i', { class: 'fas fa-ruler me-1' }), `Périmètre : ~${App.distance(perimeter)}`);
     const description = descriptionNodes(feature.description);
     polygon.bindPopup(el('div', { class: 'popup-content' },
         el('strong', {}, feature.name || 'Polygone'),

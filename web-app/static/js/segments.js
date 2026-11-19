@@ -2,8 +2,11 @@
 
 (() => {
     const { api, el, notify, chrono, distance, speed, date } = App;
+    const ACTIVITY_PAGE = 500; // plafond de `limit` côté API
     const state = { map: null, trackLayer: null, selectionLayer: null, segmentLayer: null, markers: [],
-                    track: null, startIdx: null, endIdx: null, current: null };
+                    track: null, startIdx: null, endIdx: null, current: null,
+                    trackRequest: 0,      // numéro du dernier chargement de trace demandé
+                    activitiesLoaded: 0 };
 
     function initMap() {
         state.map = L.map('segmentMap').setView([46.6, 2.5], 6);
@@ -68,17 +71,27 @@
         updateSelectionInfo();
     }
 
+    // Deux activités choisies coup sur coup : seule la réponse du dernier choix est
+    // affichée. Sans ce jeton, une réponse tardive laisserait une trace orpheline sur la
+    // carte et un tronçon serait créé sur une autre activité que celle affichée.
     async function loadTrack(activityId) {
+        const request = ++state.trackRequest;
         clearLayer('trackLayer');
         resetSelection();
         state.track = null;
         if (!activityId) { updateSelectionInfo(); return; }
         try {
-            state.track = await api(`/api/activities/${activityId}/track`);
-            state.trackLayer = L.polyline(state.track.coordinates, { color: AppTheme.color('--viz-1'), weight: 4 }).addTo(state.map);
+            const track = await api(`/api/activities/${activityId}/track`);
+            if (request !== state.trackRequest) return;
+            clearLayer('trackLayer');
+            state.track = track;
+            state.trackLayer = L.polyline(track.coordinates, { color: AppTheme.color('--viz-1'), weight: 4 }).addTo(state.map);
             state.trackLayer.on('click', onTrackClick);
             state.map.fitBounds(state.trackLayer.getBounds(), { padding: [20, 20] });
-        } catch (error) { notify(error.message, 'danger'); }
+        } catch (error) {
+            if (request !== state.trackRequest) return;
+            notify(error.message, 'danger');
+        }
         updateSelectionInfo();
     }
 
@@ -119,16 +132,21 @@
         document.getElementById('segmentsEmpty').hidden = segments.length > 0;
     }
 
+    // Ajoute au sélecteur la page suivante d'activités ; le bouton « plus anciennes » reste
+    // affiché tant que la dernière page reçue était pleine.
     async function loadActivities() {
-        const { activities } = await api('/api/activities?limit=500');
-        const select = document.getElementById('activitySelect');
-        select.append(...activities.map((a) =>
+        const params = new URLSearchParams({ limit: ACTIVITY_PAGE, offset: state.activitiesLoaded });
+        const { activities } = await api(`/api/activities?${params}`);
+        state.activitiesLoaded += activities.length;
+        document.getElementById('activitySelect').append(...activities.map((a) =>
             el('option', { value: a.id }, `${date(a.start_time)} · ${a.name} (${distance(a.distance_m)})`)));
+        document.getElementById('moreActivitiesButton').hidden = activities.length < ACTIVITY_PAGE;
     }
 
     async function createSegment() {
         const name = document.getElementById('segmentName').value.trim();
         if (!name) { notify('Donne un nom au tronçon.', 'warning'); return; }
+        if (!state.track || state.startIdx === null || state.endIdx === null) return;
         try {
             const data = await api('/api/segments', { method: 'POST', body: {
                 name, activity_id: state.track.id,
@@ -168,6 +186,9 @@
         document.getElementById('createButton').addEventListener('click', createSegment);
         document.getElementById('deleteButton').addEventListener('click', deleteCurrent);
         document.getElementById('rescanButton').addEventListener('click', rescanCurrent);
+        document.getElementById('moreActivitiesButton').addEventListener('click', () => {
+            loadActivities().catch((error) => notify(error.message, 'danger'));
+        });
         Promise.all([loadSegments(), loadActivities()]).catch((error) => notify(error.message, 'danger'));
     });
 })();

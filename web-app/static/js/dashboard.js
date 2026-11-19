@@ -2,7 +2,13 @@
 
 (() => {
     const { api, el, icon, notify, number, duration, chrono, distance, speed, date } = App;
-    const state = { period: 'week', metric: 'distance_km', type: '', stats: null, chart: null };
+    const PAGE_SIZE = 100;  // activités demandées par page
+    const MAX_LIMIT = 500;  // plafond de `limit` côté API
+    const state = { period: 'week', metric: 'distance_km', type: '', stats: null, chart: null,
+                    demEnabled: false, activities: [], hasMore: false, total: null,
+                    // Numéro de la dernière requête de chaque liste : une réponse plus ancienne,
+                    // arrivée en retard, ne doit pas écraser l'affichage du filtre courant
+                    requests: { dashboard: 0, activities: 0 } };
 
     const METRICS = {
         distance_km: { label: 'Distance (km)', title: 'Distance', format: (v) => `${number(v, 1)} km` },
@@ -70,10 +76,16 @@
         state.chart = new Chart(document.getElementById('volumeChart'), config);
     }
 
+    // Meilleur temps sur une distance (chrono) ou plus longue durée ? L'API range encore les
+    // deux sous kind = 'time' : en attendant un kind = 'best_effort', seul endroit où le
+    // libellé sert de repli.
+    const isBestEffort = (record) => record.kind === 'best_effort'
+        || (record.kind === 'time' && String(record.label || '').startsWith('Meilleur'));
+
     function recordValue(record) {
         if (record.kind === 'distance') return distance(record.value);
         if (record.kind === 'ascent') return `${number(record.value)} m`;
-        return record.label.startsWith('Meilleur') ? chrono(record.value) : duration(record.value);
+        return isBestEffort(record) ? chrono(record.value) : duration(record.value);
     }
 
     function renderRecords(records) {
@@ -85,11 +97,11 @@
             return;
         }
         const recordIcon = (r) => (r.kind === 'distance' ? 'road' : r.kind === 'ascent' ? 'mountain'
-            : r.label.startsWith('Meilleur') ? 'bolt' : 'clock');
+            : isBestEffort(r) ? 'bolt' : 'clock');
         list.replaceChildren(...records.map((r) =>
             el('div', { class: 'record-item' },
                 el('span', { class: 'record-icon' }, icon(recordIcon(r))),
-                el('div', { class: 'min-w-0' },
+                el('div', { class: 'record-body' },
                     el('div', { class: 'record-label' }, r.label),
                     el('a', { class: 'record-source', href: `/?activity=${r.activity_id}` },
                         `${r.activity_name} · ${date(r.date)}`)),
@@ -150,23 +162,58 @@
         } catch (error) { notify(error.message, 'danger'); }
     }
 
-    async function loadActivities() {
-        const query = state.type ? `?type=${encodeURIComponent(state.type)}` : '';
-        const data = await api(`/api/activities${query}`);
+    function renderActivities() {
+        const shown = state.activities.length;
+        document.getElementById('activities').replaceChildren(...state.activities.map(activityRow));
+        document.getElementById('activitiesEmpty').hidden = shown > 0;
+        document.getElementById('activitiesTable').hidden = shown === 0;
+        document.getElementById('activitiesMore').hidden = shown === 0;
+        document.getElementById('loadMoreButton').hidden = !state.hasMore;
+        // Total : celui de l'API s'il est fourni, sinon connu seulement une fois la liste épuisée
+        const total = state.total !== null ? state.total : (state.hasMore ? null : shown);
+        document.getElementById('activitiesCount').textContent = total === null
+            ? `${shown} activités affichées`
+            : `${shown} activité(s) affichée(s) sur ${total}`;
+    }
+
+    // Charge la liste des activités. `more` ajoute la page suivante ; sinon la liste est
+    // relue depuis le début, sur la même longueur que celle déjà affichée (après un
+    // renommage ou une suppression, on ne revient pas à la première page).
+    async function loadActivities({ more = false } = {}) {
+        const request = ++state.requests.activities;
+        const offset = more ? state.activities.length : 0;
+        const limit = more ? PAGE_SIZE : Math.min(MAX_LIMIT, Math.max(PAGE_SIZE, state.activities.length));
+        const params = new URLSearchParams({ limit, offset });
+        if (state.type) params.set('type', state.type);
+        const data = await api(`/api/activities?${params}`);
+        if (request !== state.requests.activities) return;
+
+        // Le type filtré n'existe plus (dernière activité de ce type supprimée ou renommée) :
+        // on revient à « Tous les types » plutôt que d'afficher un tableau vide
+        if (state.type && !data.types.includes(state.type)) {
+            state.type = '';
+            await refresh();
+            return;
+        }
         state.demEnabled = data.dem_enabled;
-        document.getElementById('activities').replaceChildren(...data.activities.map(activityRow));
-        document.getElementById('activitiesEmpty').hidden = data.activities.length > 0;
-        document.getElementById('activitiesTable').hidden = data.activities.length === 0;
+        state.activities = more ? state.activities.concat(data.activities) : data.activities;
+        state.hasMore = data.activities.length === limit;
+        state.total = Number.isInteger(data.total) ? data.total : null;
+        renderActivities();
 
         const select = document.getElementById('typeFilter');
         select.replaceChildren(el('option', { value: '' }, 'Tous les types'),
             ...data.types.map((t) => el('option', { value: t, selected: t === state.type }, t)));
+        select.value = state.type;
     }
 
     async function loadDashboard() {
-        const params = new URLSearchParams({ period: state.period });
+        const request = ++state.requests.dashboard;
+        const period = state.period;
+        const params = new URLSearchParams({ period });
         if (state.type) params.set('type', state.type);
         const data = await api(`/api/dashboard?${params}`);
+        if (request !== state.requests.dashboard) return;
         state.stats = data.stats;
         renderTotals(data.stats);
         renderChart();
@@ -211,7 +258,11 @@
         document.addEventListener('themechange', renderChart);
         document.getElementById('typeFilter').addEventListener('change', (event) => {
             state.type = event.target.value;
+            state.activities = []; // autre filtre : la liste repart de la première page
             refresh();
+        });
+        document.getElementById('loadMoreButton').addEventListener('click', () => {
+            loadActivities({ more: true }).catch((e) => notify(e.message, 'danger'));
         });
         const input = document.getElementById('importInput');
         document.getElementById('importButton').addEventListener('click', () => input.click());

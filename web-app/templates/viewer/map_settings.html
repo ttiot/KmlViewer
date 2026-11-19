@@ -1,0 +1,43 @@
+<div class="map-settings" id="mapSettings" hidden>
+    <button type="button" class="map-settings-toggle" id="mapSettingsToggle"
+            title="Fond de carte et unités" aria-label="Fond de carte et unités"
+            aria-expanded="false" aria-controls="mapSettingsPanel">
+        <i class="fas fa-layer-group"></i>
+    </button>
+    <div class="map-settings-panel" id="mapSettingsPanel" hidden>
+        <fieldset>
+            <legend>Fond de carte</legend>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="baseLayer" id="osm" value="osm" checked>
+                <label class="form-check-label" for="osm">OpenStreetMap</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="baseLayer" id="satellite" value="satellite">
+                <label class="form-check-label" for="satellite">Satellite (Esri)</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="baseLayer" id="terrain" value="terrain">
+                <label class="form-check-label" for="terrain">Terrain (OpenTopoMap)</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="baseLayer" id="cartodb" value="cartodb">
+                <label class="form-check-label" for="cartodb">CartoDB Positron</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="baseLayer" id="toner" value="toner">
+                <label class="form-check-label" for="toner">CartoDB Dark Matter</label>
+            </div>
+        </fieldset>
+        <fieldset>
+            <legend>Unités</legend>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="displayMode" id="doubleUnit" value="double" checked>
+                <label class="form-check-label" for="doubleUnit">Double (km/h + kts, ft + m)</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="displayMode" id="simpleUnit" value="simple">
+                <label class="form-check-label" for="simpleUnit">Simple (km/h, m)</label>
+            </div>
+        </fieldset>
+    </div>
+</div>

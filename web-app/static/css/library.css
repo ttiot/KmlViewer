@@ -103,6 +103,12 @@
     font-size: 0.8rem;
 }
 
+/* min-width: 0 : sans lui, un enfant flex ne rétrécit pas sous son contenu et un nom
+   d'activité long pousserait la valeur du record au lieu d'être tronqué. */
+.record-item .record-body {
+    min-width: 0;
+}
+
 .record-item .record-label {
     font-size: 0.86rem;
     color: var(--text-2);
@@ -261,4 +267,14 @@ tr:hover .row-actions,
     border-radius: 14px;
     font-size: 1.2rem;
     margin-bottom: 14px;
+}
+
+/* Pied d'une liste paginée : compteur et bouton « charger plus » */
+.list-more {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-top: 12px;
 }

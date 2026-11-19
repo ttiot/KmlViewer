@@ -14,12 +14,11 @@ const EDITOR_MODES = {
     edit: { button: 'editPointBtn', cursor: 'pointer', hint: 'Clique sur un point (carte ou liste) pour le modifier.' },
     delete: { button: 'deletePointBtn', cursor: 'not-allowed', hint: 'Clique sur un point (carte ou liste) pour le supprimer.' },
 };
-const METERS_PER_DEGREE = 111000;
 
 function setEditorHint(text) {
     const hint = document.getElementById('editorHint');
     hint.textContent = text || '';
-    hint.style.display = text ? 'block' : 'none';
+    hint.hidden = !text;
 }
 
 function closePointForm() {
@@ -92,17 +91,21 @@ function markerFeatureAt(features, index) {
     return features.findIndex((feature) => feature.type === 'marker' && ++count === index);
 }
 
-// Redessine le fichier actif après une modification de ses données.
-function refreshActiveFile() {
-    const file = Viewer.activeFile();
-    if (!file) return;
+// Redessine un fichier après une modification de ses données. Le fichier est passé par
+// l'appelant : après une opération asynchrone (simplification), le fichier modifié n'est
+// plus forcément le fichier actif, et c'est bien lui qu'il faut marquer et redessiner.
+function refreshFile(file) {
+    if (!file || !Viewer.files.has(file.id)) return; // fermé entre-temps
     file.data.total_points = file.data.points.length;
     // La trace ne correspond plus au fichier d'origine : l'analyse avancée affichée est
     // périmée, et celle enregistrée en bibliothèque ne décrit plus ce qui est à l'écran.
     file.edited = true;
+    file.unsaved = true;
     file.revision += 1;
     file.advanced = null;
+    file.tab.classList.add('is-unsaved');
     renderFile(file);
+    if (file.id !== Viewer.activeFileId) return;
     displayPointsList();
     restoreAdvancedAnalysis();
     analyzeTrajectory();
@@ -127,6 +130,9 @@ function savePointForm(event) {
         const point = points[target.index];
         const featureIndex = markerFeatureAt(features, target.index);
         if (!point) return;
+        // Description réellement changée : elle sera affichée même pour un point de mesure,
+        // dont la description est sinon composée à partir de ses mesures (pointDescription)
+        if (text !== editableDescription(point.description)) point.description_edited = true;
         Object.assign(point, { name, description, raw_description: text });
         if (featureIndex !== -1) {
             Object.assign(features[featureIndex], { name, description: text });
@@ -146,7 +152,7 @@ function savePointForm(event) {
         showAlert('Point ajouté', 'success');
     }
     cancelEditing();
-    refreshActiveFile();
+    refreshFile(file);
     if (target.index === undefined) selectPoint(points.length - 1);
 }
 
@@ -162,7 +168,7 @@ function deletePoint(index) {
     points.forEach((item, position) => { item.index = position; });
     Viewer.currentPointIndex = -1;
     cancelEditing();
-    refreshActiveFile();
+    refreshFile(file);
     showAlert('Point supprimé', 'success');
 }
 
@@ -217,7 +223,8 @@ async function simplifyActiveTraces() {
         showAlert(`Simplification impossible : ${error.message}`, 'danger');
     }
     if (before) {
-        refreshActiveFile();
+        // `file` est celui dont les traces ont été simplifiées, même si l'onglet a changé
+        refreshFile(file);
         showAlert(`Trace simplifiée : ${before} → ${after} points`, 'success');
     }
 }
@@ -232,35 +239,47 @@ async function exportData(format) {
         .replace(/[^A-Za-z0-9._-]+/g, '_');
     showAlert(`Export ${format.toUpperCase()} en cours…`, 'info', { spinner: true });
     try {
-        const response = await fetch(`/api/export/${format}`, {
+        // Gestion commune des erreurs et de la session expirée (App.request) ; la réponse
+        // est un fichier, pas du JSON
+        const revision = file.revision;
+        const response = await App.request(`/api/export/${format}`, {
             method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            body: {
                 filename,
                 include_traces: document.getElementById('includeTraces').checked,
                 metadata: { name: file.name },
-                features: file.data.features,
-            }),
+                features: exportFeatures(file.data),
+            },
         });
-        if (!response.ok) {
-            let message = `Erreur ${response.status}`;
-            try { message = (await response.json()).error || message; } catch (_) { /* réponse non JSON */ }
-            throw new Error(message);
-        }
         const url = URL.createObjectURL(await response.blob());
         const link = App.el('a', { href: url, download: `${filename}.${format}` });
         document.body.appendChild(link);
         link.click();
         link.remove();
-        URL.revokeObjectURL(url);
+        // Révocation différée : certains navigateurs lisent l'URL après le retour de click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        // Tout ce qui avait été modifié est maintenant dans le fichier exporté
+        if (revision === file.revision) {
+            file.unsaved = false;
+            if (file.tab) file.tab.classList.remove('is-unsaved');
+        }
         showAlert(`Export ${format.toUpperCase()} terminé`, 'success');
     } catch (error) {
         showAlert(`Export impossible : ${error.message}`, 'danger');
     }
 }
 
+// Quitter la page (fermeture, rechargement, retour au login après une session expirée)
+// jetterait les modifications faites dans le navigateur : le navigateur demande confirmation
+// tant qu'un fichier modifié n'a pas été exporté.
+function warnBeforeLosingEdits(event) {
+    if (!Array.from(Viewer.files.values()).some((file) => file.unsaved)) return;
+    event.preventDefault();
+    event.returnValue = '';
+}
+
 function setupEditor() {
+    window.addEventListener('beforeunload', warnBeforeLosingEdits);
     Object.entries(EDITOR_MODES).forEach(([mode, { button }]) => {
         document.getElementById(button).addEventListener('click', () => setEditorMode(mode));
     });

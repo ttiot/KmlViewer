@@ -3,7 +3,10 @@
 'use strict';
 
 const App = (() => {
-    async function api(path, options = {}) {
+    // Requête vers l'API. Gère ce qui est commun à tous les appels : session expirée
+    // (retour au login, puis à la page en cours, paramètres compris) et réponse en erreur.
+    // Renvoie la réponse brute : `api` la lit en JSON, l'export la lit en fichier.
+    async function request(path, options = {}) {
         const init = { credentials: 'same-origin', ...options };
         if (init.body && !(init.body instanceof FormData)) {
             init.headers = { 'Content-Type': 'application/json', ...(init.headers || {}) };
@@ -11,15 +14,27 @@ const App = (() => {
         }
         const response = await fetch(path, init);
         if (response.status === 401) {
-            window.location.assign('/auth/login?next=' + encodeURIComponent(window.location.pathname));
+            const here = window.location.pathname + window.location.search;
+            window.location.assign('/auth/login?next=' + encodeURIComponent(here));
             throw new Error('Session expirée');
         }
-        let data = null;
-        try { data = await response.json(); } catch (_) { /* réponse non JSON */ }
         if (!response.ok) {
+            let data = null;
+            try { data = await response.json(); } catch (_) { /* réponse non JSON */ }
             throw new Error((data && data.error) || `Erreur ${response.status}`);
         }
-        return data;
+        return response;
+    }
+
+    // Appel JSON. Une réponse réussie mais illisible (corps vide, JSON invalide) est une
+    // erreur : la renvoyer telle quelle ferait planter l'appelant plus loin, sans message utile.
+    async function api(path, options = {}) {
+        const response = await request(path, options);
+        try {
+            return await response.json();
+        } catch (_) {
+            throw new Error('Réponse illisible du serveur');
+        }
     }
 
     // Crée un élément DOM ; les enfants textuels passent par des nœuds texte.
@@ -53,9 +68,11 @@ const App = (() => {
     const number = (value, digits = 0) =>
         Number(value || 0).toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
-    function duration(seconds) {
-        if (seconds === null || seconds === undefined) return '—';
-        const s = Math.round(seconds);
+    // Durée lisible ; `empty` est rendu pour une durée inconnue.
+    function duration(seconds, empty = '—') {
+        if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return empty;
+        const s = Math.round(Number(seconds));
+        if (s < 60) return `${s} s`;
         const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
         const pad = (v) => String(v).padStart(2, '0');
         return h > 0 ? `${h} h ${pad(m)} min` : `${m} min ${pad(sec)} s`;
@@ -68,10 +85,11 @@ const App = (() => {
         return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
     }
 
-    const distance = (meters) => `${number(meters / 1000, 1)} km`;
+    // En mètres sous le kilomètre (tronçon court, périmètre d'un polygone), en km au-delà
+    const distance = (meters) => (Math.abs(meters) < 1000 ? `${number(meters)} m` : `${number(meters / 1000, 1)} km`);
     const speed = (meters, seconds) => (seconds > 0 ? `${number(meters / seconds * 3.6, 1)} km/h` : '—');
     const date = (iso) => (iso ? new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
     const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
-    return { api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime };
+    return { request, api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime };
 })();

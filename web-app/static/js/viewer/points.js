@@ -6,23 +6,137 @@ function updateNavigationInfo() {
     const points = Viewer.points();
     const point = points[Viewer.currentPointIndex];
     if (!point) {
-        info.style.display = 'none';
+        info.hidden = true;
         return;
     }
     const { el } = App;
     info.replaceChildren(
         el('strong', {}, `Point ${Viewer.currentPointIndex + 1}/${points.length}`), el('br'),
         el('small', {}, point.name || ''));
-    info.style.display = 'block';
+    info.hidden = false;
+}
+
+// ------------------------------------------------------------ Liste fenêtrée
+// Une trace GPX compte un point par position enregistrée : plusieurs dizaines de milliers.
+// Seule une fenêtre de la liste est donc présente dans le DOM ; deux espaceurs tiennent la
+// place des lignes absentes, pour que la barre de défilement reflète toute la liste.
+
+const POINTS_WINDOW = 300;       // lignes présentes dans le DOM
+const POINTS_WINDOW_MARGIN = 50; // en deçà de cette réserve, la fenêtre est recentrée
+const pointsView = { fileId: null, start: 0, end: 0, rowHeight: 76, measured: false, frame: 0 };
+
+function pointsContent() {
+    return document.getElementById('pointsListContent');
+}
+
+function pointItem(point, index, total) {
+    const { el } = App;
+    const description = descriptionNodes(pointDescription(point));
+    const tracePoint = String(point.visibility) === '0'; // point de trace, non dessiné sur la carte
+    return el('div', { class: `point-item${index === Viewer.currentPointIndex ? ' active' : ''}`, dataset: { pointIndex: index } },
+        el('div', { class: 'd-flex align-items-start' },
+            el('div', { class: 'me-3 mt-1' },
+                el('div', { class: `point-dot ${tracePoint ? '' : 'annotation'}` })),
+            el('div', { class: 'flex-grow-1' },
+                el('div', { class: 'point-name' }, point.name || `Point ${index + 1}`),
+                description.length ? el('div', { class: 'point-description' }, description) : null,
+                el('div', { class: 'point-meta' },
+                    el('span', { class: `badge ${tracePoint ? 'bg-info' : 'bg-warning'} point-badge me-2` },
+                        tracePoint ? 'Point de trace' : 'Repère'),
+                    el('small', { class: 'text-muted' }, `Point ${index + 1}/${total}`),
+                    point.altitude
+                        ? el('small', { class: 'text-muted ms-2' }, `Alt : ${Math.round(point.altitude)} m`) : null))));
+}
+
+function pointsSpacer(rows) {
+    const spacer = document.createElement('div');
+    spacer.setAttribute('aria-hidden', 'true');
+    spacer.style.height = `${Math.max(0, rows) * pointsView.rowHeight}px`;
+    return spacer;
+}
+
+// Met dans le DOM les POINTS_WINDOW lignes à partir de `start` (ramené dans les bornes).
+function renderPointsWindow(start) {
+    const points = Viewer.points();
+    const content = pointsContent();
+    const first = Math.max(0, Math.min(Math.floor(start), points.length - POINTS_WINDOW));
+    const last = Math.min(points.length, first + POINTS_WINDOW);
+    const items = [];
+    for (let index = first; index < last; index++) items.push(pointItem(points[index], index, points.length));
+    const top = pointsSpacer(first);
+    const bottom = pointsSpacer(points.length - last);
+    content.replaceChildren(top, ...items, bottom);
+    pointsView.start = first;
+    pointsView.end = last;
+
+    // Hauteur réelle d'une ligne, mesurée une fois par liste (nulle tant que le panneau est masqué)
+    if (!pointsView.measured && items.length) {
+        const height = (bottom.getBoundingClientRect().top - items[0].getBoundingClientRect().top) / items.length;
+        if (height > 0) {
+            pointsView.rowHeight = height;
+            pointsView.measured = true;
+            top.style.height = `${first * height}px`;
+            bottom.style.height = `${(points.length - last) * height}px`;
+        }
+    }
+}
+
+// Première ligne visible de la fenêtre : { index, offset (px) par rapport au haut de la liste }.
+function firstVisiblePoint(content) {
+    const box = content.getBoundingClientRect();
+    const items = content.querySelectorAll('.point-item');
+    let low = 0, high = items.length;
+    while (low < high) { // première ligne dont le bas dépasse le haut de la zone visible
+        const middle = (low + high) >> 1;
+        if (items[middle].getBoundingClientRect().bottom > box.top) high = middle; else low = middle + 1;
+    }
+    if (low >= items.length) return null;
+    const top = items[low].getBoundingClientRect().top;
+    return top < box.bottom ? { index: Number(items[low].dataset.pointIndex), offset: top - box.top } : null;
+}
+
+// Au défilement : recentre la fenêtre quand la zone visible approche de l'un de ses bords,
+// en gardant à l'écran la ligne qui s'y trouvait.
+function syncPointsWindow() {
+    const content = pointsContent();
+    const total = Viewer.points().length;
+    if (total <= POINTS_WINDOW) return;
+    const anchor = firstVisiblePoint(content);
+    // Aucune ligne visible : l'ascenseur a été déposé dans un espaceur, on estime la position
+    const index = anchor ? anchor.index
+        : Math.min(total - 1, Math.floor(content.scrollTop / pointsView.rowHeight));
+    const visibleRows = Math.ceil(content.clientHeight / pointsView.rowHeight);
+    const nearStart = pointsView.start > 0 && index - pointsView.start < POINTS_WINDOW_MARGIN;
+    const nearEnd = pointsView.end < total && pointsView.end - index - visibleRows < POINTS_WINDOW_MARGIN;
+    if (anchor && !nearStart && !nearEnd) return;
+    renderPointsWindow(index - (POINTS_WINDOW - visibleRows) / 2);
+    const node = content.querySelector(`.point-item[data-point-index="${index}"]`);
+    if (node) {
+        content.scrollTop += node.getBoundingClientRect().top - content.getBoundingClientRect().top
+            - (anchor ? anchor.offset : 0);
+    }
+}
+
+function onPointsScroll() {
+    if (pointsView.frame) return;
+    pointsView.frame = requestAnimationFrame(() => {
+        pointsView.frame = 0;
+        syncPointsWindow();
+    });
 }
 
 function updatePointsListHighlight() {
-    document.querySelectorAll('.point-item.active').forEach((item) => item.classList.remove('active'));
-    if (Viewer.currentPointIndex < 0) return;
-    const active = document.querySelector(`.point-item[data-point-index="${Viewer.currentPointIndex}"]`);
+    const content = pointsContent();
+    content.querySelectorAll('.point-item.active').forEach((item) => item.classList.remove('active'));
+    const index = Viewer.currentPointIndex;
+    if (index < 0) return;
+    // Le point choisi (carte, clavier) peut être hors de la fenêtre : on l'y amène d'abord
+    const outside = index < pointsView.start || index >= pointsView.end;
+    if (outside) renderPointsWindow(index - POINTS_WINDOW / 2);
+    const active = content.querySelector(`.point-item[data-point-index="${index}"]`);
     if (active) {
         active.classList.add('active');
-        active.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        active.scrollIntoView(outside ? { block: 'center' } : { behavior: 'smooth', block: 'nearest' });
     }
 }
 
@@ -92,44 +206,37 @@ function onMarkerClick(file, index) {
 }
 
 function displayPointsList() {
-    const { el } = App;
     const points = Viewer.points();
-    const content = document.getElementById('pointsListContent');
+    const content = pointsContent();
     document.getElementById('pointsCount').textContent = points.length;
-    setVisible('pointsList', points.length > 0, 'flex'); // colonne flex : la liste défile dans le panneau
+    setVisible('pointsList', points.length > 0);
     setVisible('navigationControls', points.length > 0);
     if (Viewer.currentPointIndex >= points.length) Viewer.currentPointIndex = -1;
 
-    const fragment = document.createDocumentFragment();
-    points.forEach((point, index) => {
-        const description = descriptionNodes(pointDescription(point));
-        const tracePoint = String(point.visibility) === '0'; // point de trace, non dessiné sur la carte
-        fragment.appendChild(el('div', { class: 'point-item', dataset: { pointIndex: index } },
-            el('div', { class: 'd-flex align-items-start' },
-                el('div', { class: 'me-3 mt-1' },
-                    el('div', { class: `point-dot ${tracePoint ? '' : 'annotation'}` })),
-                el('div', { class: 'flex-grow-1' },
-                    el('div', { class: 'point-name' }, point.name || `Point ${index + 1}`),
-                    description.length ? el('div', { class: 'point-description' }, description) : null,
-                    el('div', { class: 'point-meta' },
-                        el('span', { class: `badge ${tracePoint ? 'bg-info' : 'bg-warning'} point-badge me-2` },
-                            tracePoint ? 'Point de trace' : 'Repère'),
-                        el('small', { class: 'text-muted' }, `Point ${index + 1}/${points.length}`),
-                        point.altitude
-                            ? el('small', { class: 'text-muted ms-2' }, `Alt : ${Math.round(point.altitude)} m`) : null)))));
-    });
-    content.replaceChildren(fragment);
+    // Autre fichier : la liste repart du début. Même fichier (édition, changement d'unités) :
+    // elle reste là où elle était.
+    const sameFile = pointsView.fileId === Viewer.activeFileId;
+    pointsView.fileId = Viewer.activeFileId;
+    pointsView.measured = false;
+    renderPointsWindow(sameFile ? pointsView.start : 0);
+    if (!sameFile) content.scrollTop = 0;
     updateNavigationInfo();
     updatePointsListHighlight();
     updateSelectionMarker();
 }
 
+// Éléments qui utilisent eux-mêmes les flèches gauche / droite quand ils ont le focus
+const ARROW_KEY_OWNERS = 'input, textarea, select, [contenteditable], [role="tab"], [role="tablist"], '
+    + '.dropdown-menu, .dropdown-toggle, .leaflet-container';
+
 function setupPointsNavigation() {
     document.getElementById('prevPointBtn').addEventListener('click', navigateToPreviousPoint);
     document.getElementById('nextPointBtn').addEventListener('click', navigateToNextPoint);
 
+    pointsContent().addEventListener('scroll', onPointsScroll, { passive: true });
+
     // Un seul écouteur pour toute la liste (plusieurs milliers de points pour une trace GPX)
-    document.getElementById('pointsListContent').addEventListener('click', (event) => {
+    pointsContent().addEventListener('click', (event) => {
         const item = event.target.closest('.point-item');
         if (!item) return;
         const index = Number(item.dataset.pointIndex);
@@ -139,8 +246,11 @@ function setupPointsNavigation() {
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') { cancelEditing(); return; }
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-        // Les flèches gardent leur rôle habituel dans les champs de saisie
-        if (event.target.closest('input, textarea, select, [contenteditable]')) return;
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        // Les flèches gardent leur rôle habituel dans les champs de saisie, sur les onglets
+        // et les menus (navigation clavier de Bootstrap) et sur la carte (déplacement Leaflet)
+        const target = event.target instanceof Element ? event.target : null;
+        if (target && target.closest(ARROW_KEY_OWNERS)) return;
         if (Viewer.points().length === 0) return;
         event.preventDefault();
         if (event.key === 'ArrowLeft') navigateToPreviousPoint(); else navigateToNextPoint();

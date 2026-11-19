@@ -120,20 +120,27 @@ function setAnalysisPanelVisible(visible) {
 // Analyse le fichier actif. Le panneau reste affiché même si l'analyse échoue :
 // il porte aussi l'édition et l'export.
 async function analyzeTrajectory() {
-    const features = Viewer.features();
-    if (features.length === 0) {
+    const file = Viewer.activeFile();
+    if (!file || file.data.features.length === 0) {
+        // Plus rien à analyser (fichier vide, dernier fichier fermé) : une réponse encore
+        // en route ne doit pas réafficher les résultats d'un autre fichier
+        analysisRequest += 1;
+        Viewer.analysis = null;
+        destroyCharts();
         setAnalysisPanelVisible(false);
         return;
     }
     setAnalysisPanelVisible(true);
     const request = ++analysisRequest;
     try {
-        const data = await App.api('/api/analysis/trajectory', { method: 'POST', body: { features } });
+        const data = await App.api('/api/analysis/trajectory', { method: 'POST', body: analysisPayload(file.data) });
         if (request !== analysisRequest) return; // un autre fichier a été activé entre-temps
         Viewer.analysis = data.analysis;
     } catch (error) {
         if (request !== analysisRequest) return;
         console.error("Analyse impossible :", error);
+        // Sans ce message, l'échec ne se voit qu'à des statistiques restées vides
+        showAlert(`Analyse impossible : ${error.message}`, 'warning');
         Viewer.analysis = {};
     }
     displayAnalysisResults(Viewer.analysis);
@@ -151,15 +158,9 @@ const fixed = (value, digits) => (
 const signed = (value, digits) => (Number(value) > 0 ? `+${fixed(value, digits)}` : fixed(value, digits));
 const known = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
 
-function formatDuration(seconds) {
-    if (!known(seconds)) return '-';
-    const total = Math.round(Number(seconds));
-    if (total < 60) return `${total} s`;
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    if (hours) return `${hours} h ${String(minutes).padStart(2, '0')}`;
-    return total % 60 ? `${minutes} min ${String(total % 60).padStart(2, '0')} s` : `${minutes} min`;
-}
+// Durées au format commun (common.js) ; « - » pour une durée inconnue, comme les autres
+// statistiques du visualiseur.
+const formatDuration = (seconds) => App.duration(seconds, '-');
 
 function formatClock(iso) {
     const date = iso ? new Date(iso) : null;
@@ -437,14 +438,20 @@ function renderAdvancedAnalysis(analysis) {
     setVisible('advancedResults', true);
 }
 
-// Met le bouton et la ligne d'état en accord avec le résultat du fichier actif.
+// Met les boutons et la ligne d'état en accord avec l'état du fichier actif : pendant un
+// calcul, ni relance ni effacement (effacer puis voir le calcul réenregistrer son résultat
+// laisserait l'écran et le serveur en désaccord).
 function updateAdvancedControls() {
     const file = Viewer.activeFile();
     const result = file && file.advanced;
+    const computing = Boolean(file && file.computing);
     document.getElementById('runAdvancedLabel').textContent = result ? "Relancer l'analyse" : "Lancer l'analyse avancée";
-    document.getElementById('clearAdvancedBtn').disabled = !result;
+    document.getElementById('runAdvancedBtn').disabled = computing;
+    document.getElementById('clearAdvancedBtn').disabled = !result || computing;
     let status = '';
-    if (result) {
+    if (computing) {
+        status = 'Calcul en cours…';
+    } else if (result) {
         const when = result.computedAt ? App.dateTime(result.computedAt) : null;
         if (result.saved) status = `Analyse enregistrée${when ? ` le ${when}` : ''}.`;
         else if (file.edited) status = 'Trace modifiée : résultat conservé pour cette session, non enregistré.';
@@ -468,12 +475,13 @@ function showAdvancedResult(file) {
 async function restoreAdvancedAnalysis() {
     const request = ++advancedRequest; // une réponse encore en route sera ignorée
     const file = Viewer.activeFile();
-    document.getElementById('runAdvancedBtn').disabled = false;
     showAdvancedResult(file);
-    if (!file || file.advanced || !usesSavedAnalysis(file)) return;
+    // Calcul en cours : son résultat arrive, inutile d'aller lire celui qu'il va remplacer
+    if (!file || file.advanced || file.computing || !usesSavedAnalysis(file)) return;
     try {
         const data = await App.api(savedAnalysisUrl(file));
-        if (request !== advancedRequest || !data.analysis || !usesSavedAnalysis(file)) return;
+        if (request !== advancedRequest || !data.analysis) return;
+        if (file.advanced || file.computing || !usesSavedAnalysis(file)) return;
         file.advanced = { analysis: data.analysis, computedAt: data.computed_at, saved: true };
         showAdvancedResult(file);
     } catch (error) {
@@ -482,44 +490,49 @@ async function restoreAdvancedAnalysis() {
     }
 }
 
+// Le calcul appartient au fichier analysé (file.computing), pas à l'écran : son résultat
+// est conservé même si l'utilisateur change de fichier ou si le rattachement à la
+// bibliothèque arrive entre-temps, et il est affiché dès que ce fichier est à l'écran.
 async function runAdvancedAnalysis() {
     const file = Viewer.activeFile();
     if (!file || !Viewer.hasData()) {
         showAlert('Aucune trace chargée', 'warning');
         return;
     }
-    const button = document.getElementById('runAdvancedBtn');
-    const request = ++advancedRequest;
+    if (file.computing) return;
     const saved = usesSavedAnalysis(file);
     const revision = file.revision;
-    button.disabled = true;
+    file.computing = true;
+    updateAdvancedControls();
     showAlert('Analyse avancée en cours…', 'info', { spinner: true });
+    let failure = null;
+    let stale = false;
     try {
         const data = saved
             ? await App.api(savedAnalysisUrl(file), { method: 'POST' })
-            : await App.api('/api/analysis/advanced', {
-                method: 'POST', body: { features: file.data.features, points: file.data.points } });
-        // Le résultat appartient au fichier analysé, même si l'utilisateur a changé de fichier
-        // entre-temps ; il est périmé si la trace a été modifiée pendant le calcul
-        if (revision === file.revision) {
+            : await App.api('/api/analysis/advanced', { method: 'POST', body: analysisPayload(file.data) });
+        // Périmé si la trace a été modifiée pendant le calcul
+        stale = revision !== file.revision;
+        if (!stale) {
             file.advanced = { analysis: data.analysis || {}, saved,
                 computedAt: data.computed_at || new Date().toISOString() };
         }
-        if (request !== advancedRequest) return;
-        showAdvancedResult(file);
-        showAlert(saved ? 'Analyse avancée terminée et enregistrée' : 'Analyse avancée terminée', 'success');
     } catch (error) {
-        if (request !== advancedRequest) return;
-        showAlert(`Analyse avancée impossible : ${error.message}`, 'danger');
+        failure = error;
     } finally {
-        if (request === advancedRequest) button.disabled = false;
+        file.computing = false;
     }
+    if (!Viewer.files.has(file.id)) return; // fichier fermé pendant le calcul
+    if (Viewer.activeFileId === file.id) showAdvancedResult(file);
+    if (failure) showAlert(`Analyse avancée de ${file.name} impossible : ${failure.message}`, 'danger');
+    else if (stale) showAlert('Trace modifiée pendant le calcul : relance l\'analyse avancée', 'warning');
+    else showAlert(saved ? 'Analyse avancée terminée et enregistrée' : 'Analyse avancée terminée', 'success');
 }
 
 async function clearAdvancedAnalysis() {
     const file = Viewer.activeFile();
-    advancedRequest += 1; // une réponse encore en route sera ignorée
-    document.getElementById('runAdvancedBtn').disabled = false;
+    if (file && file.computing) return;
+    advancedRequest += 1; // une lecture encore en route sera ignorée
     const wasSaved = Boolean(file && file.advanced && file.advanced.saved);
     if (file) file.advanced = null;
     showAdvancedResult(file);

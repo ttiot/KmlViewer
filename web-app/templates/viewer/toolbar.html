@@ -1,0 +1,25 @@
+<div class="viewer-bar">
+    <div class="dropdown">
+        <button type="button" class="btn btn-primary btn-sm dropdown-toggle" id="openMenuButton"
+                data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+            <i class="fas fa-folder-open me-1"></i>Ouvrir
+        </button>
+        <div class="dropdown-menu open-menu" aria-labelledby="openMenuButton">
+            <button type="button" class="dropdown-item" id="chooseFilesButton">
+                <i class="fas fa-arrow-up-from-bracket me-2"></i>Choisir des fichiers…
+            </button>
+            <div class="form-check form-switch open-menu-option">
+                <input class="form-check-input" type="checkbox" id="saveToLibrary" checked>
+                <label class="form-check-label" for="saveToLibrary">Enregistrer dans ma bibliothèque</label>
+            </div>
+            <div class="dropdown-divider"></div>
+            <h6 class="dropdown-header">Fichiers d'exemple</h6>
+            <div id="sampleFiles">
+                <span class="dropdown-item-text text-muted small">Aucun fichier d'exemple</span>
+            </div>
+        </div>
+    </div>
+    <!-- Un seul champ de fichiers pour le menu, l'état vide et le glisser-déposer -->
+    <input type="file" id="fileInput" accept=".kml,.gpx,.kmz" multiple hidden>
+    <ul class="nav nav-pills file-tabs" id="fileTabs" aria-label="Fichiers ouverts"></ul>
+</div>

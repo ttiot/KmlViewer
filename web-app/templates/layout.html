@@ -3,14 +3,19 @@
 <head>
 {% include '_head.html' %}
     <title>{% block title %}KmlViewer{% endblock %}</title>
+    {% block styles %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/library.css') }}"/>
+    {% endblock %}
 </head>
 <body>
     {% include '_navbar.html' %}
+    {# Les pages bibliothèque remplissent « content » ; le visualiseur remplace toute la zone #}
+    {% block page %}
     <main class="container-fluid library-page">
         <div id="pageAlert" class="alert d-none" role="alert"></div>
         {% block content %}{% endblock %}
     </main>
+    {% endblock %}
     <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     {% block scripts %}{% endblock %}

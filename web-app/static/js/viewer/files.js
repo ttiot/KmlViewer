@@ -1,13 +1,19 @@
-// Visualiseur : chargement des fichiers (envoi, exemples, bibliothèque) et fichier actif.
+// Visualiseur : fichiers ouverts. Chargement (envoi, exemples), onglets, fichier actif,
+// visibilité sur la carte et fermeture. L'interface d'ouverture (menu, état vide,
+// glisser-déposer) est dans opener.js : elle passe toujours par uploadFiles.
 'use strict';
 
 const VIEWER_FILE_PATTERN = /\.(kml|kmz|gpx)$/i;
 
-function toggleFileVisibility(fileId, visible) {
+function setFileVisibility(fileId, visible) {
     const file = Viewer.files.get(fileId);
     if (!file) return;
     file.visible = visible;
     if (visible) Viewer.map.addLayer(file.layer); else Viewer.map.removeLayer(file.layer);
+    file.tab.classList.toggle('is-hidden', !visible);
+    const eye = file.tab.querySelector('.file-tab-eye');
+    eye.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    eye.querySelector('i').className = visible ? 'fas fa-eye' : 'fas fa-eye-slash';
     if (fileId === Viewer.activeFileId) updateSelectionMarker();
 }
 
@@ -18,41 +24,99 @@ function setActiveFile(fileId, { force = false } = {}) {
     cancelEditing();
     Viewer.activeFileId = fileId;
     Viewer.currentPointIndex = -1;
-    document.querySelectorAll('#fileTabs .nav-link').forEach((button) => {
-        button.classList.toggle('active', button.dataset.fileId === fileId);
+    Viewer.files.forEach((file) => {
+        const active = file.id === fileId;
+        file.tab.classList.toggle('active', active);
+        const button = file.tab.querySelector('.nav-link');
+        button.classList.toggle('active', active);
+        if (active) button.setAttribute('aria-current', 'true'); else button.removeAttribute('aria-current');
+        // Beaucoup de fichiers : la barre défile, l'onglet actif doit rester en vue
+        if (active) file.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
     displayPointsList();
     restoreAdvancedAnalysis();
     analyzeTrajectory();
 }
 
-// Ajoute un fichier parsé (réponse de l'API) à la carte, à la barre latérale et aux onglets.
+// Onglet d'un fichier : son nom (rend le fichier actif), un œil (affiche ou masque sa
+// couche) et une croix (ferme le fichier). Le nom vient du fichier : nœuds texte et
+// attributs posés par setAttribute, jamais de HTML.
+function fileTab(file) {
+    const { el, icon } = App;
+    return el('li', { class: 'nav-item file-tab', dataset: { fileId: file.id } },
+        el('button', { type: 'button', class: 'nav-link', title: file.name, dataset: { fileId: file.id },
+            onclick: () => setActiveFile(file.id) }, file.name),
+        el('button', { type: 'button', class: 'file-tab-action file-tab-eye', 'aria-pressed': 'true',
+            title: 'Afficher sur la carte', 'aria-label': `Afficher ${file.name} sur la carte`,
+            onclick: () => setFileVisibility(file.id, !file.visible) }, icon('eye')),
+        el('button', { type: 'button', class: 'file-tab-action file-tab-close',
+            title: 'Fermer le fichier', 'aria-label': `Fermer ${file.name}`,
+            onclick: () => closeFile(file.id) }, icon('xmark')));
+}
+
+// Ajoute un fichier parsé (réponse de l'API) à la carte et aux onglets.
 function addUploadedFile(filename, data, { activate = true } = {}) {
-    const { el } = App;
     const id = `file_${Viewer.fileCounter++}`;
     const file = {
-        id, name: filename, layer: null, markers: [], visible: true,
-        activityId: data.activity_id || Viewer.libraryIds.get(filename) || null,
-        edited: false, revision: 0, advanced: null,
+        id, name: String(filename), layer: null, markers: [], tab: null, visible: true,
+        activityId: data.activity_id || null,
+        edited: false, unsaved: false, revision: 0, advanced: null, computing: false,
         data: { ...data, features: data.features || [], points: data.points || [] },
     };
     Viewer.files.set(id, file);
-    renderFile(file, { fit: true });
-
-    const checkboxId = `chk_${id}`;
-    document.getElementById('uploadedFiles').appendChild(el('div', { class: 'form-check' },
-        el('input', { class: 'form-check-input', type: 'checkbox', id: checkboxId, checked: true,
-            onchange: (event) => toggleFileVisibility(id, event.target.checked) }),
-        el('label', { class: 'form-check-label', for: checkboxId }, filename)));
-
-    document.getElementById('fileTabs').appendChild(el('li', { class: 'nav-item' },
-        el('button', { type: 'button', class: 'nav-link', dataset: { fileId: id },
-            onclick: () => setActiveFile(id) }, filename)));
+    try {
+        renderFile(file, { fit: true });
+    } catch (error) {
+        // Géométrie que Leaflet refuse : le fichier n'est pas ouvert, les suivants le seront
+        if (file.layer) Viewer.map.removeLayer(file.layer);
+        Viewer.files.delete(id);
+        throw error;
+    }
+    file.tab = fileTab(file);
+    document.getElementById('fileTabs').appendChild(file.tab);
+    updateEmptyState();
 
     if (activate || !Viewer.activeFileId) setActiveFile(id);
     return file;
 }
 
+// Ferme un fichier : couche, onglet et état. Le fichier actif cède la place au dernier
+// fichier encore ouvert ; s'il n'en reste aucun, l'écran revient à l'état vide.
+function closeFile(fileId) {
+    const file = Viewer.files.get(fileId);
+    if (!file) return;
+    if (file.unsaved && !window.confirm(
+        `Fermer « ${file.name} » ? Ses modifications non exportées seront perdues.`)) return;
+    const wasActive = fileId === Viewer.activeFileId;
+    if (wasActive) {
+        cancelEditing();
+        Viewer.map.closePopup();
+    }
+    if (file.layer) Viewer.map.removeLayer(file.layer);
+    file.tab.remove();
+    Viewer.files.delete(fileId);
+    updateEmptyState();
+
+    let next = wasActive ? null : Viewer.files.get(Viewer.activeFileId);
+    if (wasActive) {
+        Viewer.activeFileId = null;
+        Viewer.currentPointIndex = -1;
+        next = Array.from(Viewer.files.values()).pop() || null;
+        if (next) {
+            setActiveFile(next.id);
+        } else {
+            displayPointsList();
+            restoreAdvancedAnalysis();
+            analyzeTrajectory();
+        }
+    }
+    // Le bouton qui avait le focus vient de disparaître : on le rend à un voisin
+    const focusTarget = next ? next.tab.querySelector('.nav-link') : document.getElementById('openMenuButton');
+    if (focusTarget) focusTarget.focus();
+}
+
+// Envoie des fichiers au serveur et ouvre ceux qu'il a su lire. Seul chemin d'envoi :
+// le menu « Ouvrir », l'état vide et le glisser-déposer y aboutissent tous.
 async function uploadFiles(fileList) {
     const files = Array.from(fileList || []).filter((file) => VIEWER_FILE_PATTERN.test(file.name));
     if (files.length === 0) {
@@ -62,20 +126,32 @@ async function uploadFiles(fileList) {
     const form = new FormData();
     files.forEach((file) => form.append('files', file));
     showAlert(`Traitement de ${files.length} fichier(s)…`, 'info', { spinner: true });
-    saveToLibrary(files); // en parallèle : l'affichage n'attend pas l'enregistrement
+    // En parallèle : l'affichage n'attend pas l'enregistrement en bibliothèque
+    const saved = saveToLibrary(files);
 
     try {
         const data = await App.api('/api/multi-upload', { method: 'POST', body: form });
+        const results = Array.isArray(data.files) ? data.files : [];
         let first = true;
-        (data.files || []).forEach((result) => {
-            if (result.success) {
-                addUploadedFile(result.filename, result, { activate: first });
+        // Fichier ouvert à chaque position de l'envoi (null si refusé) : c'est par cette
+        // position que le fichier sera rattaché à son activité de bibliothèque
+        const opened = results.map((result) => {
+            if (!result || !result.success) {
+                showAlert(`${(result && result.filename) || 'Fichier'} : ${(result && result.error) || 'illisible'}`, 'danger');
+                return null;
+            }
+            try {
+                const file = addUploadedFile(result.filename, result, { activate: first });
                 first = false;
                 showAlert(`Fichier ${result.filename} chargé`, 'success');
-            } else {
-                showAlert(`${result.filename || 'Fichier'} : ${result.error || 'illisible'}`, 'danger');
+                return file;
+            } catch (error) {
+                console.error('Affichage impossible :', error);
+                showAlert(`${result.filename || 'Fichier'} : affichage impossible`, 'danger');
+                return null;
             }
         });
+        linkToLibrary(files.length, results, opened, await saved);
     } catch (error) {
         showAlert(`Erreur lors de l'envoi : ${error.message}`, 'danger');
     }
@@ -91,60 +167,4 @@ async function loadSampleFile(filename) {
     } catch (error) {
         showAlert(`Erreur lors du chargement : ${error.message}`, 'danger');
     }
-}
-
-async function loadSampleFiles() {
-    const { el } = App;
-    const container = document.getElementById('sampleFiles');
-    try {
-        const data = await App.api('/api/sample-files');
-        container.replaceChildren(...(data.files || []).map((file) => el('button', {
-            type: 'button', class: 'btn btn-outline-primary btn-sm sample-file-btn', title: file.name,
-            'data-full-name': file.name, onclick: () => loadSampleFile(file.name),
-        }, file.name.length > 25 ? `${file.name.substring(0, 22)}...` : file.name)));
-    } catch (error) {
-        console.error("Chargement des fichiers d'exemple impossible :", error);
-    }
-}
-
-function setupFileHandling() {
-    const area = document.getElementById('fileUploadArea');
-    const input = document.getElementById('fileInput');
-
-    area.addEventListener('click', () => input.click());
-    input.addEventListener('change', () => {
-        if (input.files.length > 0) uploadFiles(input.files);
-        input.value = ''; // permet de recharger le même fichier
-    });
-    area.addEventListener('dragover', (event) => {
-        event.preventDefault();
-        area.classList.add('dragover');
-    });
-    area.addEventListener('dragleave', () => area.classList.remove('dragover'));
-    area.addEventListener('drop', (event) => {
-        event.preventDefault();
-        area.classList.remove('dragover');
-        if (event.dataTransfer.files.length > 0) uploadFiles(event.dataTransfer.files);
-    });
-
-    document.querySelectorAll('input[name="displayMode"]').forEach((radio) => {
-        // Les descriptions sont composées à l'affichage : liste et popups suivent aussitôt
-        radio.addEventListener('change', () => {
-            if (Viewer.map) Viewer.map.closePopup();
-            displayPointsList();
-        });
-    });
-}
-
-function setupSidebar() {
-    const sidebar = document.getElementById('sidebar');
-    const toggle = document.getElementById('sidebarToggle');
-    const mainContent = document.getElementById('mainContent');
-    toggle.addEventListener('click', () => {
-        sidebar.classList.toggle('collapsed');
-        mainContent.classList.toggle('expanded');
-        toggle.querySelector('i').className = sidebar.classList.contains('collapsed')
-            ? 'fas fa-chevron-right' : 'fas fa-chevron-left';
-        setTimeout(() => Viewer.map && Viewer.map.invalidateSize(), 300);
-    });
 }

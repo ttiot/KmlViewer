@@ -6,13 +6,15 @@
 const Viewer = {
     map: null,
     baseLayers: {},
-    // id -> { id, name, data, layer, markers, visible, activityId, edited, advanced }
+    // id -> { id, name, data, layer, markers, tab, visible, activityId, edited, unsaved, … }
+    //   tab        : onglet du fichier dans la barre du visualiseur
     //   activityId : activité de la bibliothèque correspondante (null sinon)
     //   edited     : la trace a été modifiée dans l'éditeur depuis son chargement
+    //   unsaved    : des modifications n'ont pas encore été exportées
     //   revision   : compteur de modifications (un calcul lancé avant une modification est périmé)
     //   advanced   : dernière analyse avancée de ce fichier { analysis, computedAt, saved }
+    //   computing  : une analyse avancée de ce fichier est en cours de calcul
     files: new Map(),
-    libraryIds: new Map(),   // nom de fichier -> id d'activité, pour les envois enregistrés en bibliothèque
     fileCounter: 0,
     activeFileId: null,
     currentPointIndex: -1,
@@ -93,12 +95,15 @@ function descriptionNodes(description) {
 // Description affichée d'un point. Un point de mesure (vitesse ou cap connus : traceur GPS,
 // point de trace horodaté) est présenté dans les unités choisies ; tout autre point garde
 // la description de son fichier. Calculé à l'affichage : changer d'unités suffit à rafraîchir.
+// Une description saisie dans l'éditeur (description_edited) passe devant les mesures :
+// sans cela, modifier la description d'un point de mesure ne se verrait nulle part.
 function pointDescription(point) {
     const info = point.parsed_info || {};
     const has = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
     if (!has(info.speed_kmh) && !has(info.heading)) return point.description || '';
     const double = Viewer.displayMode() === 'double';
     const lines = [];
+    if (point.description_edited && point.description) lines.push(point.description);
     if (has(info.speed_kmh)) {
         const knots = has(info.speed_kts) ? info.speed_kts : Math.round(info.speed_kmh / 1.852 * 10) / 10;
         lines.push(`Vitesse : ${info.speed_kmh} km/h${double ? ` (${knots} kts)` : ''}`);
@@ -115,7 +120,9 @@ function pointDescription(point) {
     return lines.join('<br>');
 }
 
-function setVisible(id, visible, display = 'block') {
+// Affiche ou masque un élément par l'attribut `hidden` (aucun style inline : la mise en
+// page de l'élément visible reste celle de sa feuille de style).
+function setVisible(id, visible) {
     const node = document.getElementById(id);
-    if (node) node.style.display = visible ? display : 'none';
+    if (node) node.hidden = !visible;
 }
