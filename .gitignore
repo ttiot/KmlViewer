@@ -8,3 +8,7 @@ inbox/
 .coverage
 .ruff_cache/
 .pytest_cache/
+# Notes de travail locales
+README-workflow.md
+TODO.md
+plan-ameliorations-visualiseur-kml.md

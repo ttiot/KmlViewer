@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPS Viewer" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Exemple de trace GPX</name>
+    <desc>Trace d'exemple pour tester le support GPX</desc>
+    <author>
+      <name>GPS Viewer</name>
+    </author>
+    <time>2025-01-09T16:00:00Z</time>
+  </metadata>
+  
+  <!-- Waypoints -->
+  <wpt lat="48.8566" lon="2.3522">
+    <ele>35</ele>
+    <name>Tour Eiffel</name>
+    <desc>Monument emblématique de Paris</desc>
+    <time>2025-01-09T16:00:00Z</time>
+  </wpt>
+  
+  <wpt lat="48.8606" lon="2.3376">
+    <ele>32</ele>
+    <name>Arc de Triomphe</name>
+    <desc>Monument historique</desc>
+    <time>2025-01-09T16:15:00Z</time>
+  </wpt>
+  
+  <wpt lat="48.8738" lon="2.2950">
+    <ele>67</ele>
+    <name>La Défense</name>
+    <desc>Quartier d'affaires</desc>
+    <time>2025-01-09T16:30:00Z</time>
+  </wpt>
+  
+  <!-- Track -->
+  <trk>
+    <name>Parcours Paris</name>
+    <desc>Trajet à travers Paris</desc>
+    <trkseg>
+      <trkpt lat="48.8566" lon="2.3522">
+        <ele>35</ele>
+        <time>2025-01-09T16:00:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8576" lon="2.3512">
+        <ele>36</ele>
+        <time>2025-01-09T16:01:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8586" lon="2.3502">
+        <ele>37</ele>
+        <time>2025-01-09T16:02:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8596" lon="2.3492">
+        <ele>38</ele>
+        <time>2025-01-09T16:03:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8606" lon="2.3376">
+        <ele>32</ele>
+        <time>2025-01-09T16:15:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8616" lon="2.3366">
+        <ele>33</ele>
+        <time>2025-01-09T16:16:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8626" lon="2.3356">
+        <ele>34</ele>
+        <time>2025-01-09T16:17:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8636" lon="2.3346">
+        <ele>35</ele>
+        <time>2025-01-09T16:18:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8646" lon="2.3336">
+        <ele>36</ele>
+        <time>2025-01-09T16:19:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8656" lon="2.3326">
+        <ele>37</ele>
+        <time>2025-01-09T16:20:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8666" lon="2.3316">
+        <ele>38</ele>
+        <time>2025-01-09T16:21:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8676" lon="2.3306">
+        <ele>39</ele>
+        <time>2025-01-09T16:22:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8686" lon="2.3296">
+        <ele>40</ele>
+        <time>2025-01-09T16:23:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8696" lon="2.3286">
+        <ele>41</ele>
+        <time>2025-01-09T16:24:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8706" lon="2.3276">
+        <ele>42</ele>
+        <time>2025-01-09T16:25:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8716" lon="2.3266">
+        <ele>43</ele>
+        <time>2025-01-09T16:26:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8726" lon="2.3256">
+        <ele>44</ele>
+        <time>2025-01-09T16:27:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8736" lon="2.3246">
+        <ele>45</ele>
+        <time>2025-01-09T16:28:00Z</time>
+      </trkpt>
+      <trkpt lat="48.8738" lon="2.2950">
+        <ele>67</ele>
+        <time>2025-01-09T16:30:00Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+  
+  <!-- Route -->
+  <rte>
+    <name>Route recommandée</name>
+    <desc>Route optimisée pour le trajet</desc>
+    <rtept lat="48.8566" lon="2.3522">
+      <ele>35</ele>
+      <name>Départ</name>
+      <desc>Point de départ</desc>
+    </rtept>
+    <rtept lat="48.8606" lon="2.3376">
+      <ele>32</ele>
+      <name>Étape 1</name>
+      <desc>Première étape</desc>
+    </rtept>
+    <rtept lat="48.8738" lon="2.2950">
+      <ele>67</ele>
+      <name>Arrivée</name>
+      <desc>Point d'arrivée</desc>
+    </rtept>
+  </rte>
+</gpx>
