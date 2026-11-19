@@ -21,7 +21,7 @@ function setActiveFile(fileId, { force = false } = {}) {
         button.classList.toggle('active', button.dataset.fileId === fileId);
     });
     displayPointsList();
-    clearAdvancedAnalysis({ silent: true });
+    restoreAdvancedAnalysis();
     analyzeTrajectory();
 }
 
@@ -31,6 +31,8 @@ function addUploadedFile(filename, data, { activate = true } = {}) {
     const id = `file_${Viewer.fileCounter++}`;
     const file = {
         id, name: filename, layer: null, markers: [], visible: true,
+        activityId: data.activity_id || Viewer.libraryIds.get(filename) || null,
+        edited: false, revision: 0, advanced: null,
         data: { ...data, features: data.features || [], points: data.points || [] },
     };
     Viewer.files.set(id, file);
@@ -59,6 +61,7 @@ async function uploadFiles(fileList) {
     const form = new FormData();
     files.forEach((file) => form.append('files', file));
     showAlert(`Traitement de ${files.length} fichier(s)…`, 'info', { spinner: true });
+    saveToLibrary(files); // en parallèle : l'affichage n'attend pas l'enregistrement
 
     try {
         const data = await App.api('/api/multi-upload', { method: 'POST', body: form });

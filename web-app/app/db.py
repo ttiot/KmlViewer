@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS efforts (
     UNIQUE (segment_id, activity_id, start_idx)
 );
 CREATE INDEX IF NOT EXISTS idx_efforts_segment ON efforts (segment_id, elapsed_s);
+
+-- Résultat enregistré de l'analyse avancée d'une activité (un seul par activité)
+CREATE TABLE IF NOT EXISTS activity_analyses (
+    activity_id INTEGER PRIMARY KEY REFERENCES activities(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    computed_at TEXT NOT NULL,
+    result      BLOB NOT NULL
+);
 """
 
 

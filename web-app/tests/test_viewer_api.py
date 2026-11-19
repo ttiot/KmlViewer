@@ -199,3 +199,15 @@ def test_vendor_checksums():
     for entry in lines:
         digest, name = entry.split(maxsplit=1)
         assert hashlib.sha256((vendor / name).read_bytes()).hexdigest() == digest, name
+
+
+def test_library_save_is_driven_by_the_upload_not_by_a_second_listener():
+    """
+    L'écouteur du champ de saisie le vide après lecture : un second écouteur qui relirait
+    input.files ne verrait rien, et la case « Enregistrer dans ma bibliothèque » resterait
+    sans effet avec le sélecteur de fichiers. L'envoi doit donc passer les fichiers lui-même.
+    """
+    viewer = WEB_APP / 'static' / 'js' / 'viewer'
+    assert 'saveToLibrary(files)' in (viewer / 'files.js').read_text(encoding='utf-8')
+    library = (viewer / 'library.js').read_text(encoding='utf-8')
+    assert 'input.files' not in library and "getElementById('fileInput')" not in library

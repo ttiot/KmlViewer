@@ -51,6 +51,24 @@ mapping de configuration, ce qui les rend testables et réutilisables hors requ�
   et en sombre ; les autres feuilles ne référencent que des rôles (`--surface`, `--accent`…).
   Le mode suit le système, avec une bascule mémorisée dans le navigateur (`static/js/theme.js`).
 
+## Analyse avancée conservée
+
+L'analyse avancée d'une activité de la bibliothèque est calculée une fois, à la demande, puis
+enregistrée (table `activity_analyses`) et réaffichée à chaque ouverture de l'activité.
+
+- Le serveur calcule à partir du fichier d'origine stocké : le navigateur n'envoie pas la trace.
+- « Relancer l'analyse » recalcule et remplace ; « Effacer » supprime le résultat enregistré.
+- `ANALYSIS_VERSION` (dans `advanced_analysis.py`) est à incrémenter dès qu'un changement
+  modifie le résultat : les analyses d'une autre version sont ignorées et recalculées à la demande.
+- Une trace modifiée dans l'éditeur, ou un fichier hors bibliothèque, garde son résultat en
+  mémoire le temps de la session, sans rien enregistrer.
+
+| Route | Rôle |
+|---|---|
+| `GET /api/activities/<id>/analysis` | résultat enregistré, `analysis: null` s'il n'y en a pas |
+| `POST /api/activities/<id>/analysis` | calcule (ou recalcule) et enregistre |
+| `DELETE /api/activities/<id>/analysis` | supprime le résultat enregistré |
+
 ## Dossier surveillé
 
 ```

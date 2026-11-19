@@ -97,8 +97,14 @@ function refreshActiveFile() {
     const file = Viewer.activeFile();
     if (!file) return;
     file.data.total_points = file.data.points.length;
+    // La trace ne correspond plus au fichier d'origine : l'analyse avancée affichée est
+    // périmée, et celle enregistrée en bibliothèque ne décrit plus ce qui est à l'écran.
+    file.edited = true;
+    file.revision += 1;
+    file.advanced = null;
     renderFile(file);
     displayPointsList();
+    restoreAdvancedAnalysis();
     analyzeTrajectory();
 }
 

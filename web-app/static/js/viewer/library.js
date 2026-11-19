@@ -16,34 +16,46 @@ document.addEventListener('DOMContentLoaded', () => {
         .catch(() => showAlert("Erreur lors du chargement de l'activité", 'danger'));
 });
 
-// Les traces chargées dans le visualiseur sont aussi enregistrées dans la bibliothèque
-// de l'utilisateur (si la case est cochée), via le même pipeline que le dossier surveillé.
-document.addEventListener('DOMContentLoaded', () => {
-    const input = document.getElementById('fileInput');
-    const dropArea = document.getElementById('fileUploadArea');
+// Rattache les fichiers ouverts à leur activité de bibliothèque : leur analyse avancée
+// peut alors être enregistrée et retrouvée. Le nom de fichier sert de clé le temps d'un
+// envoi ; un fichier déjà rattaché ou modifié n'est jamais réaffecté.
+function linkToLibrary(results) {
+    results.filter((r) => r.activity_id && r.status !== 'error').forEach((r) => {
+        Viewer.libraryIds.set(r.filename, r.activity_id);
+        Viewer.files.forEach((file) => {
+            if (file.name !== r.filename || file.activityId || file.edited) return;
+            file.activityId = r.activity_id;
+            // Un résultat calculé avant le rattachement reste celui de la session ;
+            // sinon on regarde si l'activité a déjà une analyse enregistrée
+            if (file.id === Viewer.activeFileId && !file.advanced) restoreAdvancedAnalysis();
+        });
+    });
+}
+
+// Enregistre dans la bibliothèque de l'utilisateur les traces envoyées au visualiseur (si
+// la case est cochée), via le même pipeline que le dossier surveillé. Appelée par
+// uploadFiles avec les fichiers eux-mêmes : aucun second écouteur ne relit le champ de
+// saisie, que le premier vide pour permettre de renvoyer le même fichier.
+async function saveToLibrary(files) {
     const toggle = document.getElementById('saveToLibrary');
-    if (!input || !dropArea || !toggle) return;
-
-    function save(fileList) {
-        const files = Array.from(fileList || []).filter((f) => /\.(gpx|kml|kmz)$/i.test(f.name));
-        if (!toggle.checked || files.length === 0) return;
-        const form = new FormData();
-        files.forEach((f) => form.append('files', f));
-        fetch('/api/activities', { method: 'POST', body: form, credentials: 'same-origin' })
-            .then((response) => response.json())
-            .then((data) => {
-                const results = data.results || [];
-                const created = results.filter((r) => r.status === 'created').length;
-                const errors = results.filter((r) => r.status === 'error').length;
-                if (created) showAlert(`${created} trace(s) enregistrée(s) dans ta bibliothèque`, 'success');
-                if (errors) showAlert(`${errors} trace(s) non enregistrée(s) dans la bibliothèque`, 'warning');
-            })
-            .catch(() => showAlert("Enregistrement dans la bibliothèque impossible", 'warning'));
+    // Un nouvel envoi du même nom peut avoir un autre contenu : l'ancien rattachement
+    // ne doit pas servir au fichier qui arrive (retiré avant toute réponse du serveur)
+    files.forEach((file) => Viewer.libraryIds.delete(file.name));
+    if (!toggle || !toggle.checked || files.length === 0) return;
+    const form = new FormData();
+    files.forEach((file) => form.append('files', file));
+    try {
+        const data = await App.api('/api/activities', { method: 'POST', body: form });
+        const results = data.results || [];
+        linkToLibrary(results);
+        const created = results.filter((r) => r.status === 'created').length;
+        const errors = results.filter((r) => r.status === 'error').length;
+        if (created) showAlert(`${created} trace(s) enregistrée(s) dans ta bibliothèque`, 'success');
+        if (errors) showAlert(`${errors} trace(s) non enregistrée(s) dans la bibliothèque`, 'warning');
+    } catch (error) {
+        showAlert('Enregistrement dans la bibliothèque impossible', 'warning');
     }
-
-    input.addEventListener('change', () => save(input.files));
-    dropArea.addEventListener('drop', (event) => save(event.dataTransfer && event.dataTransfer.files));
-});
+}
 
 // La carte change de largeur quand la liste des points apparaît ou que la barre latérale
 // se replie : Leaflet doit recalculer sa taille, sinon une bande grise reste affichée.

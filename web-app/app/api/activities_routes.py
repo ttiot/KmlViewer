@@ -7,7 +7,8 @@ from flask import current_app, jsonify, request
 from app.api import bp
 from app.auth import admin_required, current_user_id
 from app.db import get_db
-from app.services import activity_store, dem_service, inbox_watcher, ingest_service
+from app.errors import ApiError
+from app.services import activity_store, analysis_store, dem_service, inbox_watcher, ingest_service
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ def get_activity_parsed(activity_id):
     except (OSError, ValueError) as exc:
         logger.error("Fichier d'origine illisible pour l'activité %s : %s", activity_id, exc)
         return jsonify({'success': False, 'error': "Fichier d'origine indisponible"}), 500
-    return jsonify({**parsed, 'filename': row['name']})
+    return jsonify({**parsed, 'filename': row['name'], 'activity_id': row['id']})
 
 
 @bp.route('/activities/<int:activity_id>', methods=['PATCH'])
@@ -131,6 +132,40 @@ def correct_elevation(activity_id):
         logger.warning("Correction d'altitude en échec (activité %s) : %s", activity_id, exc)
         return jsonify({'success': False, 'error': "Service d'altitude indisponible"}), 502
     return jsonify({'success': True, **result})
+
+
+@bp.route('/activities/<int:activity_id>/analysis')
+def get_activity_analysis(activity_id):
+    """Analyse avancée enregistrée ; 'analysis' vaut null tant qu'elle n'a pas été lancée."""
+    db, user_id = get_db(), current_user_id()
+    if activity_store.get(db, user_id, activity_id) is None:
+        return _not_found()
+    stored = analysis_store.load(db, user_id, activity_id) or {'analysis': None, 'computed_at': None}
+    return jsonify({'success': True, **stored})
+
+
+@bp.route('/activities/<int:activity_id>/analysis', methods=['POST'])
+def run_activity_analysis(activity_id):
+    """(Re)calcule l'analyse avancée depuis le fichier d'origine et l'enregistre."""
+    try:
+        stored = analysis_store.compute(get_db(), current_app.config, current_user_id(), activity_id)
+    except LookupError:
+        return _not_found()
+    except ValueError as exc:  # fichier refusé (FileFormatError) ou trace trop volumineuse
+        raise ApiError(str(exc)) from exc
+    except OSError as exc:
+        logger.error("Fichier d'origine illisible pour l'activité %s : %s", activity_id, exc)
+        return jsonify({'success': False, 'error': "Fichier d'origine indisponible"}), 500
+    return jsonify({'success': True, **stored})
+
+
+@bp.route('/activities/<int:activity_id>/analysis', methods=['DELETE'])
+def delete_activity_analysis(activity_id):
+    db, user_id = get_db(), current_user_id()
+    if activity_store.get(db, user_id, activity_id) is None:
+        return _not_found()
+    analysis_store.delete(db, user_id, activity_id)
+    return jsonify({'success': True})
 
 
 @bp.route('/inbox')

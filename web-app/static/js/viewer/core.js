@@ -6,7 +6,13 @@
 const Viewer = {
     map: null,
     baseLayers: {},
-    files: new Map(),        // id -> { id, name, data, layer, markers, visible }
+    // id -> { id, name, data, layer, markers, visible, activityId, edited, advanced }
+    //   activityId : activité de la bibliothèque correspondante (null sinon)
+    //   edited     : la trace a été modifiée dans l'éditeur depuis son chargement
+    //   revision   : compteur de modifications (un calcul lancé avant une modification est périmé)
+    //   advanced   : dernière analyse avancée de ce fichier { analysis, computedAt, saved }
+    files: new Map(),
+    libraryIds: new Map(),   // nom de fichier -> id d'activité, pour les envois enregistrés en bibliothèque
     fileCounter: 0,
     activeFileId: null,
     currentPointIndex: -1,

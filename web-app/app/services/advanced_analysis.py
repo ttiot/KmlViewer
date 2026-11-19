@@ -23,6 +23,10 @@ import numpy as np
 from app.services import geo
 from app.services.activity_stats import ASCENT_THRESHOLD_GPS_M, MAX_TRACK_POINTS, iter_lines, parse_timestamp
 
+# À incrémenter dès qu'un changement (seuil, algorithme, format) modifie le résultat : les
+# analyses enregistrées avec une autre version sont ignorées et recalculées à la demande.
+ANALYSIS_VERSION = 1
+
 STOP_SPEED_KMH = 2.0        # en dessous : à l'arrêt
 STOP_MIN_DURATION_S = 60.0  # durée minimale d'un arrêt
 STOP_WINDOW_S = 30.0        # fenêtre du déplacement net

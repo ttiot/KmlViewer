@@ -413,31 +413,101 @@ function displayPointsOfInterest(pois) {
     }), 'Aucun point remarquable détecté');
 }
 
+// ------------------------------------------- Conservation de l'analyse avancée
+// Le résultat est gardé pour ne pas relancer le calcul à chaque fois :
+// - activité de la bibliothèque non modifiée : enregistré côté serveur (calculé depuis le
+//   fichier d'origine, sans renvoyer la trace) et relu à chaque ouverture ;
+// - tout autre fichier, ou trace modifiée dans l'éditeur : gardé en mémoire le temps de
+//   la session, pour retrouver le résultat en changeant de fichier.
+// « Relancer » recalcule et remplace ; « Effacer » supprime le résultat, enregistré ou non.
+
+const savedAnalysisUrl = (file) => `/api/activities/${file.activityId}/analysis`;
+const usesSavedAnalysis = (file) => Boolean(file && file.activityId && !file.edited);
+
+function renderAdvancedAnalysis(analysis) {
+    const summary = analysis.summary || {};
+    const unavailable = summary.unavailable || {};
+    clearAdvancedHighlight();
+    displayAdvancedSummary(summary);
+    displayStops(analysis.stops || [], unavailable.stops);
+    displaySegments(analysis.segments || [], unavailable.segments);
+    displaySpeedZones(analysis.speed_zones, unavailable.speed_zones);
+    displayTerrainAnalysis(analysis.terrain, unavailable.terrain);
+    displayPointsOfInterest(analysis.points_of_interest || []);
+    setVisible('advancedResults', true);
+}
+
+// Met le bouton et la ligne d'état en accord avec le résultat du fichier actif.
+function updateAdvancedControls() {
+    const file = Viewer.activeFile();
+    const result = file && file.advanced;
+    document.getElementById('runAdvancedLabel').textContent = result ? "Relancer l'analyse" : "Lancer l'analyse avancée";
+    document.getElementById('clearAdvancedBtn').disabled = !result;
+    let status = '';
+    if (result) {
+        const when = result.computedAt ? App.dateTime(result.computedAt) : null;
+        if (result.saved) status = `Analyse enregistrée${when ? ` le ${when}` : ''}.`;
+        else if (file.edited) status = 'Trace modifiée : résultat conservé pour cette session, non enregistré.';
+        else status = 'Résultat conservé pour cette session.';
+        status += ' Cliquez sur un résultat pour le voir sur la carte.';
+    }
+    document.getElementById('advancedStatus').textContent = status;
+}
+
+function showAdvancedResult(file) {
+    if (file && file.advanced) renderAdvancedAnalysis(file.advanced.analysis);
+    else {
+        clearAdvancedHighlight();
+        setVisible('advancedResults', false);
+    }
+    updateAdvancedControls();
+}
+
+// À chaque changement de fichier actif (ou de ses données) : réaffiche le résultat déjà
+// connu, sinon va chercher celui enregistré pour l'activité. Ne lance jamais de calcul.
+async function restoreAdvancedAnalysis() {
+    const request = ++advancedRequest; // une réponse encore en route sera ignorée
+    const file = Viewer.activeFile();
+    document.getElementById('runAdvancedBtn').disabled = false;
+    showAdvancedResult(file);
+    if (!file || file.advanced || !usesSavedAnalysis(file)) return;
+    try {
+        const data = await App.api(savedAnalysisUrl(file));
+        if (request !== advancedRequest || !data.analysis || !usesSavedAnalysis(file)) return;
+        file.advanced = { analysis: data.analysis, computedAt: data.computed_at, saved: true };
+        showAdvancedResult(file);
+    } catch (error) {
+        // Pas bloquant : l'analyse reste relançable à la main
+        console.warn("Lecture de l'analyse enregistrée impossible :", error);
+    }
+}
+
 async function runAdvancedAnalysis() {
-    if (!Viewer.hasData()) {
+    const file = Viewer.activeFile();
+    if (!file || !Viewer.hasData()) {
         showAlert('Aucune trace chargée', 'warning');
         return;
     }
     const button = document.getElementById('runAdvancedBtn');
     const request = ++advancedRequest;
+    const saved = usesSavedAnalysis(file);
+    const revision = file.revision;
     button.disabled = true;
     showAlert('Analyse avancée en cours…', 'info', { spinner: true });
     try {
-        const data = await App.api('/api/analysis/advanced', {
-            method: 'POST', body: { features: Viewer.features(), points: Viewer.points() } });
-        if (request !== advancedRequest) return; // fichier changé ou analyse effacée entre-temps
-        const analysis = data.analysis || {};
-        const summary = analysis.summary || {};
-        const unavailable = summary.unavailable || {};
-        clearAdvancedHighlight();
-        displayAdvancedSummary(summary);
-        displayStops(analysis.stops || [], unavailable.stops);
-        displaySegments(analysis.segments || [], unavailable.segments);
-        displaySpeedZones(analysis.speed_zones, unavailable.speed_zones);
-        displayTerrainAnalysis(analysis.terrain, unavailable.terrain);
-        displayPointsOfInterest(analysis.points_of_interest || []);
-        setVisible('advancedResults', true);
-        showAlert('Analyse avancée terminée', 'success');
+        const data = saved
+            ? await App.api(savedAnalysisUrl(file), { method: 'POST' })
+            : await App.api('/api/analysis/advanced', {
+                method: 'POST', body: { features: file.data.features, points: file.data.points } });
+        // Le résultat appartient au fichier analysé, même si l'utilisateur a changé de fichier
+        // entre-temps ; il est périmé si la trace a été modifiée pendant le calcul
+        if (revision === file.revision) {
+            file.advanced = { analysis: data.analysis || {}, saved,
+                computedAt: data.computed_at || new Date().toISOString() };
+        }
+        if (request !== advancedRequest) return;
+        showAdvancedResult(file);
+        showAlert(saved ? 'Analyse avancée terminée et enregistrée' : 'Analyse avancée terminée', 'success');
     } catch (error) {
         if (request !== advancedRequest) return;
         showAlert(`Analyse avancée impossible : ${error.message}`, 'danger');
@@ -446,17 +516,28 @@ async function runAdvancedAnalysis() {
     }
 }
 
-function clearAdvancedAnalysis({ silent = false } = {}) {
+async function clearAdvancedAnalysis() {
+    const file = Viewer.activeFile();
     advancedRequest += 1; // une réponse encore en route sera ignorée
     document.getElementById('runAdvancedBtn').disabled = false;
-    clearAdvancedHighlight();
-    setVisible('advancedResults', false);
-    if (!silent) showAlert('Analyse avancée effacée', 'info');
+    const wasSaved = Boolean(file && file.advanced && file.advanced.saved);
+    if (file) file.advanced = null;
+    showAdvancedResult(file);
+    if (wasSaved && usesSavedAnalysis(file)) {
+        try {
+            await App.api(savedAnalysisUrl(file), { method: 'DELETE' });
+        } catch (error) {
+            showAlert(`Analyse masquée, mais toujours enregistrée : ${error.message}`, 'warning');
+            return;
+        }
+    }
+    showAlert('Analyse avancée effacée', 'info');
 }
 
 function setupAnalysis() {
     document.getElementById('runAdvancedBtn').addEventListener('click', runAdvancedAnalysis);
-    document.getElementById('clearAdvancedBtn').addEventListener('click', () => clearAdvancedAnalysis());
+    document.getElementById('clearAdvancedBtn').addEventListener('click', clearAdvancedAnalysis);
+    updateAdvancedControls();
     // Grille, axes et infobulles prennent leurs couleurs à la création du graphique :
     // au changement de thème, on les recrée à partir de l'analyse déjà chargée.
     document.addEventListener('themechange', () => {
