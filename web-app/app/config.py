@@ -3,9 +3,14 @@ Configuration de l'application Flask.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 DEFAULT_SECRET_KEY = 'your-secret-key-change-in-production'
+
+
+def _env_list(name: str) -> list:
+    return [item.strip() for item in (os.environ.get(name) or '').split(',') if item.strip()]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -24,12 +29,23 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', False)
-    # Nombre de reverse proxies de confiance devant l'appli (X-Forwarded-*)
+    # Durée absolue d'une session, comptée depuis la connexion
+    PERMANENT_SESSION_LIFETIME = timedelta(hours=float(os.environ.get('SESSION_LIFETIME_HOURS') or 12))
+    # Nombre de reverse proxies de confiance devant l'appli (X-Forwarded-For/Proto)
     TRUST_PROXY = int(os.environ.get('TRUST_PROXY') or 0)
+    # X-Forwarded-Host n'est cru que sur demande : beaucoup de proxies (HAProxy) ne le posent
+    # pas et laisseraient passer celui du client. Sans lui, l'en-tête Host fait foi.
+    TRUST_PROXY_HOST = _env_bool('TRUST_PROXY_HOST', False)
+    # Noms d'hôte acceptés (séparés par des virgules, « .example.com » couvre les
+    # sous-domaines). Vide : en mode local, seul localhost est accepté (anti DNS rebinding).
+    TRUSTED_HOSTS = _env_list('TRUSTED_HOSTS')
+    # Stockage maximal des fichiers d'origine par utilisateur (0 = illimité)
+    USER_QUOTA_MB = int(os.environ.get('USER_QUOTA_MB') or 2048)
 
     # Configuration des fichiers d'exemple
     SAMPLE_FILES_DIR = os.environ.get('SAMPLE_FILES_DIR') or '/app/sample_files'
-    SAMPLE_FILES_FALLBACK = str(Path(__file__).parent.parent.parent)
+    # Hors Docker : le même dossier dédié, jamais la racine du dépôt (.env, .git, inbox)
+    SAMPLE_FILES_FALLBACK = str(Path(__file__).parent.parent / 'sample_files')
 
     # Stockage persistant : base SQLite + fichiers d'origine
     DATA_DIR = os.environ.get('DATA_DIR') or str(Path(__file__).parent.parent / 'data')

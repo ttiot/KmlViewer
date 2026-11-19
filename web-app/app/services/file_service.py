@@ -16,7 +16,7 @@ class FileService:
 
     @staticmethod
     def _sample_dir() -> Path:
-        """Dossier monté par Docker, sinon la racine du dépôt (développement local)."""
+        """Dossier monté par Docker, sinon web-app/sample_files (développement local)."""
         sample_dir = Path(current_app.config['SAMPLE_FILES_DIR'])
         return sample_dir if sample_dir.is_dir() else Path(current_app.config['SAMPLE_FILES_FALLBACK'])
 

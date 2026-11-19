@@ -20,9 +20,13 @@ services:
       - kml-viewer-data:/data
       # Dossier surveillé : un sous-dossier par utilisateur (username ou email)
       - ./inbox:/inbox:ro
-      # Fichiers KML du projet utilisés comme exemples
-      - .:/app/sample_files:ro
+      # Fichiers d'exemple, visibles de tous les comptes : un dossier dédié, jamais la racine
+      # du projet (elle contient .env, .git et l'inbox de tout le monde)
+      - ./web-app/sample_files:/app/sample_files:ro
     read_only: true
+    # Un fichier hostile ne doit pas pouvoir épuiser la mémoire de l'hôte
+    mem_limit: ${KMLVIEWER_MEM_LIMIT:-2g}
+    pids_limit: 256
     tmpfs:
       - /tmp
     cap_drop:

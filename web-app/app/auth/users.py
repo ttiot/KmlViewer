@@ -2,7 +2,7 @@
 
 import logging
 import sqlite3
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,26 @@ def get_or_create_local_user(db: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
+def match_login(db: sqlite3.Connection, login: str, active_only: bool = False) -> List[sqlite3.Row]:
+    """
+    Comptes désignés par un login (insensible à la casse). Un login contenant « @ » est
+    comparé aux emails, sinon aux usernames, jamais aux deux : un compte dont le username
+    serait l'email d'un autre ne peut pas se faire passer pour lui.
+    """
+    column = 'email' if '@' in login else 'username'
+    sql = f"SELECT * FROM users WHERE sub != ? AND lower({column}) = lower(?)"
+    if active_only:
+        sql += " AND is_active = 1"
+    return db.execute(sql + " ORDER BY id", (LOCAL_SUB, login)).fetchall()
+
+
 def find_by_login(db: sqlite3.Connection, login: str) -> Optional[sqlite3.Row]:
-    """Recherche par username ou email (insensible à la casse), comptes actifs uniquement."""
-    return db.execute(
-        "SELECT * FROM users WHERE is_active = 1 AND (lower(username) = lower(?) OR lower(email) = lower(?)) "
-        "ORDER BY id LIMIT 1", (login, login)).fetchone()
+    """Compte actif désigné par un username ou un email ; None s'il est absent ou ambigu."""
+    rows = match_login(db, login, active_only=True)
+    if len(rows) > 1:
+        logger.warning("Login %r ambigu (%d comptes) : aucun n'est retenu", login, len(rows))
+        return None
+    return rows[0] if rows else None
 
 
 def _claim_roles(claims: Mapping) -> set:
@@ -52,7 +67,8 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
     if not sub or sub == LOCAL_SUB:
         raise ValueError("Claim 'sub' absent ou invalide dans le jeton OIDC")
 
-    email = claims.get('email')
+    # Un email explicitement non vérifié n'identifie personne : il n'est pas retenu
+    email = claims.get('email') if claims.get('email_verified') is not False else None
     username = claims.get('preferred_username') or email or sub
     display_name = (claims.get('name')
                     or ' '.join(filter(None, [claims.get('given_name'), claims.get('family_name')]))

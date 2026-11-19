@@ -57,6 +57,15 @@ def _text(parent: ET.Element, tag: str, value: Any) -> None:
         ET.SubElement(parent, tag).text = str(value)
 
 
+def _csv_text(value: Any) -> str:
+    """
+    Texte libre destiné à un tableur : une cellule commençant par = + - @ (ou tabulation,
+    retour chariot) y serait évaluée comme une formule. L'apostrophe la force en texte.
+    """
+    text = '' if value is None else str(value)
+    return "'" + text if text[:1] in ('=', '+', '-', '@', '\t', '\r') else text
+
+
 class KMLEditor:
     """Simplification et export des features du visualiseur."""
 
@@ -169,8 +178,8 @@ class KMLEditor:
                 coords = feature['coordinates']
                 parsed_info = feature.get('parsed_info') or {}
                 speed_kmh, speed_kts = parsed_info.get('speed_kmh'), parsed_info.get('speed_kts')
-                writer.writerow(['Point', feature.get('name', ''), feature.get('description', ''),
-                                 coords[0], coords[1], feature.get('altitude', 0), _timestamp(feature) or '',
+                writer.writerow(['Point', _csv_text(feature.get('name', '')), _csv_text(feature.get('description', '')),
+                                 coords[0], coords[1], feature.get('altitude', 0), _csv_text(_timestamp(feature)),
                                  '' if speed_kmh is None else speed_kmh, '' if speed_kts is None else speed_kts])
 
         if include_traces:
@@ -178,16 +187,17 @@ class KMLEditor:
                 name = feature.get('name') or 'Trace'
                 for i, coord in enumerate(coords):
                     altitude = _altitude(coord)
-                    writer.writerow(['TracePoint', f"{name} - Point {i + 1}", feature.get('description', ''),
+                    writer.writerow(['TracePoint', _csv_text(f"{name} - Point {i + 1}"),
+                                     _csv_text(feature.get('description', '')),
                                      coord[0], coord[1], 0 if altitude is None else altitude,
-                                     (stamps[i] or '') if stamps else '', '', ''])
+                                     _csv_text(stamps[i]) if stamps else '', '', ''])
             for feature, rings in _polygons(features):
                 name = feature.get('name') or 'Polygone'
                 for position, ring in enumerate(rings):
                     kind = 'PolygonPoint' if position == 0 else 'PolygonHolePoint'
                     for i, coord in enumerate(ring):
                         altitude = _altitude(coord)
-                        writer.writerow([kind, f"{name} - Point {i + 1}", feature.get('description', ''),
+                        writer.writerow([kind, _csv_text(f"{name} - Point {i + 1}"), _csv_text(feature.get('description', '')),
                                          coord[0], coord[1], 0 if altitude is None else altitude, '', '', ''])
         return output.getvalue()
 

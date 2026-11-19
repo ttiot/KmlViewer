@@ -2,6 +2,7 @@
 Configuration des tests pytest.
 """
 
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -84,4 +85,5 @@ def login_as(app, sub, **claims):
     client = app.test_client()
     with client.session_transaction() as session:
         session['user_id'] = user['id']
+        session['login_at'] = int(time.time())
     return client, user['id']

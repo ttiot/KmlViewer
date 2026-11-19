@@ -33,8 +33,11 @@
                 <span class="avatar" aria-hidden="true">{{ label[:1] }}</span>
                 <span class="d-none d-md-inline">{{ label }}</span>
             </span>
-            <a class="icon-btn" href="{{ url_for('auth.logout') }}" title="Déconnexion" aria-label="Déconnexion">
-                <i class="fas fa-right-from-bracket"></i></a>
+            {# POST : un lien ou une image d'un site tiers ne peut pas déconnecter l'utilisateur #}
+            <form method="post" action="{{ url_for('auth.logout') }}" class="d-inline">
+                <button type="submit" class="icon-btn" title="Déconnexion" aria-label="Déconnexion">
+                    <i class="fas fa-right-from-bracket"></i></button>
+            </form>
             {% endif %}
         </div>
     </div>

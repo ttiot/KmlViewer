@@ -16,18 +16,18 @@ run_compose() {
     fi
 }
 
-# Arrêter et supprimer les conteneurs, réseaux, volumes et images
-echo "🛑 Arrêt des conteneurs..."
-run_compose down
+# Les volumes contiennent la base et les fichiers d'origine de tous les utilisateurs
+echo "⚠️  Cette opération supprime les conteneurs, les images ET les volumes du projet :"
+echo "   toutes les activités enregistrées et les dalles d'altitude seront perdues."
+read -r -p "   Tape « supprimer » pour confirmer : " answer
+if [ "$answer" != "supprimer" ]; then
+    echo "Abandon : rien n'a été supprimé."
+    exit 1
+fi
 
-echo "🧹 Suppression des volumes..."
-run_compose down -v
-
-echo "🗑️  Suppression des images..."
-run_compose down --rmi all
-
-echo "🧽 Nettoyage des ressources Docker inutilisées..."
-docker system prune -f
+# Uniquement les ressources de ce projet : rien d'autre sur la machine n'est touché
+echo "🛑 Arrêt des conteneurs, suppression des volumes et des images..."
+run_compose --profile dem down -v --rmi all
 
 echo ""
 echo "✅ Nettoyage terminé!"

@@ -12,6 +12,8 @@ from app.services.cache_service import parse_gpx_cached, parse_kml_cached
 from app.services.file_service import FileService
 from app.services.timing_tools import track_time
 
+MAX_FILES_PER_UPLOAD = 50
+
 
 def parse_upload(file, display_mode: str = 'double') -> dict:
     """Parse un fichier envoyé (GPX, KML ou KMZ). Lève FileFormatError si le fichier est refusé."""
@@ -40,6 +42,8 @@ def multi_upload():
     files = [f for f in request.files.getlist('files') if f and f.filename]
     if not files:
         raise ApiError('Aucun fichier fourni')
+    if len(files) > MAX_FILES_PER_UPLOAD:
+        raise ApiError(f'{MAX_FILES_PER_UPLOAD} fichiers maximum par envoi')
     display_mode = request.form.get('display_mode', 'double')
     results = []
     for file in files:

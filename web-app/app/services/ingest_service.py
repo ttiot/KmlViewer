@@ -88,6 +88,16 @@ def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes,
     if existing is not None:
         return IngestResult('duplicate', existing['id'], "Fichier déjà importé")
 
+    quota = int(cfg.get('USER_QUOTA_MB') or 0) * 1024 * 1024
+    if quota:
+        try:
+            used = activity_store.user_storage_bytes(cfg['DATA_DIR'], user_id)
+        except OSError as exc:
+            logger.error("Quota illisible pour l'utilisateur %s : %s", user_id, exc)
+            return IngestResult('error', message="Erreur de stockage")
+        if used + len(raw) > quota:
+            return IngestResult('error', message="Quota de stockage atteint : supprime des activités")
+
     try:
         parsed = parse_raw(raw, filename)
         if not parsed.get('success'):

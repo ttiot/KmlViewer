@@ -9,12 +9,22 @@ from pathlib import PurePath
 from typing import Tuple
 
 SUPPORTED_EXTENSIONS = ('gpx', 'kml', 'kmz')
-# Taille maximale du KML une fois décompressé (protège des bombes de décompression)
-MAX_KMZ_UNCOMPRESSED = 64 * 1024 * 1024
+# Taille maximale du KML une fois décompressé (protège des bombes de décompression) :
+# la même que celle d'un fichier envoyé tel quel
+MAX_KMZ_UNCOMPRESSED = 16 * 1024 * 1024
+# Points acceptés par fichier (repères et sommets de traces confondus). Chaque point coûte
+# de l'ordre du kilo-octet une fois parsé : sans plafond, quelques dizaines de ko très
+# compressibles suffisent à saturer la mémoire du serveur. 200 000 points = 55 h à 1 Hz.
+MAX_FILE_POINTS = 200_000
 
 
 class FileFormatError(ValueError):
     """Fichier refusé ; le message est affichable tel quel à l'utilisateur."""
+
+
+class TooManyPointsError(FileFormatError):
+    def __init__(self):
+        super().__init__(f"Fichier trop volumineux (plus de {MAX_FILE_POINTS} points)")
 
 
 def extension(filename: str) -> str:

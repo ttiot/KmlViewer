@@ -47,7 +47,8 @@ Configuration : copier `.env.example` en `.env`.
 ### 📁 Fichiers
 
 - **Formats** : KML, KMZ et GPX, jusqu'à 16 Mo, plusieurs fichiers à la fois (glisser-déposer ou sélection)
-- **Fichiers d'exemple** : les traces placées à la racine du dépôt sont proposées dans la barre latérale
+- **Fichiers d'exemple** : les traces placées dans `web-app/sample_files/` sont proposées dans la barre
+  latérale, à tous les comptes
 - **Multi-fichiers** : chaque fichier a sa case d'affichage et son onglet ; l'onglet actif alimente
   la liste des points, l'analyse, l'édition et l'export
 - **Modes d'affichage** : double unité (km/h + kts, ft + m) ou unité simple
@@ -84,7 +85,7 @@ exclus du CSV.
 | `./stop.sh` | Arrête l'application |
 | `./restart.sh` | Redémarre l'application |
 | `./logs.sh` | Affiche les logs en temps réel |
-| `./cleanup.sh` | Nettoyage complet (conteneurs, images, volumes) |
+| `./cleanup.sh` | Nettoyage complet du projet, **données comprises** (demande confirmation) |
 
 Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 

@@ -17,6 +17,7 @@ from app.db import get_db
 logger = logging.getLogger(__name__)
 
 oauth = OAuth()
+MIN_SECRET_KEY_LENGTH = 32
 
 
 def init_oidc(app) -> None:
@@ -31,6 +32,13 @@ def init_oidc(app) -> None:
         raise RuntimeError(
             "OIDC activé avec la SECRET_KEY par défaut : les cookies de session seraient "
             "falsifiables. Définis SECRET_KEY (ex. `openssl rand -hex 32`).")
+    if len(app.config['SECRET_KEY']) < MIN_SECRET_KEY_LENGTH and not app.config.get('TESTING'):
+        raise RuntimeError(
+            f"SECRET_KEY trop courte (moins de {MIN_SECRET_KEY_LENGTH} caractères) : "
+            "génère-la avec `openssl rand -hex 32`.")
+    if not app.config.get('SESSION_COOKIE_SECURE'):
+        logger.warning("OIDC activé sans SESSION_COOKIE_SECURE : le cookie de session peut partir "
+                       "en clair. À réserver au développement local.")
 
     oauth.init_app(app)
     oauth.register(
@@ -132,11 +140,12 @@ def callback():
     next_url = session.pop('next', None)
     session.clear()  # nouvelle session après login (anti-fixation)
     session['user_id'] = user['id']
+    session['login_at'] = int(time.time())
     session.permanent = True
     return redirect(safe_next(next_url or ''))
 
 
-@bp.route('/auth/logout')
+@bp.route('/auth/logout', methods=['POST'])
 def logout():
     session.clear()
     if not oidc_enabled():

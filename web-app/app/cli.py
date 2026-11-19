@@ -6,6 +6,7 @@ from pathlib import Path
 
 import click
 
+from app.auth import users
 from app.db import connect
 from app.services import inbox_watcher, ingest_service
 
@@ -55,16 +56,20 @@ def register_cli(app) -> None:
         """Donne (ou retire) le rôle admin à un compte, par username ou email."""
         db = connect(app.config['DB_PATH'])
         try:
-            cur = db.execute(
-                "UPDATE users SET is_admin = ?, is_active = 1 "
-                "WHERE lower(username) = lower(?) OR lower(email) = lower(?)",
-                (0 if revoke else 1, login, login))
+            matches = users.match_login(db, login)
+            if not matches:
+                raise click.ClickException(f"Aucun compte pour « {login} »")
+            if len(matches) > 1:
+                # Jamais de promotion en lot : un homonyme deviendrait admin au passage
+                found = ', '.join(f"#{row['id']} {row['username']} <{row['email']}>" for row in matches)
+                raise click.ClickException(f"« {login} » désigne plusieurs comptes ({found}) : rien n'est modifié")
+            target = matches[0]
+            db.execute("UPDATE users SET is_admin = ?, is_active = 1 WHERE id = ?",
+                       (0 if revoke else 1, target['id']))
             db.commit()
         finally:
             db.close()
-        if cur.rowcount == 0:
-            raise click.ClickException(f"Aucun compte pour « {login} »")
-        click.echo(f"{cur.rowcount} compte(s) mis à jour")
+        click.echo(f"Compte #{target['id']} ({target['username']}) mis à jour")
 
     @app.cli.command('backup')
     @click.argument('destination', required=False, type=click.Path(dir_okay=False, path_type=Path))

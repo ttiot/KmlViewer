@@ -121,6 +121,18 @@ défaut dans l'access token après vérification de sa signature, de son audienc
 Puis renseigner `.env` (modèle : `.env.example`) : `SECRET_KEY`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`,
 `OIDC_CLIENT_SECRET`, `SESSION_COOKIE_SECURE=1`, `TRUST_PROXY=1`.
 
+Points de sécurité à connaître :
+
+- **Session** : 12 h à compter de la connexion (`SESSION_LIFETIME_HOURS`), sans prolongation
+  par l'activité ; un rôle retiré côté IdP est donc relu au plus tard à cette échéance.
+- **Nom d'hôte** : sans OIDC, l'appli ne répond qu'à `localhost` / `127.0.0.1` (protection
+  contre le DNS rebinding). Pour la joindre sous un autre nom, renseigner `TRUSTED_HOSTS`.
+- **Reverse proxy** : `X-Forwarded-Host` n'est cru qu'avec `TRUST_PROXY_HOST=1`. Derrière
+  HAProxy, qui transmet `Host` tel quel, le laisser à 0.
+- **Volumes** : 200 000 points par fichier, 50 fichiers par envoi, `USER_QUOTA_MB` (2 Go par
+  défaut) de fichiers d'origine par utilisateur. Pas de limitation de débit dans l'appli :
+  la poser sur le reverse proxy si l'instance est ouverte à des comptes peu sûrs.
+
 Gestion des comptes :
 
 - Création à la première connexion à partir des claims `sub`, `email`, `preferred_username`, `name`.
@@ -128,6 +140,11 @@ Gestion des comptes :
 - Avec `OIDC_ADMIN_ROLE` : le droit admin suit le claim `roles` à chaque connexion.
 - `OIDC_AUTO_ACTIVATE=0` : un nouveau compte attend l'activation par un admin.
 - Dépannage : `flask --app kml_viewer user-admin <login>` donne le rôle admin en ligne de commande.
+- Un login contenant « @ » désigne un email, sinon un username (jamais l'un pour l'autre) ; s'il
+  correspond à plusieurs comptes, il n'en désigne aucun : la commande et le dossier surveillé
+  refusent d'agir. Un email que l'IdP déclare non vérifié n'est pas retenu.
+- Supprimer un compte ne le bannit pas : avec l'activation automatique, la personne peut se
+  reconnecter. Pour bloquer un accès, désactiver le compte.
 
 Sans `OIDC_ISSUER`, l'application tourne en mono-utilisateur local **sans authentification**.
 

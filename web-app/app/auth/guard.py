@@ -1,6 +1,8 @@
 """Contrôle d'accès : tout est fermé par défaut, sauf une liste blanche explicite."""
 
+import time
 from functools import wraps
+from urllib.parse import urlsplit
 
 from flask import abort, current_app, g, jsonify, redirect, render_template, request, session, url_for
 
@@ -23,9 +25,30 @@ def wants_json() -> bool:
 
 def safe_next(target: str) -> str:
     """N'accepte qu'un chemin local, pour éviter les redirections ouvertes."""
-    if target and target.startswith('/') and not target.startswith('//') and '\\' not in target:
-        return target
-    return url_for('main.index')
+    fallback = url_for('main.index')
+    if not target or not target.startswith('/') or target.startswith('//') or '\\' in target:
+        return fallback
+    # Tabulation, saut de ligne, espace : les navigateurs (et Werkzeug) les retirent de
+    # l'URL, « /\t/evil.com » deviendrait « //evil.com »
+    if any(ord(char) <= 0x20 or ord(char) == 0x7f for char in target):
+        return fallback
+    parts = urlsplit(target)
+    if parts.scheme or parts.netloc:
+        return fallback
+    return target
+
+
+def session_expired() -> bool:
+    """
+    Durée de vie absolue, comptée depuis la connexion : le cookie est rafraîchi à chaque
+    requête, sans cette borne une session active (ou volée) ne finirait jamais, et un rôle
+    retiré côté IdP ne serait jamais relu.
+    """
+    login_at = session.get('login_at')
+    if not isinstance(login_at, (int, float)):
+        return True
+    lifetime = current_app.permanent_session_lifetime.total_seconds()
+    return not 0 <= time.time() - login_at <= lifetime
 
 
 def _load_user_and_guard():
@@ -39,9 +62,12 @@ def _load_user_and_guard():
 
     user_id = session.get('user_id')
     if user_id is not None:
-        g.user = users.get_by_id(get_db(), user_id)
-        if g.user is None:
+        if session_expired():
             session.clear()
+        else:
+            g.user = users.get_by_id(get_db(), user_id)
+            if g.user is None:
+                session.clear()
 
     if request.endpoint in PUBLIC_ENDPOINTS:
         return None

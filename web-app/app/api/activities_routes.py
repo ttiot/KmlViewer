@@ -5,6 +5,7 @@ import logging
 from flask import current_app, jsonify, request
 
 from app.api import bp
+from app.api.routes import MAX_FILES_PER_UPLOAD
 from app.auth import admin_required, current_user_id
 from app.db import get_db
 from app.errors import ApiError
@@ -12,7 +13,6 @@ from app.services import activity_store, analysis_store, dem_service, inbox_watc
 
 logger = logging.getLogger(__name__)
 
-MAX_FILES_PER_UPLOAD = 50
 DEFAULT_TRACK_POINTS = 5000
 MAX_TRACK_POINTS = 50000
 

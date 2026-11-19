@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 from defusedxml.ElementTree import fromstring as safe_fromstring  # anti XXE / bombes d'entités
 from datetime import datetime
 from typing import Dict, Any, List
+from app.services import file_formats
 from app.services.timing_tools import track_time
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
 
@@ -54,6 +55,8 @@ class GPXParser:
 
             # Waypoints
             for wpt in root.findall('gpx:wpt', ns):
+                if len(points) >= file_formats.MAX_FILE_POINTS:
+                    raise file_formats.TooManyPointsError()
                 lat = float(wpt.get('lat'))
                 lon = float(wpt.get('lon'))
                 ele_elem = wpt.find('gpx:ele', ns)
@@ -92,6 +95,8 @@ class GPXParser:
 
                 for seg in trk.findall('gpx:trkseg', ns):
                     for trkpt in seg.findall('gpx:trkpt', ns):
+                        if len(points) >= file_formats.MAX_FILE_POINTS:
+                            raise file_formats.TooManyPointsError()
                         lat = float(trkpt.get('lat'))
                         lon = float(trkpt.get('lon'))
                         ele_elem = trkpt.find('gpx:ele', ns)
@@ -155,6 +160,8 @@ class GPXParser:
             }
         except ET.ParseError as exc:
             return {'success': False, 'error': f'Erreur de parsing XML: {str(exc)}'}
+        except file_formats.TooManyPointsError as exc:
+            return {'success': False, 'error': str(exc)}
         except (ValueError, TypeError, AttributeError):
             # Coordonnées absentes ou non numériques, entités interdites (defusedxml)…
             return {'success': False, 'error': 'Fichier GPX invalide'}

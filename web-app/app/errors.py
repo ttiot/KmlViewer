@@ -44,7 +44,7 @@ def init_errors(app) -> None:
     @app.errorhandler(Exception)
     def unexpected_error(exc):
         # Le détail part dans les logs, jamais dans la réponse
-        logger.exception("Erreur non gérée sur %s %s", request.method, request.path)
+        logger.exception("Erreur non gérée sur %s %r", request.method, request.path)
         if _is_api():
             return jsonify({'success': False, 'error': 'Erreur interne du serveur'}), 500
         return InternalServerError()

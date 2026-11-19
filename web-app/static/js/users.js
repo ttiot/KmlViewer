@@ -19,7 +19,9 @@
     }
 
     async function remove(user) {
-        if (!window.confirm(`Supprimer ${user.username} et TOUTES ses activités ? Action irréversible.`)) return;
+        if (!window.confirm(`Supprimer ${user.username} et TOUTES ses activités ? Action irréversible.\n\n`
+            + 'Supprimer ne bannit pas : si les comptes sont activés automatiquement, la personne pourra se '
+            + 'reconnecter. Pour bloquer un accès, désactive le compte.')) return;
         try {
             await api(`/api/users/${user.id}`, { method: 'DELETE' });
             load();

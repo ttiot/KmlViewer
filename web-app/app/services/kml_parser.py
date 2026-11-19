@@ -7,6 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 from defusedxml.ElementTree import fromstring as safe_fromstring  # anti XXE / bombes d'entités
 import logging
+from app.services import file_formats
 from app.services.timing_tools import track_time
 from typing import Dict, Any, List, Optional
 
@@ -66,6 +67,8 @@ class KMLParser:
                 'success': False,
                 'error': f'Erreur de parsing XML: {str(e)}'
             }
+        except file_formats.TooManyPointsError as e:
+            return {'success': False, 'error': str(e)}
         except (ValueError, AttributeError, TypeError) as e:
             return {
                 'success': False,
@@ -282,10 +285,24 @@ class KMLParser:
 
         # Trouver tous les Placemark
         placemarks = root.findall('.//kml:Placemark', ns)
+        total = 0
         for i, placemark in enumerate(placemarks):
-            features.extend(KMLParser._extract_placemark_data(placemark, i))
+            extracted = KMLParser._extract_placemark_data(placemark, i)
+            total += sum(KMLParser._point_count(feature) for feature in extracted)
+            if total > file_formats.MAX_FILE_POINTS:
+                raise file_formats.TooManyPointsError()
+            features.extend(extracted)
 
         return features
+
+    @staticmethod
+    def _point_count(feature: Dict[str, Any]) -> int:
+        """Nombre de points portés par une feature (sommets, trous et traces imbriquées compris)."""
+        if feature['type'] == 'marker':
+            return 1
+        if feature['type'] == 'multitrack':
+            return sum(len(track['coordinates']) for track in feature['tracks'])
+        return len(feature['coordinates']) + sum(len(hole) for hole in feature.get('holes') or [])
 
     @staticmethod
     def _extract_placemark_data(placemark: ET.Element, index: int) -> List[Dict[str, Any]]:
@@ -351,9 +368,12 @@ class KMLParser:
                         lon = float(parts[0])
                         lat = float(parts[1])
                         alt = float(parts[2]) if len(parts) > 2 else 0
-                        coordinates.append([lat, lon, alt])
                     except ValueError:
                         continue
+                    # Arrêt dès le dépassement : inutile de matérialiser des millions de points
+                    if len(coordinates) >= file_formats.MAX_FILE_POINTS:
+                        raise file_formats.TooManyPointsError()
+                    coordinates.append([lat, lon, alt])
         return coordinates
 
     @staticmethod
@@ -476,6 +496,8 @@ class KMLParser:
         coord_elements = track.findall('gx:coord', ns)
         when_elements = track.findall('kml:when', ns)
         paired = len(when_elements) == len(coord_elements)
+        if len(coord_elements) > file_formats.MAX_FILE_POINTS:
+            raise file_formats.TooManyPointsError()
 
         coordinates = []
         timestamps = []

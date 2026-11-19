@@ -44,6 +44,17 @@ def raw_file_path(data_dir: str, user_id: int, sha256: str, ext: str) -> Path:
     return Path(data_dir) / 'files' / str(int(user_id)) / f"{sha256}.{ext}"
 
 
+def user_storage_bytes(data_dir: str, user_id: int) -> int:
+    """Volume des fichiers d'origine conservés pour un utilisateur."""
+    directory = Path(data_dir) / 'files' / str(int(user_id))
+    try:
+        with os.scandir(directory) as entries:
+            return sum(entry.stat(follow_symlinks=False).st_size for entry in entries
+                       if entry.is_file(follow_symlinks=False))
+    except FileNotFoundError:
+        return 0
+
+
 def write_raw_file(path: Path, raw: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

@@ -4,7 +4,6 @@ Application Flask : factory et câblage des composants.
 
 import logging
 import os
-from datetime import timedelta
 from pathlib import Path
 
 from flask import Flask
@@ -20,7 +19,6 @@ def create_app(config_class=Config, overrides=None):
     app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
     app.config.from_object(config_class)
     app.config.update(overrides or {})
-    app.config.setdefault('PERMANENT_SESSION_LIFETIME', timedelta(hours=12))
 
     # Chemins dérivés du dossier de données
     data_dir = Path(app.config['DATA_DIR']).resolve()
