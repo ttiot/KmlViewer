@@ -3,7 +3,7 @@
 import logging
 from urllib.parse import urlsplit
 
-from flask import request
+from flask import current_app, request
 from werkzeug.exceptions import SecurityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.routing import IntegerConverter
@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 UNSAFE_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 LOCAL_HOSTS = ('localhost', '127.0.0.1', '[::1]')
+# Sonde de santé : servie quel que soit l'en-tête Host (voir _reject_untrusted_host)
+HEALTH_PATH, HEALTH_ENDPOINT = '/api/health', 'api.health_check'
 # Plus grand entier qu'une colonne SQLite sait stocker
 SQLITE_MAX_INT = 2 ** 63 - 1
 
@@ -66,10 +68,19 @@ def _reject_untrusted_host():
     Un en-tête Host hors de TRUSTED_HOSTS est refusé (400) avant tout autre traitement. Flask
     ne lève ce refus qu'au moment du routage, après les before_request : le contrôle d'accès
     tournerait d'abord, sans pouvoir construire la moindre URL (redirection vers le login).
+
+    Seule exception : la sonde de santé. Elle est interrogée sans le nom public de l'appli
+    (HEALTHCHECK de l'image sur localhost, sonde d'un répartiteur de charge sur l'adresse du
+    conteneur) ; la refuser rendait l'image « unhealthy » dès que TRUSTED_HOSTS était posé,
+    donc toujours en OIDC. Sa réponse est fixe (état et version), ne dépend pas du Host et
+    ne construit aucune URL : la servir sous un nom quelconque n'ouvre rien.
     """
-    if isinstance(request.routing_exception, SecurityError):
-        logger.warning("Requête refusée : en-tête Host %r hors de TRUSTED_HOSTS", request.headers.get('Host'))
-        raise request.routing_exception
+    if not isinstance(request.routing_exception, SecurityError):
+        return None
+    if request.method in ('GET', 'HEAD') and request.path == HEALTH_PATH:
+        return current_app.view_functions[HEALTH_ENDPOINT]()
+    logger.warning("Requête refusée : en-tête Host %r hors de TRUSTED_HOSTS", request.headers.get('Host'))
+    raise request.routing_exception
 
 
 def _check_same_origin():

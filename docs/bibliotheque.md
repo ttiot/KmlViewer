@@ -281,7 +281,9 @@ publication multi-architecture sur GHCR et Docker Hub. Rien n'est publié si une
 | Autre branche | `unstable-<branche>` |
 | Chaque lundi | la dernière release est reconstruite sans cache, pour embarquer les correctifs de l'image de base |
 
-`/api/health` renvoie la version embarquée dans l'image.
+`/api/health` renvoie la version embarquée dans l'image. C'est la seule route servie quel que soit
+l'en-tête `Host` (hors `TRUSTED_HOSTS` compris) : le `HEALTHCHECK` de l'image et la sonde d'un
+répartiteur de charge l'interrogent sans le nom public de l'appli.
 
 ## Tests
 

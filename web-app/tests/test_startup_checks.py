@@ -173,3 +173,29 @@ def test_watcher_starts_under_gunicorn_even_in_development_config(tmp_path, monk
     monkeypatch.setenv('SERVER_SOFTWARE', 'gunicorn/23.0.0')
     _start_inbox_watcher(app)
     assert len(started) == 1
+
+
+@pytest.mark.parametrize('host', ['localhost:5000', '127.0.0.1:5000', '172.17.0.2:5000', 'evil.example'])
+def test_health_probe_answers_whatever_the_host(tmp_path, host):
+    """
+    Le HEALTHCHECK de l'image interroge localhost:5000, un répartiteur de charge l'adresse
+    du conteneur : avec TRUSTED_HOSTS (obligatoire en OIDC), la sonde était refusée (400)
+    et le conteneur restait « unhealthy ». Elle répond sous n'importe quel nom ; tout le
+    reste reste refusé.
+    """
+    app = create_app(TestingConfig, overrides={'DATA_DIR': str(tmp_path / 'data'), **PROD_OIDC})
+    client = app.test_client()
+    health = client.get('/api/health', headers={'Host': host})
+    assert health.status_code == 200 and health.get_json()['status'] == 'healthy'
+    assert client.head('/api/health', headers={'Host': host}).status_code == 200
+    # Rien d'autre ne passe sous ce nom, pas même une autre route publique ou une écriture sur la sonde
+    for method, path in (('GET', '/'), ('GET', '/api/activities'), ('GET', '/auth/login'),
+                         ('GET', '/api/health/'), ('GET', '/api/healthz'), ('POST', '/api/health')):
+        assert client.open(path, method=method, headers={'Host': host}).status_code == 400, (method, path)
+
+
+def test_health_probe_still_answers_under_the_public_name(tmp_path):
+    app = create_app(TestingConfig, overrides={'DATA_DIR': str(tmp_path / 'data'), **PROD_OIDC})
+    response = app.test_client().get('/api/health', headers={'Host': 'traces.example.com'})
+    assert response.status_code == 200 and response.headers['Cache-Control'] == 'no-store'
+
