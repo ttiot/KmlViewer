@@ -26,22 +26,53 @@ function updatePointsListHighlight() {
     }
 }
 
+// Repère du point sélectionné sur la carte. Indispensable pour les points de trace (GPX),
+// qui n'ont pas de marqueur : sans lui, rien ne distingue le point choisi sur la trace.
+// Un seul repère, déplacé à chaque sélection ; il ne capte pas les clics.
+function updateSelectionMarker() {
+    const file = Viewer.activeFile();
+    const point = Viewer.points()[Viewer.currentPointIndex];
+    const coordinates = point && point.coordinates;
+    const shown = Boolean(file && file.visible && Array.isArray(coordinates)
+        && Number.isFinite(Number(coordinates[0])) && Number.isFinite(Number(coordinates[1])));
+    if (!shown) {
+        if (Viewer.selectionMarker) Viewer.map.removeLayer(Viewer.selectionMarker);
+        return;
+    }
+    if (!Viewer.selectionMarker) {
+        Viewer.selectionMarker = L.marker(coordinates, {
+            icon: L.divIcon({ className: 'selection-marker', iconSize: [26, 26], iconAnchor: [13, 13] }),
+            interactive: false, keyboard: false, zIndexOffset: 1000,
+        });
+    }
+    Viewer.selectionMarker.setLatLng(coordinates);
+    if (!Viewer.map.hasLayer(Viewer.selectionMarker)) Viewer.selectionMarker.addTo(Viewer.map);
+}
+
 function selectPoint(index) {
     if (index < 0 || index >= Viewer.points().length) return;
     Viewer.currentPointIndex = index;
     updateNavigationInfo();
     updatePointsListHighlight();
+    updateSelectionMarker();
 }
 
-// Sélectionne un point, centre la carte dessus et ouvre son popup s'il est dessiné.
+// Sélectionne un point, centre la carte dessus et ouvre son popup : celui de son marqueur
+// s'il est dessiné, sinon un popup posé à sa position (point de trace).
 function navigateToPoint(index) {
     const points = Viewer.points();
     if (index < 0 || index >= points.length) return;
     selectPoint(index);
-    Viewer.map.setView(points[index].coordinates, Math.max(Viewer.map.getZoom(), 15));
     const file = Viewer.activeFile();
-    const marker = file && file.markers[index];
-    if (marker && file.visible) marker.openPopup();
+    const coordinates = points[index].coordinates;
+    Viewer.map.setView(coordinates, Math.max(Viewer.map.getZoom(), 15));
+    if (!file || !file.visible) return;
+    const marker = file.markers[index];
+    if (marker) {
+        marker.openPopup();
+    } else {
+        L.popup({ offset: [0, -8] }).setLatLng(coordinates).setContent(pointPopup(file, index)).openOn(Viewer.map);
+    }
 }
 
 function navigateToNextPoint() {
@@ -65,7 +96,7 @@ function displayPointsList() {
     const points = Viewer.points();
     const content = document.getElementById('pointsListContent');
     document.getElementById('pointsCount').textContent = points.length;
-    setVisible('pointsList', points.length > 0);
+    setVisible('pointsList', points.length > 0, 'flex'); // colonne flex : la liste défile dans le panneau
     setVisible('navigationControls', points.length > 0);
     if (Viewer.currentPointIndex >= points.length) Viewer.currentPointIndex = -1;
 
@@ -90,6 +121,7 @@ function displayPointsList() {
     content.replaceChildren(fragment);
     updateNavigationInfo();
     updatePointsListHighlight();
+    updateSelectionMarker();
 }
 
 function setupPointsNavigation() {

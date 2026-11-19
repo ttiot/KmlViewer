@@ -8,6 +8,7 @@ function toggleFileVisibility(fileId, visible) {
     if (!file) return;
     file.visible = visible;
     if (visible) Viewer.map.addLayer(file.layer); else Viewer.map.removeLayer(file.layer);
+    if (fileId === Viewer.activeFileId) updateSelectionMarker();
 }
 
 // Le fichier actif alimente la liste des points, l'analyse, l'édition et l'export.

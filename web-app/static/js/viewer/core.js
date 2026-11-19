@@ -16,6 +16,7 @@ const Viewer = {
     fileCounter: 0,
     activeFileId: null,
     currentPointIndex: -1,
+    selectionMarker: null,   // repère du point sélectionné sur la carte
     analysis: null,          // dernière analyse de base (pour redessiner au changement de thème)
     charts: { elevation: null, speed: null },
     advancedHighlight: null, // surbrillance sur la carte d'un résultat de l'analyse avancée
