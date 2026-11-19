@@ -5,84 +5,90 @@
 {% endblock %}
 {% block page %}
     <main class="viewer" id="mainContent">
-        <div class="viewer-top">
+        <!-- Scène : panneau à gauche sur toute la hauteur ; à droite la carte, et le profil en bas.
+             Sur écran large, elle tient dans la fenêtre. -->
+        <div class="viewer-stage">
             <!-- Panneau de l'activité : ouverture, résumé de la trace affichée, mesures sous le curseur -->
             <section class="viewer-panel" aria-label="Activité">
-                {% include 'viewer/toolbar.html' %}
-
-                <div class="empty-state" id="panelEmpty">
-                    <strong>Aucune trace ouverte.</strong>
-                    <span>Choisis une activité de ta bibliothèque, ouvre un fichier ou dépose-le sur la page.</span>
+                <div class="viewer-panel-head">
+                    {% include 'viewer/toolbar.html' %}
                 </div>
 
-                <div class="viewer-summary" id="fileSummary" hidden>
-                    <div class="viewer-title">
-                        <h1 id="fileTitle"></h1>
-                        <p class="page-count" id="fileMeta"></p>
+                <div class="viewer-panel-body">
+                    <div class="empty-state" id="panelEmpty">
+                        <strong>Aucune trace ouverte.</strong>
+                        <span>Choisis une activité de ta bibliothèque, ouvre un fichier ou dépose-le sur la page.</span>
                     </div>
 
-                    <div class="field">
-                        <label class="eyebrow" for="typeSelect">Type de trace</label>
-                        <select id="typeSelect" class="form-select fw-semibold" disabled>
-                            <option value="">{{ unclassified[1] }}</option>
-                            {% for key, label in activity_types %}
-                            <option value="{{ key }}">{{ label }}</option>
-                            {% endfor %}
-                        </select>
-                        <p class="hint" id="typeHint"></p>
-                    </div>
+                    <div class="viewer-summary" id="fileSummary" hidden>
+                        <div class="viewer-title">
+                            <h1 id="fileTitle"></h1>
+                            <p class="page-count" id="fileMeta"></p>
+                        </div>
 
-                    <dl class="stat-grid">
-                        <div><dt class="eyebrow">Distance</dt><dd class="figure" id="totalDistance">—</dd></div>
-                        <div><dt class="eyebrow">Dénivelé +</dt><dd class="figure" id="totalAscent">—</dd></div>
-                        <div><dt class="eyebrow">Durée totale</dt><dd class="figure" id="totalDuration">—</dd></div>
-                        <div><dt class="eyebrow">En mouvement</dt><dd class="figure" id="movingDuration">—</dd></div>
-                        <div><dt class="eyebrow">Vitesse moy.</dt><dd class="figure" id="avgSpeed">—</dd></div>
-                        <div><dt class="eyebrow">Pointe</dt><dd class="figure" id="maxSpeed">—</dd></div>
-                    </dl>
-                    <div id="basicNotes"></div>
+                        <div class="field">
+                            <label class="eyebrow" for="typeSelect">Type de trace</label>
+                            <select id="typeSelect" class="form-select fw-semibold" disabled>
+                                <option value="">{{ unclassified[1] }}</option>
+                                {% for key, label in activity_types %}
+                                <option value="{{ key }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            <p class="hint" id="typeHint"></p>
+                        </div>
 
-                    <div class="cursor-box">
-                        <h2 class="eyebrow">Sous le curseur</h2>
-                        <div><span>Distance</span><span class="mono" id="cursorDistance">—</span></div>
-                        <div><span>Altitude</span><span class="mono" id="cursorAltitude">—</span></div>
-                        <div><span>Vitesse</span><span class="mono" id="cursorSpeed">—</span></div>
-                        <div><span>Position</span><span class="mono" id="cursorPosition">—</span></div>
-                        <div><span>Point</span><span class="mono" id="cursorPoint">—</span></div>
-                    </div>
+                        <dl class="stat-grid">
+                            <div><dt class="eyebrow">Distance</dt><dd class="figure" id="totalDistance">—</dd></div>
+                            <div><dt class="eyebrow">Dénivelé +</dt><dd class="figure" id="totalAscent">—</dd></div>
+                            <div><dt class="eyebrow">Durée totale</dt><dd class="figure" id="totalDuration">—</dd></div>
+                            <div><dt class="eyebrow">En mouvement</dt><dd class="figure" id="movingDuration">—</dd></div>
+                            <div><dt class="eyebrow">Vitesse moy.</dt><dd class="figure" id="avgSpeed">—</dd></div>
+                            <div><dt class="eyebrow">Pointe</dt><dd class="figure" id="maxSpeed">—</dd></div>
+                        </dl>
+                        <div id="basicNotes"></div>
 
-                    <!-- Chaque bouton ouvre l'onglet d'outils correspondant, sous le profil -->
-                    <div class="button-row">
-                        <button type="button" class="btn btn-dark" data-tool="export">Exporter</button>
-                        <button type="button" class="btn btn-outline-secondary" data-tool="editor">Éditer la trace</button>
-                        <button type="button" class="btn btn-ghost is-full" data-tool="advanced">Analyse avancée</button>
+                        <div class="cursor-box">
+                            <h2 class="eyebrow">Sous le curseur</h2>
+                            <div><span>Distance</span><span class="mono" id="cursorDistance">—</span></div>
+                            <div><span>Altitude</span><span class="mono" id="cursorAltitude">—</span></div>
+                            <div><span>Vitesse</span><span class="mono" id="cursorSpeed">—</span></div>
+                            <div><span>Point</span><span class="mono" id="cursorPoint">—</span></div>
+                            <div class="is-wide"><span>Position</span><span class="mono" id="cursorPosition">—</span></div>
+                        </div>
+
+                        <!-- Chaque bouton ouvre l'onglet d'outils correspondant, sous le profil -->
+                        <div class="button-row">
+                            <button type="button" class="btn btn-dark" data-tool="export">Exporter</button>
+                            <button type="button" class="btn btn-outline-secondary" data-tool="editor">Éditer la trace</button>
+                            <button type="button" class="btn btn-ghost is-full" data-tool="advanced">Analyse avancée</button>
+                        </div>
                     </div>
                 </div>
             </section>
 
-            <section class="map-area" aria-label="Carte">
-                <div id="map"></div>
-                {% include 'viewer/empty_state.html' %}
-            </section>
+            <!-- Carte, et profil calé en bas de la colonne -->
+            <div class="viewer-main">
+                <section class="map-area" aria-label="Carte">
+                    <div id="map"></div>
+                    {% include 'viewer/empty_state.html' %}
+                </section>
+
+                <!-- Profil le long de la trace : altitude ou vitesse, curseur lié à la carte -->
+                <section class="strip" id="profileSection" aria-label="Profil de la trace" hidden>
+                    <div class="strip-head">
+                        <h2 class="eyebrow">Profil</h2>
+                        <div class="segmented" role="group" aria-label="Courbe affichée" id="seriesSwitch">
+                            <button type="button" class="btn" data-series="elevation" aria-pressed="true">Élévation</button>
+                            <button type="button" class="btn" data-series="speed" aria-pressed="false">Vitesse</button>
+                        </div>
+                        <p class="hint" id="stripMeta"></p>
+                        <p class="strip-readout" id="stripReadout" aria-live="off"></p>
+                    </div>
+                    <!-- La courbe se pilote à la souris, au doigt ou au clavier (flèches, Origine, Fin) -->
+                    <div id="profileStrip"></div>
+                </section>
+            </div>
         </div>
-
-        <!-- Profil le long de la trace : altitude ou vitesse, curseur lié à la carte -->
-        <section class="strip" id="profileSection" aria-label="Profil de la trace" hidden>
-            <div class="strip-head">
-                <h2 class="eyebrow">Profil</h2>
-                <div class="segmented" role="group" aria-label="Courbe affichée" id="seriesSwitch">
-                    <button type="button" class="btn" data-series="elevation" aria-pressed="true">Élévation</button>
-                    <button type="button" class="btn" data-series="speed" aria-pressed="false">Vitesse</button>
-                </div>
-                <p class="strip-readout" id="stripReadout" aria-live="off"></p>
-            </div>
-            <div id="profileStrip"></div>
-            <div class="strip-scrub">
-                <label for="scrub">Position sur la trace</label>
-                <input type="range" id="scrub" min="0" max="1000" step="1" value="0">
-            </div>
-            <p class="hint" id="stripMeta"></p>
-        </section>
 
         <!-- Outils du fichier affiché -->
         <section class="viewer-tools" id="analysisPanel" aria-label="Outils" hidden>

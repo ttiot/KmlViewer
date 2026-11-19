@@ -226,7 +226,7 @@ function displayPointsList() {
 }
 
 // Éléments qui utilisent eux-mêmes les flèches gauche / droite quand ils ont le focus
-const ARROW_KEY_OWNERS = 'input, textarea, select, [contenteditable], [role="tab"], [role="tablist"], '
+const ARROW_KEY_OWNERS = 'input, textarea, select, [contenteditable], [role="tab"], [role="tablist"], [role="slider"], '
     + '.dropdown-menu, .dropdown-toggle, .leaflet-container';
 
 function setupPointsNavigation() {

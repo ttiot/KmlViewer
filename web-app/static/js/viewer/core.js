@@ -20,6 +20,7 @@ const Viewer = {
     activeFileId: null,
     currentPointIndex: -1,
     selectionMarker: null,   // repère du point sélectionné sur la carte
+    autoView: null,          // emprise du dernier cadrage automatique, oubliée dès que l'utilisateur touche la carte
     analysis: null,          // dernière analyse de base du fichier actif
     advancedHighlight: null, // surbrillance sur la carte d'un résultat de l'analyse avancée
 

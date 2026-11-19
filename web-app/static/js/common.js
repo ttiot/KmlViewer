@@ -125,3 +125,13 @@ const App = (() => {
     return { request, api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime,
              setFigure, durationParts, typeLabels };
 })();
+
+// Hauteur réelle de la barre de navigation (--navbar-h) : elle passe sur deux lignes quand
+// la place manque, et la page Carte se cale sur ce qui reste de la fenêtre.
+document.addEventListener('DOMContentLoaded', () => {
+    const bar = document.querySelector('.app-navbar');
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    new ResizeObserver(() => {
+        document.documentElement.style.setProperty('--navbar-h', `${bar.offsetHeight}px`);
+    }).observe(bar);
+});

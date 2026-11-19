@@ -72,7 +72,7 @@
     --radius-s: 8px;
     --radius-m: 10px;
     --radius-l: 12px;
-    --navbar-h: 64px;
+    --navbar-h: 64px;          /* remplacée par la hauteur mesurée (common.js) */
     --control-h: 44px;
     --font: "Barlow", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --font-display: "Barlow Condensed", "Barlow", system-ui, sans-serif;
@@ -256,7 +256,7 @@ h1, h2, h3, h4, h5, h6 {
     position: sticky;
     top: 0;
     z-index: 1030;
-    min-height: var(--navbar-h);
+    min-height: 64px;
     padding: 10px 24px;
     display: flex;
     flex-wrap: wrap;
@@ -856,8 +856,8 @@ input[type="range"] {
 .strip {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 16px 24px 12px;
+    gap: 8px;
+    padding: 10px 24px;
     background: var(--strip-bg);
     border-top: 1px solid var(--strip-border);
     color: var(--strip-ink);
@@ -867,7 +867,11 @@ input[type="range"] {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 12px 24px;
+    gap: 6px 20px;
+}
+
+.strip-head .hint:empty {
+    display: none;
 }
 
 .strip .eyebrow,
@@ -887,8 +891,6 @@ input[type="range"] {
 }
 
 .strip .segmented .btn {
-    min-height: var(--control-h);
-    --bs-btn-padding-x: 16px;
     font-weight: 600;
     color: var(--strip-muted);
 }
@@ -927,9 +929,14 @@ input[type="range"] {
     position: relative;
     flex: 1 1 auto;
     min-width: 0;
-    height: 180px;
+    height: 140px;
     cursor: crosshair;
     touch-action: none;
+}
+
+.strip-canvas:focus-visible {
+    outline: 2px solid var(--strip-cursor);
+    outline-offset: 2px;
 }
 
 .strip-canvas.is-small {
@@ -955,23 +962,8 @@ input[type="range"] {
     color: var(--strip-muted);
 }
 
-.strip-plot + .strip-xaxis,
-.strip-scrub {
+.strip-plot + .strip-xaxis {
     margin-left: 72px;
-}
-
-.strip-scrub {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 12px;
-    font-size: 0.8125rem;
-}
-
-.strip-scrub input[type="range"] {
-    flex: 1 1 240px;
-    width: auto;
-    accent-color: var(--strip-cursor);
 }
 
 .strip-empty {
@@ -1062,15 +1054,14 @@ input[type="range"] {
     }
 
     .strip {
-        padding: 16px 16px 12px;
+        padding: 10px 16px;
     }
 
     .strip-yaxis {
         flex-basis: 48px;
     }
 
-    .strip-plot + .strip-xaxis,
-    .strip-scrub {
+    .strip-plot + .strip-xaxis {
         margin-left: 60px;
     }
 }

@@ -118,12 +118,11 @@ function setProfileCursor(t) {
     set('cursorSpeed', speedText);
     set('cursorPosition', position ? `${position.latlng[0].toFixed(4)}°, ${position.latlng[1].toFixed(4)}°` : '—');
     set('cursorPoint', position ? `${number(position.index + 1)} / ${number(Panel.path.cum.length)}` : '—');
-    set('stripReadout', known ? [`km ${km.replace(' km', '')}`,
-        finite(altitude) ? altitudeText : null, finite(speed) ? speedText : null].filter(Boolean).join(' · ')
-        : 'Survole le profil pour lire une position.');
+    const readout = known ? [`km ${km.replace(' km', '')}`,
+        finite(altitude) ? altitudeText : null, finite(speed) ? speedText : null].filter(Boolean).join(' · ') : '';
+    set('stripReadout', readout || 'Survole le profil pour lire une position.');
 
-    if (Panel.strip) Panel.strip.setCursor(Panel.t);
-    document.getElementById('scrub').value = known ? Math.round(Panel.t * 1000) : 0;
+    if (Panel.strip) Panel.strip.setCursor(Panel.t, readout);
     updateCursorMarker(position);
 }
 
@@ -146,6 +145,14 @@ function profileOf(points, field) {
         : null;
 }
 
+// Le profil vient d'apparaître : la carte a perdu de la hauteur et la trace peut déborder
+// par le bas. Si la vue est encore celle du cadrage automatique, on recadre ; si
+// l'utilisateur a déplacé ou zoomé la carte entre-temps, on n'y touche pas.
+function refitAfterResize() {
+    Viewer.map.invalidateSize({ pan: false });
+    if (Viewer.autoView) Viewer.map.fitBounds(Viewer.autoView, { padding: [20, 20], animate: false });
+}
+
 // Affiche le profil de l'analyse en cours (null : plus de trace à l'écran).
 function renderProfile(analysis) {
     const section = document.getElementById('profileSection');
@@ -155,6 +162,7 @@ function renderProfile(analysis) {
         speed: profileOf(analysis.speed && analysis.speed.speed_profile, 'speed_kmh'),
     } : {};
     const any = Boolean(Panel.profiles.elevation || Panel.profiles.speed);
+    const appeared = any && section.hidden;
     section.hidden = !any;
     Panel.t = null;
     if (!any) { updateCursorMarker(null); return; }
@@ -162,6 +170,8 @@ function renderProfile(analysis) {
         button.disabled = !Panel.profiles[button.dataset.series];
     });
     setProfileSeries(Panel.profiles[Panel.series] ? Panel.series : (Panel.profiles.elevation ? 'elevation' : 'speed'));
+    // Après le dessin de la courbe : c'est lui qui donne au profil sa hauteur définitive
+    if (appeared) refitAfterResize();
 }
 
 // ------------------------------------------------------- Panneau de l'activité
@@ -265,9 +275,6 @@ function setupPanel() {
     document.getElementById('seriesSwitch').addEventListener('click', (event) => {
         const button = event.target.closest('button[data-series]');
         if (button && !button.disabled) setProfileSeries(button.dataset.series);
-    });
-    document.getElementById('scrub').addEventListener('input', (event) => {
-        setProfileCursor(Number(event.target.value) / 1000);
     });
     document.getElementById('typeSelect').addEventListener('change', (event) => changeActivityType(event.target.value));
     document.getElementById('activitySelect').addEventListener('change', (event) => onActivityChosen(event.target.value));

@@ -49,7 +49,7 @@ const ProfileStrip = (() => {
         canvas.append(root);
         container.replaceChildren(plot, xAxis, empty);
 
-        const state = { total: 0 };
+        const state = { total: 0, cursor: null };
         const hide = (node, hidden) => { node.style.display = hidden ? 'none' : ''; };
         const vertical = (node, t) => {
             node.setAttribute('x1', (t * WIDTH).toFixed(1));
@@ -118,10 +118,16 @@ const ProfileStrip = (() => {
                 el('span', {}, App.number(km * t, t ? kmDigits : 0) + (t === 0 || t === 1 ? ' km' : ''))));
         }
 
-        function setCursor(t) {
+        // `text` : position lisible, annoncée par les lecteurs d'écran (profil interactif)
+        function setCursor(t, text = '') {
             const shown = state.total > 0 && Number.isFinite(t);
+            state.cursor = shown ? Math.min(1, Math.max(0, t)) : null;
             hide(cursor, !shown);
-            if (shown) vertical(cursor, Math.min(1, Math.max(0, t)));
+            if (shown) vertical(cursor, state.cursor);
+            if (onPick) {
+                canvas.setAttribute('aria-valuenow', shown ? Math.round(state.cursor * 100) : 0);
+                canvas.setAttribute('aria-valuetext', text || 'Aucune position');
+            }
         }
 
         function setBand(a, b) {
@@ -142,6 +148,24 @@ const ProfileStrip = (() => {
             };
             canvas.addEventListener('pointermove', pick);
             canvas.addEventListener('pointerdown', pick);
+
+            // Au clavier, la courbe est un curseur : flèches (1 %, 10 % avec Maj), Origine, Fin.
+            // La courbe dessinée est alors décorative, le curseur porte le nom du profil.
+            root.setAttribute('aria-hidden', 'true');
+            root.removeAttribute('role');
+            Object.entries({ tabindex: 0, role: 'slider', 'aria-label': label, 'aria-valuemin': 0, 'aria-valuemax': 100 })
+                .forEach(([key, value]) => canvas.setAttribute(key, value));
+            canvas.addEventListener('keydown', (event) => {
+                if (!state.total) return;
+                const current = state.cursor === null ? 0 : state.cursor;
+                const step = event.shiftKey ? 0.1 : 0.01;
+                const next = { ArrowRight: current + step, ArrowUp: current + step, ArrowLeft: current - step,
+                               ArrowDown: current - step, PageUp: current + 0.1, PageDown: current - 0.1,
+                               Home: 0, End: 1 }[event.key];
+                if (next === undefined) return;
+                event.preventDefault();
+                onPick(Math.min(1, Math.max(0, next)));
+            });
         }
 
         clear('');

@@ -10,11 +10,18 @@
     flex-direction: column;
 }
 
-/* Panneau de l'activité à gauche, carte à droite ; l'un sous l'autre quand la place manque */
-.viewer-top {
+/* Panneau de l'activité à gauche, carte et profil à droite ; l'un sous l'autre quand la place manque */
+.viewer-stage {
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
+}
+
+.viewer-main {
+    flex: 999 1 560px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .viewer-panel {
@@ -23,16 +30,31 @@
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    gap: 24px;
-    padding: 24px;
     background: var(--surface);
     border-right: 1px solid var(--border);
+}
+
+/* En-tête (choix de l'activité) toujours visible ; le corps défile sur écran large */
+/* Panneau resserré : sur un écran de bureau courant, tout tient sans défilement */
+.viewer-panel-head {
+    padding: 20px 20px 0;
+}
+
+.viewer-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 20px 20px;
 }
 
 .viewer-summary {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 16px;
+}
+
+.viewer-summary .field {
+    gap: 4px;
 }
 
 /* isolation : les couches et contrôles Leaflet (z-index jusqu'à 1000) restent empilés
@@ -40,7 +62,7 @@
 .map-area {
     position: relative;
     isolation: isolate;
-    flex: 999 1 560px;
+    flex: 1 1 auto;
     min-width: 0;
     min-height: min(640px, 75vh);
 }
@@ -58,7 +80,7 @@
 
 .viewer-title h1 {
     margin: 0;
-    font-size: 1.625rem;
+    font-size: 1.5rem;
     line-height: 1.15;
     overflow-wrap: anywhere;
 }
@@ -71,13 +93,13 @@
 .stat-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px 16px;
+    gap: 12px 16px;
     margin: 0;
 }
 
 .stat-grid dd {
     margin: 2px 0 0;
-    font-size: 2.5rem;
+    font-size: 2.25rem;
 }
 
 .stat-grid dd .unit {
@@ -99,8 +121,8 @@
 .cursor-box {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 16px;
+    gap: 4px;
+    padding: 12px 14px;
     border-radius: var(--radius-m);
     background: var(--surface-3);
 }
@@ -125,10 +147,12 @@
 
 .viewer-summary > .button-row .btn {
     flex: 1 1 120px;
+    min-height: 40px;
 }
 
 .viewer-summary > .button-row .btn.is-full {
     flex-basis: 100%;
+    min-height: 36px;
 }
 
 /* -------------------------------------------- Ouverture et fichiers ouverts */
@@ -586,6 +610,101 @@
 
 /* ------------------------------------------------------------- Responsive */
 
+/* Écran large : la scène tient dans la fenêtre. Le panneau, sur toute la hauteur, défile
+   seul ; à droite, le profil reste calé en bas et la carte prend le reste. Les outils
+   (analyse, points, édition, export) suivent, en dessous. */
+@media (min-width: 900px) {
+    .viewer-stage {
+        height: calc(100vh - var(--navbar-h));
+        height: calc(100dvh - var(--navbar-h));
+        min-height: 560px;
+    }
+
+    .viewer-stage {
+        flex-wrap: nowrap;
+    }
+
+    .viewer-panel {
+        flex: 0 0 340px;
+        min-height: 0;
+    }
+
+    .viewer-main {
+        min-height: 0;
+    }
+
+    .viewer-panel-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    .map-area {
+        min-height: 0;
+    }
+
+    .viewer-stage .strip {
+        flex: none;
+    }
+
+    .viewer-panel-head .file-tabs {
+        margin-top: 6px;
+    }
+
+    /* Profil compact : la carte garde l'essentiel de la hauteur */
+    .viewer-stage .strip-canvas {
+        height: clamp(64px, 11vh, 110px);
+    }
+}
+
+/* Écran bas (portable) : le panneau se resserre encore pour tenir sans défilement */
+@media (min-width: 900px) and (max-height: 960px) {
+    .viewer-panel-body,
+    .viewer-summary {
+        gap: 12px;
+    }
+
+    .viewer-title h1 {
+        font-size: 1.375rem;
+    }
+
+    .stat-grid {
+        gap: 8px 16px;
+    }
+
+    .stat-grid dd {
+        font-size: 1.875rem;
+    }
+
+    .viewer-summary #typeHint {
+        display: none; /* explicatif ; le choix du type reste en place */
+    }
+
+    /* Mesures sur deux colonnes, la position (plus longue) sur toute la largeur */
+    .cursor-box {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 2px 16px;
+        padding: 10px 14px;
+        font-size: 0.875rem;
+    }
+
+    .cursor-box > h2,
+    .cursor-box > .is-wide {
+        grid-column: 1 / -1;
+    }
+
+    #basicNotes .hint {
+        font-size: 0.75rem;
+        line-height: 1.3;
+    }
+
+    .cursor-box .mono {
+        font-size: 0.8125rem;
+    }
+}
+
 @media (max-width: 899px) {
     /* Panneau et carte empilés : le filet passe sous le panneau */
     .viewer-panel {
@@ -595,7 +714,11 @@
 }
 
 @media (max-width: 640px) {
-    .viewer-panel {
+    .viewer-panel-head {
+        padding: 16px 16px 0;
+    }
+
+    .viewer-panel-body {
         padding: 16px;
     }
 

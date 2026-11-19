@@ -23,6 +23,12 @@ function initMap() {
     };
     setBaseLayer('osm');
 
+    // Toute action de l'utilisateur sur la carte (glisser, molette, zoom, clavier) rend son
+    // cadrage : la carte ne sera plus recadrée d'office.
+    ['pointerdown', 'wheel', 'keydown'].forEach((type) => {
+        Viewer.map.getContainer().addEventListener(type, () => { Viewer.autoView = null; }, { passive: true });
+    });
+
     // La carte change de taille avec le panneau voisin (résumé affiché, fenêtre redimensionnée) :
     // Leaflet doit recalculer sa taille, sinon une bande grise reste affichée.
     if (typeof ResizeObserver !== 'undefined') {
@@ -221,5 +227,12 @@ function renderFile(file, { fit = false } = {}) {
     file.layer = group;
     file.markers = markers;
     if (file.visible) group.addTo(Viewer.map);
-    if (fit && bounds.isValid()) Viewer.map.fitBounds(bounds, { padding: [20, 20] });
+    if (fit && bounds.isValid()) {
+        // Sans animation : un recadrage demandé pendant une animation de zoom serait écrasé
+        // à la fin de celle-ci
+        Viewer.map.fitBounds(bounds, { padding: [20, 20], animate: false });
+        // Cadrage automatique : refait si la carte change de taille avant que l'utilisateur
+        // y ait touché (apparition du profil, qui arrive avec l'analyse)
+        Viewer.autoView = bounds;
+    }
 }
