@@ -1,10 +1,14 @@
 """Agrégats du tableau de bord : volumes par période et records personnels."""
 
 import json
+import logging
+import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+logger = logging.getLogger(__name__)
 
 PERIODS = ('week', 'month', 'year')
 WINDOW = {'week': 12, 'month': 12}  # nombre de périodes affichées ; 'year' : tout l'historique
@@ -17,6 +21,23 @@ def _timezone(name: str):
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
         return timezone.utc
+
+
+def _number(value: Any) -> float:
+    """
+    Valeur numérique d'une colonne, 0 si elle est absente ou non finie. L'ingestion refuse
+    les valeurs non finies, mais une ligne plus ancienne peut en porter : une seule suffisait
+    à faire échouer tout le tableau de bord (round(inf)) ou à produire un JSON invalide (Infinity).
+    """
+    return float(value) if isinstance(value, (int, float)) and math.isfinite(value) else 0.0
+
+
+def _local_day(start_time: Any, tz) -> Optional[date]:
+    """Jour local d'une activité ; None si sa date stockée est illisible (la ligne est alors ignorée)."""
+    try:
+        return datetime.fromisoformat(str(start_time).replace('Z', '+00:00')).astimezone(tz).date()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _bucket(day: date, period: str) -> str:
@@ -66,16 +87,19 @@ def period_stats(db: sqlite3.Connection, user_id: int, period: str, tz_name: str
     first_day: Optional[date] = None
 
     for row in rows:
-        day = datetime.fromisoformat(row['start_time'].replace('Z', '+00:00')).astimezone(tz).date()
+        day = _local_day(row['start_time'], tz)
+        if day is None:
+            logger.warning("Tableau de bord : date illisible %r, activité ignorée", row['start_time'])
+            continue
         first_day = day if first_day is None or day < first_day else first_day
         targets = [totals, buckets.setdefault(_bucket(day, period), empty())]
         if day.year == today.year:
             targets.append(year_totals)
         for target in targets:
             target['count'] += 1
-            target['distance_km'] += row['distance_m'] / 1000
-            target['ascent_m'] += row['ascent_m'] or 0
-            target['time_s'] += row['moving_s'] or row['duration_s'] or 0
+            target['distance_km'] += _number(row['distance_m']) / 1000
+            target['ascent_m'] += _number(row['ascent_m'])
+            target['time_s'] += _number(row['moving_s']) or _number(row['duration_s'])
 
     def rounded(values):
         return {'count': values['count'], 'distance_km': round(values['distance_km'], 1),
@@ -98,22 +122,34 @@ def records(db: sqlite3.Connection, user_id: int, activity_type: Optional[str] =
         return {'label': label, 'kind': kind, 'value': value, 'activity_id': row['id'],
                 'activity_name': row['name'], 'date': row['start_time']}
 
+    def elapsed(row) -> float:
+        return _number(row['moving_s']) or _number(row['duration_s'])
+
     result = []
-    longest = max(rows, key=lambda r: r['distance_m'])
-    result.append(entry('Plus longue distance', 'distance', longest['distance_m'], longest))
-    climb = max(rows, key=lambda r: r['ascent_m'] or 0)
-    if climb['ascent_m']:
-        result.append(entry('Plus gros dénivelé', 'ascent', climb['ascent_m'], climb))
-    timed = [r for r in rows if r['moving_s'] or r['duration_s']]
+    longest = max(rows, key=lambda r: _number(r['distance_m']))
+    result.append(entry('Plus longue distance', 'distance', _number(longest['distance_m']), longest))
+    climb = max(rows, key=lambda r: _number(r['ascent_m']))
+    if _number(climb['ascent_m']):
+        result.append(entry('Plus gros dénivelé', 'ascent', _number(climb['ascent_m']), climb))
+    timed = [r for r in rows if elapsed(r)]
     if timed:
-        duration = max(timed, key=lambda r: r['moving_s'] or r['duration_s'])
-        result.append(entry('Plus longue durée', 'time', duration['moving_s'] or duration['duration_s'], duration))
+        duration = max(timed, key=elapsed)
+        result.append(entry('Plus longue durée', 'time', elapsed(duration), duration))
+
+    # Décodé une fois par activité, pas une fois par distance de référence
+    efforts: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        try:
+            decoded = json.loads(row['best_efforts'] or '{}')
+        except ValueError:
+            decoded = {}
+        efforts[row['id']] = decoded if isinstance(decoded, dict) else {}
 
     for key, label in BEST_EFFORT_LABELS.items():
         best = None
         for row in rows:
-            value = json.loads(row['best_efforts'] or '{}').get(key)
-            if value and (best is None or value < best[0]):
+            value = _number(efforts[row['id']].get(key))
+            if value > 0 and (best is None or value < best[0]):
                 best = (value, row)
         if best:
             result.append(entry(f'Meilleur temps {label}', 'time', best[0], best[1]))

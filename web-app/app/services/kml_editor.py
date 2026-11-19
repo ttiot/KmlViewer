@@ -8,19 +8,26 @@ gx:MultiTrack), horodatages par point et polygones avec leurs trous.
 import csv
 import io
 import json
+import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
-from app.services import geo
+from app.services import file_formats, geo
 from app.services.activity_stats import iter_lines
 from app.services.timing_tools import track_time
+
+logger = logging.getLogger(__name__)
 
 KML_NS = 'http://www.opengis.net/kml/2.2'
 GX_NS = 'http://www.google.com/kml/ext/2.2'
 METERS_PER_DEGREE = 111320.0
+# Douglas-Peucker coûte n·log(n) sur une trace ordinaire, mais n² sur une trace construite
+# pour (zigzag d'amplitude décroissante : un seul point retiré par découpe). Le travail est
+# donc plafonné à ce multiple du nombre de points : ~10 fois le besoin d'une vraie trace.
+SIMPLIFY_WORK_FACTOR = 200
 
 
 def _is_waypoint(feature: Dict[str, Any]) -> bool:
@@ -79,8 +86,12 @@ class KMLEditor:
             coordinates: Liste de coordonnées [lat, lon, alt]
             tolerance: Écart maximal toléré, en degrés de latitude (1° ≈ 111 km). L'écart est
                 mesuré en mètres dans un plan local : il vaut autant d'est en ouest que du nord au sud.
+
+        Lève TooManyPointsError (un ValueError) au-delà du nombre de points accepté par fichier.
         """
         count = len(coordinates)
+        if count > file_formats.MAX_FILE_POINTS:
+            raise file_formats.TooManyPointsError()
         if count <= 2:
             return list(range(count))
         lat = np.array([c[0] for c in coordinates], dtype=float)
@@ -92,10 +103,17 @@ class KMLEditor:
         keep = np.zeros(count, dtype=bool)
         keep[0] = keep[-1] = True
         stack = [(0, count - 1)]
+        budget = SIMPLIFY_WORK_FACTOR * count  # points encore examinables, toutes découpes confondues
         while stack:
             first, last = stack.pop()
             if last - first < 2:
                 continue
+            if budget <= 0:
+                # Budget épuisé : le reste est conservé tel quel. Le résultat reste une
+                # simplification valide (aucun écart au-delà de la tolérance), seulement moins poussée.
+                keep[first:last + 1] = True
+                continue
+            budget -= last - first
             start, delta = xy[first], xy[last] - xy[first]
             offsets = xy[first + 1:last] - start
             length_sq = float(delta @ delta)
@@ -111,6 +129,9 @@ class KMLEditor:
                 keep[index] = True
                 stack.append((first, index))
                 stack.append((index, last))
+        if budget <= 0:
+            logger.warning("Simplification interrompue (trace de %d points trop coûteuse) : fin de trace conservée telle quelle",
+                           count)
         return np.flatnonzero(keep).tolist()
 
     @staticmethod

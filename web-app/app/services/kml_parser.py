@@ -3,36 +3,51 @@ Service de parsing des fichiers KML.
 Extrait toutes les informations pertinentes des fichiers KML, y compris les extensions Google.
 """
 
+import logging
 import re
 import xml.etree.ElementTree as ET
-from defusedxml.ElementTree import fromstring as safe_fromstring  # anti XXE / bombes d'entités
-import logging
-from app.services import file_formats
+from typing import Any, Dict, List, Optional
+
+from app.services import file_formats, xml_stream
 from app.services.timing_tools import track_time
-from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
 # Vitesse dans la description d'un point : après un mot-clé, ou seule en début de ligne.
 # Un nombre suivi d'une unité au milieu d'une phrase (« vent de 20 km/h ») n'est pas une mesure.
-_NUMBER = r'(\d+(?:[.,]\d+)?)'
+#
+# Les descriptions viennent du fichier : les motifs ne doivent jamais revenir en arrière sur
+# une longue suite de blancs ou de chiffres (ReDoS, et une regex garde le GIL : toute
+# l'application gèle). Chaque répétition est donc bornée, deux répétitions de blancs ne
+# se suivent jamais sans séparateur obligatoire, et seul le début de la description est lu.
+MAX_DESCRIPTION_SCAN = 2000
+_GAP = r'[^\S\n]{0,8}'  # blancs sur une même ligne
+_NUMBER = r'(\d{1,7}(?:[.,]\d{1,6})?)'
 _KMH, _KTS = r'(?:km/h|kmh|kph)', r'(?:kts|kt|knots?|n(?:oe|œ)uds?)'
-_KEYWORD = r'(?:vitesse|speed|spd|gs)\s*[:=]?\s*'
-_LINE_START = r'(?:^|<br\s*/?>|\n|[;|])\s*'
-SPEED_PATTERNS = tuple((re.compile(prefix + _NUMBER + r'\s*' + unit + r'(?![\w/])', re.IGNORECASE), knots)
+_SEPARATOR = r'\s{0,8}(?:[:=]\s{0,8})?'
+_KEYWORD = r'(?:vitesse|speed|spd|gs)' + _SEPARATOR
+_LINE_START = r'(?:^|<br\s{0,8}/?>|[\n;|])' + _GAP
+SPEED_PATTERNS = tuple((re.compile(prefix + _NUMBER + r'\s{0,8}' + unit + r'(?![\w/])', re.IGNORECASE), knots)
                        for prefix in (_KEYWORD, _LINE_START)
                        for unit, knots in ((_KMH, False), (_KTS, True)))
-HEADING_PATTERN = re.compile(r'\b(?:cap|heading|hdg|course|direction|dir)\s*[:=]?\s*' + _NUMBER
-                             + r'\s*(?:°|deg(?:rees?|rés?)?)?(?![\w/.,])', re.IGNORECASE)
+HEADING_PATTERN = re.compile(r'\b(?:cap|heading|hdg|course|direction|dir)' + _SEPARATOR + _NUMBER
+                             + r'\s{0,8}(?:°|deg(?:rees?|rés?)?)?(?![\w/.,])', re.IGNORECASE)
+
+KML_NS = 'http://www.opengis.net/kml/2.2'
+# Variantes lues comme du KML 2.2 : fichiers Google Earth antérieurs à la norme OGC
+KML_NS_ALIASES = ('http://earth.google.com/kml/2.0', 'http://earth.google.com/kml/2.1',
+                  'http://earth.google.com/kml/2.2', 'http://www.opengis.net/kml/2.3')
+GX_NS, ATOM_NS = 'http://www.google.com/kml/ext/2.2', 'http://www.w3.org/2005/Atom'
+_COORD_TOKEN = re.compile(r'\S+')
 
 class KMLParser:
     """Service de parsing complet des fichiers KML avec support des extensions Google."""
 
     # Namespaces KML standards et extensions
     NAMESPACES = {
-        'kml': 'http://www.opengis.net/kml/2.2',
-        'gx': 'http://www.google.com/kml/ext/2.2',
-        'atom': 'http://www.w3.org/2005/Atom'
+        'kml': KML_NS,
+        'gx': GX_NS,
+        'atom': ATOM_NS
     }
 
     @staticmethod
@@ -41,6 +56,9 @@ class KMLParser:
         """
         Parse un fichier KML et extrait toutes les informations disponibles.
 
+        Le document est lu en flux (voir xml_stream) : chaque Placemark est traité puis
+        libéré dès qu'il se referme, l'arbre complet n'existe jamais en mémoire.
+
         Args:
             kml_content: Contenu du fichier KML
 
@@ -48,18 +66,12 @@ class KMLParser:
             dict: Structure complète avec success, features, metadata et error
         """
         try:
-            root = safe_fromstring(kml_content)
-
-            # Extraire les métadonnées globales
-            metadata = KMLParser._extract_metadata(root)
-
-            # Extraire toutes les entités géographiques
-            features = KMLParser._extract_features(root)
-
+            stream = _KmlStream()
+            xml_stream.parse(kml_content, stream)
             return {
                 'success': True,
-                'features': features,
-                'metadata': metadata
+                'features': stream.features,
+                'metadata': stream.metadata()
             }
 
         except ET.ParseError as e:
@@ -69,231 +81,46 @@ class KMLParser:
             }
         except file_formats.TooManyPointsError as e:
             return {'success': False, 'error': str(e)}
-        except (ValueError, AttributeError, TypeError) as e:
+        except (ValueError, AttributeError, TypeError, ArithmeticError) as e:
+            # Entités interdites (defusedxml), structure inattendue, nombre hors limites…
+            logger.info("KML refusé : %s: %s", e.__class__.__name__, str(e)[:200])
             return {
                 'success': False,
-                'error': f'Erreur lors du traitement: {str(e)}'
+                'error': f'Erreur lors du traitement: {str(e)[:200]}'
             }
 
     @staticmethod
-    def _extract_metadata(root: ET.Element) -> Dict[str, Any]:
-        """Extrait toutes les métadonnées du document KML."""
-        metadata = {}
+    def _style_data(style: ET.Element) -> Dict[str, Any]:
+        """Icône et couleurs d'un <Style>."""
         ns = KMLParser.NAMESPACES
-
-        # Document principal
-        document = root.find('.//kml:Document', ns)
-        if document is not None:
-            # Nom du document
-            name_elem = document.find('kml:name', ns)
-            if name_elem is not None:
-                metadata['title'] = name_elem.text
-
-            # Description du document
-            desc_elem = document.find('kml:description', ns)
-            if desc_elem is not None:
-                metadata['description'] = desc_elem.text
-
-            # Auteur (atom:author)
-            author_elem = document.find('atom:author', ns)
-            if author_elem is not None:
-                author_name = author_elem.find('atom:name', ns)
-                if author_name is not None:
-                    metadata['author'] = author_name.text
-
-            # Liens (atom:link)
-            links = document.findall('atom:link', ns)
-            if links:
-                metadata['links'] = []
-                for link in links:
-                    link_data = {}
-                    if 'href' in link.attrib:
-                        link_data['href'] = link.attrib['href']
-                    if 'rel' in link.attrib:
-                        link_data['rel'] = link.attrib['rel']
-                    if 'type' in link.attrib:
-                        link_data['type'] = link.attrib['type']
-                    metadata['links'].append(link_data)
-
-        # Informations de temps (TimeStamp, TimeSpan)
-        KMLParser._extract_time_info(root, metadata)
-
-        # Extensions Google
-        KMLParser._extract_google_extensions(root, metadata)
-
-        # Styles définis
-        KMLParser._extract_styles(root, metadata)
-
-        # Informations sur les dossiers
-        KMLParser._extract_folder_structure(root, metadata)
-
-        return metadata
+        style_data: Dict[str, Any] = {}
+        href_elem = style.find('kml:IconStyle/kml:Icon/kml:href', ns)
+        if href_elem is not None:
+            style_data['icon'] = href_elem.text
+        line_style = style.find('kml:LineStyle', ns)
+        if line_style is not None:
+            color_elem = line_style.find('kml:color', ns)
+            width_elem = line_style.find('kml:width', ns)
+            if color_elem is not None:
+                style_data['line_color'] = color_elem.text
+            if width_elem is not None:
+                style_data['line_width'] = width_elem.text
+        color_elem = style.find('kml:PolyStyle/kml:color', ns)
+        if color_elem is not None:
+            style_data['poly_color'] = color_elem.text
+        return style_data
 
     @staticmethod
-    def _extract_time_info(root: ET.Element, metadata: Dict[str, Any]):
-        """Extrait les informations temporelles."""
+    def _style_map_data(style_map: ET.Element) -> Dict[str, Any]:
+        """Paires clé -> styleUrl d'une <StyleMap>."""
         ns = KMLParser.NAMESPACES
-
-        # TimeStamp
-        timestamps = root.findall('.//kml:TimeStamp', ns)
-        if timestamps:
-            metadata['timestamps'] = []
-            for ts in timestamps:
-                when_elem = ts.find('kml:when', ns)
-                if when_elem is not None and when_elem.text:
-                    metadata['timestamps'].append(when_elem.text)
-
-        # TimeSpan
-        timespans = root.findall('.//kml:TimeSpan', ns)
-        if timespans:
-            metadata['timespans'] = []
-            for ts in timespans:
-                timespan_data = {}
-                begin_elem = ts.find('kml:begin', ns)
-                end_elem = ts.find('kml:end', ns)
-                if begin_elem is not None:
-                    timespan_data['begin'] = begin_elem.text
-                if end_elem is not None:
-                    timespan_data['end'] = end_elem.text
-                metadata['timespans'].append(timespan_data)
-
-    @staticmethod
-    def _extract_google_extensions(root: ET.Element, metadata: Dict[str, Any]):
-        """Extrait les extensions Google (gx:*)."""
-        ns = KMLParser.NAMESPACES
-        extensions = {}
-
-        # gx:Tour
-        tours = root.findall('.//gx:Tour', ns)
-        if tours:
-            extensions['tours'] = []
-            for tour in tours:
-                tour_data = {}
-                name_elem = tour.find('kml:name', ns)
-                if name_elem is not None:
-                    tour_data['name'] = name_elem.text
-                desc_elem = tour.find('kml:description', ns)
-                if desc_elem is not None:
-                    tour_data['description'] = desc_elem.text
-                extensions['tours'].append(tour_data)
-
-        # gx:Track
-        tracks = root.findall('.//gx:Track', ns)
-        if tracks:
-            extensions['track_count'] = len(tracks)
-
-        # gx:MultiTrack
-        multitracks = root.findall('.//gx:MultiTrack', ns)
-        if multitracks:
-            extensions['multitrack_count'] = len(multitracks)
-
-        if extensions:
-            metadata['google_extensions'] = extensions
-
-    @staticmethod
-    def _extract_styles(root: ET.Element, metadata: Dict[str, Any]):
-        """Extrait les définitions de styles."""
-        ns = KMLParser.NAMESPACES
-        styles = {}
-
-        # Style individuels
-        style_elements = root.findall('.//kml:Style', ns)
-        for style in style_elements:
-            style_id = style.get('id')
-            if style_id:
-                style_data = {}
-
-                # IconStyle
-                icon_style = style.find('kml:IconStyle', ns)
-                if icon_style is not None:
-                    icon_elem = icon_style.find('kml:Icon', ns)
-                    if icon_elem is not None:
-                        href_elem = icon_elem.find('kml:href', ns)
-                        if href_elem is not None:
-                            style_data['icon'] = href_elem.text
-
-                # LineStyle
-                line_style = style.find('kml:LineStyle', ns)
-                if line_style is not None:
-                    color_elem = line_style.find('kml:color', ns)
-                    width_elem = line_style.find('kml:width', ns)
-                    if color_elem is not None:
-                        style_data['line_color'] = color_elem.text
-                    if width_elem is not None:
-                        style_data['line_width'] = width_elem.text
-
-                # PolyStyle
-                poly_style = style.find('kml:PolyStyle', ns)
-                if poly_style is not None:
-                    color_elem = poly_style.find('kml:color', ns)
-                    if color_elem is not None:
-                        style_data['poly_color'] = color_elem.text
-
-                styles[style_id] = style_data
-
-        # StyleMap
-        style_maps = root.findall('.//kml:StyleMap', ns)
-        for style_map in style_maps:
-            style_id = style_map.get('id')
-            if style_id:
-                pairs = style_map.findall('kml:Pair', ns)
-                style_map_data = {}
-                for pair in pairs:
-                    key_elem = pair.find('kml:key', ns)
-                    style_url_elem = pair.find('kml:styleUrl', ns)
-                    if key_elem is not None and style_url_elem is not None:
-                        style_map_data[key_elem.text] = style_url_elem.text
-                # Une StyleMap prend les couleurs de son style « normal » : c'est elle que
-                # les placemarks référencent dans les fichiers Google Earth
-                target = styles.get(str(style_map_data.get('normal') or '').lstrip('#'))
-                styles[style_id] = {**(target or {}), **style_map_data}
-
-        if styles:
-            metadata['styles'] = styles
-
-    @staticmethod
-    def _extract_folder_structure(root: ET.Element, metadata: Dict[str, Any]):
-        """Extrait la structure des dossiers."""
-        ns = KMLParser.NAMESPACES
-        folders = root.findall('.//kml:Folder', ns)
-
-        if folders:
-            folder_info = []
-            for folder in folders:
-                folder_data = {}
-                name_elem = folder.find('kml:name', ns)
-                if name_elem is not None:
-                    folder_data['name'] = name_elem.text
-
-                desc_elem = folder.find('kml:description', ns)
-                if desc_elem is not None:
-                    folder_data['description'] = desc_elem.text
-
-                # Compter les placemarks dans ce dossier
-                placemarks = folder.findall('.//kml:Placemark', ns)
-                folder_data['placemark_count'] = len(placemarks)
-
-                folder_info.append(folder_data)
-
-            metadata['folders'] = folder_info
-
-    @staticmethod
-    def _extract_features(root: ET.Element) -> List[Dict[str, Any]]:
-        """Extrait toutes les entités géographiques."""
-        features = []
-        ns = KMLParser.NAMESPACES
-
-        # Trouver tous les Placemark
-        placemarks = root.findall('.//kml:Placemark', ns)
-        total = 0
-        for i, placemark in enumerate(placemarks):
-            extracted = KMLParser._extract_placemark_data(placemark, i)
-            total += sum(KMLParser._point_count(feature) for feature in extracted)
-            if total > file_formats.MAX_FILE_POINTS:
-                raise file_formats.TooManyPointsError()
-            features.extend(extracted)
-
-        return features
+        pairs: Dict[str, Any] = {}
+        for pair in style_map.findall('kml:Pair', ns):
+            key_elem = pair.find('kml:key', ns)
+            style_url_elem = pair.find('kml:styleUrl', ns)
+            if key_elem is not None and style_url_elem is not None:
+                pairs[key_elem.text] = style_url_elem.text
+        return pairs
 
     @staticmethod
     def _point_count(feature: Dict[str, Any]) -> int:
@@ -305,29 +132,49 @@ class KMLParser:
         return len(feature['coordinates']) + sum(len(hole) for hole in feature.get('holes') or [])
 
     @staticmethod
-    def _extract_placemark_data(placemark: ET.Element, index: int) -> List[Dict[str, Any]]:
+    def _placemark_features(placemark: ET.Element, index: int, firsts: Dict[str, ET.Element],
+                            geometry: Dict[str, List[ET.Element]]) -> List[Dict[str, Any]]:
         """
         Features d'un Placemark : une par géométrie. Un MultiGeometry (plusieurs lignes,
         un point et sa trace…) donne donc plusieurs features du même nom.
+
+        `firsts` (premier descendant de chaque sorte : date, données étendues, extensions)
+        et `geometry` (géométries dans l'ordre du document) viennent du parcours unique du
+        Placemark fait par _KmlStream : le relire ici pour chaque information coûtait une
+        quinzaine de recherches par repère, soit l'essentiel du temps de lecture.
         """
-        ns = KMLParser.NAMESPACES
-        name_elem = placemark.find('kml:name', ns)
+        name_elem = desc_elem = visibility_elem = style_url_elem = None
+        for child in placemark:  # premier enfant direct de chaque sorte
+            tag = child.tag
+            if tag == _NAME:
+                name_elem = child if name_elem is None else name_elem
+            elif tag == _DESCRIPTION:
+                desc_elem = child if desc_elem is None else desc_elem
+            elif tag == _VISIBILITY:
+                visibility_elem = child if visibility_elem is None else visibility_elem
+            elif tag == _STYLE_URL:
+                style_url_elem = child if style_url_elem is None else style_url_elem
         name = name_elem.text if name_elem is not None and name_elem.text else f"Élément {index + 1}"
-        desc_elem = placemark.find('kml:description', ns)
         description = desc_elem.text if desc_elem is not None and desc_elem.text else ""
-        visibility_elem = placemark.find('kml:visibility', ns)
         visibility = visibility_elem.text if visibility_elem is not None else "1"
-        style_url_elem = placemark.find('kml:styleUrl', ns)
         style_ref = style_url_elem.text if style_url_elem is not None else None
-        time_info = KMLParser._extract_placemark_time(placemark)
-        extensions = KMLParser._extract_placemark_extensions(placemark)
-        properties = KMLParser._extract_extended_data(placemark)
+        # Partagé par toutes les géométries du Placemark
         common = {'name': name, 'description': description, 'style': style_ref,
-                  'time_info': time_info, 'extensions': extensions, 'properties': properties}
+                  'time_info': KMLParser._time_info(firsts.get(_TIMESTAMP), firsts.get(_TIMESPAN)),
+                  'extensions': KMLParser._extensions(firsts.get(_BALLOON), firsts.get(_DRAW_ORDER)),
+                  'properties': KMLParser._extended_data(firsts.get(_EXTENDED_DATA))}
         features: List[Dict[str, Any]] = []
 
-        for point in placemark.findall('.//kml:Point/kml:coordinates', ns):
-            coords = KMLParser._parse_coordinates((point.text or '').strip())
+        def bounded(found: List[ET.Element]) -> List[ET.Element]:
+            if len(features) + len(found) > file_formats.MAX_FILE_POINTS:
+                raise file_formats.TooManyPointsError()
+            return found
+
+        def coordinates_of(shapes: List[ET.Element]) -> List[ET.Element]:
+            return [child for shape in shapes for child in shape if child.tag == _COORDINATES]
+
+        for point in bounded(coordinates_of(geometry[_POINT])):
+            coords = KMLParser._parse_coordinates(point.text or '', limit=1)
             if coords:
                 lat, lon, alt = coords[0]
                 features.append({
@@ -336,61 +183,60 @@ class KMLParser:
                     'parsed_info': KMLParser.parse_gps_description(description, lat, lon, alt),
                 })
 
-        for linestring in placemark.findall('.//kml:LineString/kml:coordinates', ns):
-            coords = KMLParser._parse_coordinates((linestring.text or '').strip())
+        for linestring in bounded(coordinates_of(geometry[_LINESTRING])):
+            coords = KMLParser._parse_coordinates(linestring.text or '')
             if coords:
                 features.append({'type': 'polyline', **common, 'coordinates': coords})
 
-        for polygon in placemark.findall('.//kml:Polygon', ns):
-            features.append(KMLParser._extract_polygon_data(polygon, name, description, style_ref,
-                                                            time_info, extensions, placemark))
+        for polygon in bounded(geometry[_POLYGON]):
+            features.append(KMLParser._extract_polygon_data(polygon, common))
 
-        multitracks = placemark.findall('.//gx:MultiTrack', ns)
-        nested = {id(track) for multitrack in multitracks for track in multitrack.findall('gx:Track', ns)}
-        for track in placemark.findall('.//gx:Track', ns):
+        multitracks = geometry[_MULTITRACK]
+        nested = {id(track) for multitrack in multitracks for track in multitrack if track.tag == _TRACK}
+        for track in bounded(geometry[_TRACK]):
             if id(track) not in nested:
-                features.append(KMLParser._extract_track_data(track, name, description, style_ref,
-                                                              time_info, extensions, placemark))
-        for multitrack in multitracks:
-            features.append(KMLParser._extract_multitrack_data(multitrack, name, description, style_ref,
-                                                               time_info, extensions, placemark))
+                features.append(KMLParser._extract_track_data(track, common))
+        for multitrack in bounded(multitracks):
+            features.append(KMLParser._extract_multitrack_data(multitrack, common))
         return features
 
     @staticmethod
-    def _parse_coordinates(coord_text: str) -> List[List[float]]:
-        """Parse une chaîne de coordonnées KML."""
-        coordinates = []
-        for coord_line in coord_text.split():
-            if coord_line.strip():
-                parts = coord_line.split(',')
-                if len(parts) >= 2:
-                    try:
-                        lon = float(parts[0])
-                        lat = float(parts[1])
-                        alt = float(parts[2]) if len(parts) > 2 else 0
-                    except ValueError:
-                        continue
-                    # Arrêt dès le dépassement : inutile de matérialiser des millions de points
-                    if len(coordinates) >= file_formats.MAX_FILE_POINTS:
-                        raise file_formats.TooManyPointsError()
-                    coordinates.append([lat, lon, alt])
+    def _parse_coordinates(coord_text: str, limit: Optional[int] = None) -> List[List[float]]:
+        """
+        Parse une chaîne de coordonnées KML (« lon,lat[,alt] » séparés par des blancs).
+        Un point illisible ou non fini est ignoré. `limit` arrête la lecture après ce
+        nombre de points (un repère n'en a qu'un).
+        """
+        coordinates: List[List[float]] = []
+        # Lecture au fil de l'eau : un split() matérialiserait des millions de jetons
+        # (plusieurs centaines de Mo) avant même le contrôle du plafond
+        for token in _COORD_TOKEN.finditer(coord_text):
+            parts = token.group().split(',', 3)
+            if len(parts) < 2:
+                continue
+            try:
+                lon = file_formats.finite_float(parts[0])
+                lat = file_formats.finite_float(parts[1])
+                alt = file_formats.altitude(parts[2]) if len(parts) > 2 else 0
+            except ValueError:
+                continue
+            # Arrêt dès le dépassement : inutile de matérialiser des millions de points
+            if len(coordinates) >= file_formats.MAX_FILE_POINTS:
+                raise file_formats.TooManyPointsError()
+            coordinates.append([lat, lon, alt])
+            if limit is not None and len(coordinates) >= limit:
+                break
         return coordinates
 
     @staticmethod
-    def _extract_placemark_time(placemark: ET.Element) -> Dict[str, Any]:
-        """Extrait les informations temporelles d'un placemark."""
+    def _time_info(timestamp: Optional[ET.Element], timespan: Optional[ET.Element]) -> Dict[str, Any]:
+        """Date d'un Placemark, depuis son premier <TimeStamp> et son premier <TimeSpan>."""
         ns = KMLParser.NAMESPACES
         time_info = {}
-
-        # TimeStamp
-        timestamp = placemark.find('.//kml:TimeStamp', ns)
         if timestamp is not None:
             when_elem = timestamp.find('kml:when', ns)
             if when_elem is not None:
                 time_info['timestamp'] = when_elem.text
-
-        # TimeSpan
-        timespan = placemark.find('.//kml:TimeSpan', ns)
         if timespan is not None:
             begin_elem = timespan.find('kml:begin', ns)
             end_elem = timespan.find('kml:end', ns)
@@ -398,58 +244,40 @@ class KMLParser:
                 time_info['begin'] = begin_elem.text
             if end_elem is not None:
                 time_info['end'] = end_elem.text
-
         return time_info
 
     @staticmethod
-    def _extract_placemark_extensions(placemark: ET.Element) -> Dict[str, Any]:
-        """Extrait les extensions Google d'un placemark."""
-        ns = KMLParser.NAMESPACES
+    def _extensions(balloon_visibility: Optional[ET.Element], draw_order: Optional[ET.Element]) -> Dict[str, Any]:
+        """Extensions Google d'un Placemark (gx:balloonVisibility, gx:drawOrder)."""
         extensions = {}
-
-        # gx:balloonVisibility
-        balloon_vis = placemark.find('.//gx:balloonVisibility', ns)
-        if balloon_vis is not None:
-            extensions['balloon_visibility'] = balloon_vis.text
-
-        # gx:drawOrder
-        draw_order = placemark.find('.//gx:drawOrder', ns)
+        if balloon_visibility is not None:
+            extensions['balloon_visibility'] = balloon_visibility.text
         if draw_order is not None:
             extensions['draw_order'] = draw_order.text
-
         return extensions
 
     @staticmethod
-    def _extract_extended_data(placemark: ET.Element) -> Dict[str, Any]:
-        """Extrait les données étendues (ExtendedData)."""
+    def _extended_data(extended_data: Optional[ET.Element]) -> Dict[str, Any]:
+        """Données étendues d'un Placemark, depuis son premier <ExtendedData>."""
         ns = KMLParser.NAMESPACES
         properties = {}
-
-        extended_data = placemark.find('.//kml:ExtendedData', ns)
         if extended_data is not None:
-            # Data elements
-            data_elements = extended_data.findall('kml:Data', ns)
-            for data in data_elements:
+            for data in extended_data.findall('kml:Data', ns):
                 name = data.get('name')
                 value_elem = data.find('kml:value', ns)
                 if name and value_elem is not None:
                     properties[name] = value_elem.text
-
-            # SchemaData
             schema_data = extended_data.find('kml:SchemaData', ns)
             if schema_data is not None:
-                simple_data = schema_data.findall('kml:SimpleData', ns)
-                for data in simple_data:
+                for data in schema_data.findall('kml:SimpleData', ns):
                     name = data.get('name')
                     if name and data.text:
                         properties[name] = data.text
-
         return properties
 
     @staticmethod
-    def _extract_polygon_data(polygon: ET.Element, name: str, description: str, style_ref: str,
-                            time_info: Dict[str, Any], extensions: Dict[str, Any], placemark: ET.Element) -> Dict[str, Any]:
-        """Extrait les données d'un polygone."""
+    def _extract_polygon_data(polygon: ET.Element, common: Dict[str, Any]) -> Dict[str, Any]:
+        """Extrait les données d'un polygone ; `common` porte ce qui vient du Placemark."""
         ns = KMLParser.NAMESPACES
 
         # Contour extérieur
@@ -457,7 +285,7 @@ class KMLParser:
 
         coordinates = []
         if outer_boundary is not None and outer_boundary.text:
-            coordinates = KMLParser._parse_coordinates(outer_boundary.text.strip())
+            coordinates = KMLParser._parse_coordinates(outer_boundary.text)
 
         # Contours intérieurs (trous)
         holes = []
@@ -465,20 +293,11 @@ class KMLParser:
 
         for inner in inner_boundaries:
             if inner.text:
-                hole_coords = KMLParser._parse_coordinates(inner.text.strip())
+                hole_coords = KMLParser._parse_coordinates(inner.text)
                 if hole_coords:
                     holes.append(hole_coords)
 
-        result = {
-            'type': 'polygon',
-            'name': name,
-            'description': description,
-            'coordinates': coordinates,
-            'style': style_ref,
-            'time_info': time_info,
-            'extensions': extensions,
-            'properties': KMLParser._extract_extended_data(placemark)
-        }
+        result = {'type': 'polygon', **common, 'coordinates': coordinates}
 
         if holes:
             result['holes'] = holes
@@ -486,9 +305,8 @@ class KMLParser:
         return result
 
     @staticmethod
-    def _extract_track_data(track: ET.Element, name: str, description: str, style_ref: str,
-                          time_info: Dict[str, Any], extensions: Dict[str, Any], placemark: ET.Element) -> Dict[str, Any]:
-        """Extrait les données d'une trace Google (gx:Track)."""
+    def _extract_track_data(track: ET.Element, common: Dict[str, Any], name: Optional[str] = None) -> Dict[str, Any]:
+        """Extrait les données d'une trace Google (gx:Track) ; `name` remplace celui du Placemark."""
         ns = KMLParser.NAMESPACES
 
         # <when> et <gx:coord> vont par paires : un point illisible emporte son horodatage,
@@ -503,10 +321,10 @@ class KMLParser:
         timestamps = []
         kept = []
         for position, coord_elem in enumerate(coord_elements):
-            parts = (coord_elem.text or '').strip().split()
+            parts = (coord_elem.text or '').split(None, 3)
             try:
-                lon, lat = float(parts[0]), float(parts[1])
-                alt = float(parts[2]) if len(parts) > 2 else 0
+                lon, lat = file_formats.finite_float(parts[0]), file_formats.finite_float(parts[1])
+                alt = file_formats.altitude(parts[2]) if len(parts) > 2 else 0
             except (IndexError, ValueError):
                 continue
             coordinates.append([lat, lon, alt])
@@ -521,16 +339,9 @@ class KMLParser:
             if array.get('name') and len(values) == len(coord_elements):
                 track_data[array.get('name')] = [values[position] for position in kept]
 
-        result = {
-            'type': 'track',
-            'name': name,
-            'description': description,
-            'coordinates': coordinates,
-            'style': style_ref,
-            'time_info': time_info,
-            'extensions': extensions,
-            'properties': KMLParser._extract_extended_data(placemark)
-        }
+        result = {'type': 'track', **common, 'coordinates': coordinates}
+        if name is not None:
+            result['name'] = name
 
         if timestamps:
             result['timestamps'] = timestamps
@@ -541,32 +352,21 @@ class KMLParser:
         return result
 
     @staticmethod
-    def _extract_multitrack_data(multitrack: ET.Element, name: str, description: str, style_ref: str,
-                               time_info: Dict[str, Any], extensions: Dict[str, Any], placemark: ET.Element) -> Dict[str, Any]:
+    def _extract_multitrack_data(multitrack: ET.Element, common: Dict[str, Any]) -> Dict[str, Any]:
         """Extrait les données d'une multi-trace Google (gx:MultiTrack)."""
         ns = KMLParser.NAMESPACES
-
-        tracks = multitrack.findall('gx:Track', ns)
-        track_list = []
-
-        for track in tracks:
-            track_data = KMLParser._extract_track_data(track, f"{name}_track_{len(track_list)}",
-                                                     description, style_ref, time_info, extensions, placemark)
+        track_list: List[Dict[str, Any]] = []
+        total = 0
+        for track in multitrack.findall('gx:Track', ns):
+            track_data = KMLParser._extract_track_data(track, common, f"{common['name']}_track_{len(track_list)}")
+            total += max(1, len(track_data['coordinates']))
+            if total > file_formats.MAX_FILE_POINTS:
+                raise file_formats.TooManyPointsError()
             track_list.append(track_data)
 
-        return {
-            'type': 'multitrack',
-            'name': name,
-            'description': description,
-            'tracks': track_list,
-            'style': style_ref,
-            'time_info': time_info,
-            'extensions': extensions,
-            'properties': KMLParser._extract_extended_data(placemark)
-        }
+        return {'type': 'multitrack', **common, 'tracks': track_list}
 
     @staticmethod
-    @track_time
     def parse_gps_description(description: str, lat: float, lon: float, alt: float) -> Dict[str, Any]:
         """
         Extrait vitesse et cap de la description d'un point de traceur GPS.
@@ -594,15 +394,17 @@ class KMLParser:
         if not description:
             return parsed_info
 
+        # Seul le début est analysé : borne le coût quelle que soit la description
+        text = description[:MAX_DESCRIPTION_SCAN]
         for pattern, knots in SPEED_PATTERNS:
-            match = pattern.search(description)
+            match = pattern.search(text)
             if match:
                 value = float(match.group(1).replace(',', '.'))
                 parsed_info['speed_kts'] = value if knots else round(value / 1.852, 1)
                 parsed_info['speed_kmh'] = round(value * 1.852, 1) if knots else value
                 break
 
-        match = HEADING_PATTERN.search(description)
+        match = HEADING_PATTERN.search(text)
         if match:
             heading = float(match.group(1).replace(',', '.'))
             if 0 <= heading <= 360:
@@ -616,13 +418,14 @@ class KMLParser:
 
     @staticmethod
     @track_time
-    def parse_kml_coordinates(kml_content: str, display_mode: str = 'double') -> Dict[str, Any]:
+    def parse_kml_coordinates(kml_content: str, display_mode: Optional[str] = None) -> Dict[str, Any]:
         """
         Parse un fichier KML et extrait les coordonnées des traces GPS et tous les points.
 
         Args:
             kml_content: Contenu du fichier KML
-            display_mode: ignoré (les unités sont choisies à l'affichage), conservé pour l'API
+            display_mode: sans effet (les unités sont choisies à l'affichage) ; accepté le temps
+                que les appelants cessent de le passer
 
         Returns:
             dict: Données formatées pour Leaflet avec traces et points séparés
@@ -631,10 +434,10 @@ class KMLParser:
         if not result['success']:
             return result
         features = result['features']
-        # Le k-ième point est le k-ième marqueur des features. La description reste celle du
-        # fichier : la mise en forme des mesures (unités) est faite à l'affichage.
-        points = [{**feature, 'raw_description': feature['description'], 'index': index}
-                  for index, feature in enumerate(f for f in features if f['type'] == 'marker')]
+        # Le k-ième point est le k-ième marqueur des features : ce sont les mêmes objets, pas
+        # une copie par repère (un fichier peut en compter 200 000). La description reste celle
+        # du fichier : la mise en forme des mesures (unités) est faite à l'affichage.
+        points = [feature for feature in features if feature['type'] == 'marker']
         return {
             'success': True,
             'features': features,
@@ -642,3 +445,253 @@ class KMLParser:
             'metadata': result['metadata'],
             'total_points': len(points)
         }
+
+
+# --------------------------------------------------------------------- Lecture en flux
+
+def _kml(name: str) -> str:
+    return f'{{{KML_NS}}}{name}'
+
+
+_PLACEMARK, _FOLDER, _DOCUMENT = _kml('Placemark'), _kml('Folder'), _kml('Document')
+_NAME, _DESCRIPTION = _kml('name'), _kml('description')
+_STYLE, _STYLE_MAP, _TIMESTAMP, _TIMESPAN = _kml('Style'), _kml('StyleMap'), _kml('TimeStamp'), _kml('TimeSpan')
+_TOUR, _TRACK, _MULTITRACK = f'{{{GX_NS}}}Tour', f'{{{GX_NS}}}Track', f'{{{GX_NS}}}MultiTrack'
+_ATOM_AUTHOR, _ATOM_NAME, _ATOM_LINK = f'{{{ATOM_NS}}}author', f'{{{ATOM_NS}}}name', f'{{{ATOM_NS}}}link'
+_VISIBILITY, _STYLE_URL, _EXTENDED_DATA = _kml('visibility'), _kml('styleUrl'), _kml('ExtendedData')
+_COORDINATES, _POINT, _LINESTRING, _POLYGON = _kml('coordinates'), _kml('Point'), _kml('LineString'), _kml('Polygon')
+_BALLOON, _DRAW_ORDER = f'{{{GX_NS}}}balloonVisibility', f'{{{GX_NS}}}drawOrder'
+# Dans un Placemark : sortes dont seul le premier descendant compte, et géométries (toutes)
+_FIRSTS = frozenset((_TIMESTAMP, _TIMESPAN, _EXTENDED_DATA, _BALLOON, _DRAW_ORDER))
+_GEOMETRIES = (_POINT, _LINESTRING, _POLYGON, _TRACK, _MULTITRACK)
+# Éléments dont le sous-arbre entier est nécessaire pour les lire. Les autres ne servent
+# que par leur texte ou leur présence.
+_SUBTREES = frozenset((_PLACEMARK, _STYLE, _STYLE_MAP, _TIMESTAMP, _TIMESPAN))
+# Élément enfant -> clé retenue, selon ce qui le contient (premier rencontré seulement)
+_CHILD_KEYS = {
+    'document': {_NAME: 'title', _DESCRIPTION: 'description'},
+    'folder': {_NAME: 'name', _DESCRIPTION: 'description'},
+    'tour': {_NAME: 'name', _DESCRIPTION: 'description'},
+    'author': {_ATOM_NAME: 'name'},
+}
+
+
+class _KmlStream(xml_stream.StreamHandler):
+    """
+    Assemble features et métadonnées au fil de la lecture.
+
+    Chaque Placemark est reçu entier, converti en features puis libéré : la mémoire tenue
+    pendant la lecture est celle du résultat, pas celle du document. Un Placemark imbriqué
+    dans un autre (invalide) fait partie du premier, comme tout ce que contient un élément
+    reçu en sous-arbre. Tout ce qui est accumulé est plafonné par MAX_FILE_POINTS : un
+    fichier de 16 Mo de dossiers, de liens ou de styles vides ne remplit pas la mémoire.
+    """
+
+    canonical_ns = KML_NS
+    ns_aliases = KML_NS_ALIASES
+
+    def __init__(self) -> None:
+        self.features: List[Dict[str, Any]] = []
+        self._placemarks = 0
+        self._points = 0
+        self._document: Optional[Dict[str, Any]] = None  # premier <Document> du fichier
+        self._links: List[Dict[str, str]] = []
+        self._folders: List[Dict[str, Any]] = []
+        self._open_folders: List[Dict[str, Any]] = []
+        self._timestamps: Optional[List[Any]] = None  # None : aucun <TimeStamp> rencontré
+        self._timespans: Optional[List[Dict[str, Any]]] = None
+        self._tours: List[Dict[str, Any]] = []
+        self._tracks = 0
+        self._multitracks = 0
+        self._styles: Dict[str, Dict[str, Any]] = {}
+        self._style_maps: List[Any] = []  # (id, paires), résolues une fois tous les styles connus
+        # Un contexte par élément ouvert hors sous-arbre : (genre, données) ou None
+        self._contexts: List[Any] = []
+        self._harvesters = {
+            _TIMESTAMP: self._timestamp, _TIMESPAN: self._timespan, _STYLE: self._style,
+            _STYLE_MAP: self._style_map, _TOUR: self._nested_tour,
+            _TRACK: self._count_track, _MULTITRACK: self._count_multitrack,
+        }
+
+    @staticmethod
+    def _bounded(items: Any) -> Any:
+        """Refuse le fichier plutôt que de laisser une liste de métadonnées grossir sans fin."""
+        if len(items) >= file_formats.MAX_FILE_POINTS:
+            raise file_formats.TooManyPointsError()
+        return items
+
+    # ------------------------------------------------------------ Hors sous-arbre
+
+    def opened(self, element: ET.Element) -> bool:
+        tag = element.tag
+        if tag in _SUBTREES:
+            if tag == _PLACEMARK:
+                if self._placemarks >= file_formats.MAX_FILE_POINTS:
+                    raise file_formats.TooManyPointsError()
+                if self._open_folders:
+                    self._open_folders[-1]['placemark_count'] += 1
+            return True
+
+        context = None
+        if tag == _FOLDER:
+            data: Dict[str, Any] = {'placemark_count': 0}
+            self._bounded(self._folders).append(data)
+            self._open_folders.append(data)
+            context = ('folder', data)
+        elif tag == _DOCUMENT:
+            if self._document is None:
+                self._document = {}
+                context = ('document', self._document)
+        elif tag == _TOUR:
+            data = {}
+            self._bounded(self._tours).append(data)
+            context = ('tour', data)
+        elif tag == _TRACK:
+            self._tracks += 1
+        elif tag == _MULTITRACK:
+            self._multitracks += 1
+        elif tag == _ATOM_AUTHOR:
+            parent = self._contexts[-1] if self._contexts else None
+            # Seul le premier auteur du document compte, qu'il porte un nom ou non
+            if parent is not None and parent[0] == 'document' and 'author_seen' not in parent[1]:
+                parent[1]['author_seen'] = True
+                context = ('author', {})
+        self._contexts.append(context)
+        return False
+
+    def closed(self, element: ET.Element) -> None:
+        context = self._contexts.pop()
+        parent = self._contexts[-1] if self._contexts else None
+        if context is not None:
+            kind, data = context
+            if kind == 'folder':
+                self._open_folders.pop()
+                count = data.pop('placemark_count')
+                data['placemark_count'] = count  # après le nom et la description
+                if self._open_folders:
+                    self._open_folders[-1]['placemark_count'] += count
+            elif kind == 'author' and 'name' in data and parent is not None:
+                parent[1]['author'] = data['name']
+        if parent is None:
+            return
+        kind, data = parent
+        key = _CHILD_KEYS[kind].get(element.tag)
+        if key is not None:
+            data.setdefault(key, element.text)
+        elif kind == 'document' and element.tag == _ATOM_LINK:
+            self._bounded(self._links).append(
+                {name: element.attrib[name] for name in ('href', 'rel', 'type') if name in element.attrib})
+
+    # ------------------------------------------------------------------ Sous-arbres
+
+    def subtree(self, element: ET.Element) -> None:
+        """
+        Un seul parcours du sous-arbre : il relève ce que le document déclare n'importe où
+        (styles, dates, traces) et, pour un Placemark, de quoi construire ses features.
+        """
+        is_placemark = element.tag == _PLACEMARK
+        firsts: Dict[str, ET.Element] = {}
+        geometry: Dict[str, List[ET.Element]] = {tag: [] for tag in _GEOMETRIES} if is_placemark else {}
+        harvesters = self._harvesters
+        for node in element.iter():
+            tag = node.tag
+            harvest = harvesters.get(tag)
+            if harvest is not None:
+                harvest(node)
+            if is_placemark and node is not element:
+                if tag in geometry:
+                    geometry[tag].append(node)
+                elif tag in _FIRSTS and tag not in firsts:
+                    firsts[tag] = node
+        if not is_placemark:
+            return
+        extracted = KMLParser._placemark_features(element, self._placemarks, firsts, geometry)
+        self._placemarks += 1
+        # Un Placemark ou une feature sans point compte pour un : le plafond borne aussi
+        # le nombre d'entités (500 000 polygones vides tenaient dans 16 Mo)
+        self._points += max(1, sum(max(1, KMLParser._point_count(feature)) for feature in extracted))
+        if self._points > file_formats.MAX_FILE_POINTS:
+            raise file_formats.TooManyPointsError()
+        self.features.extend(extracted)
+
+    def _timestamp(self, node: ET.Element) -> None:
+        if self._timestamps is None:
+            self._timestamps = []
+        when = node.find(_kml('when'))
+        if when is not None and when.text:
+            self._bounded(self._timestamps).append(when.text)
+
+    def _timespan(self, node: ET.Element) -> None:
+        if self._timespans is None:
+            self._timespans = []
+        span = {}
+        for key in ('begin', 'end'):
+            child = node.find(_kml(key))
+            if child is not None:
+                span[key] = child.text
+        self._bounded(self._timespans).append(span)
+
+    def _style(self, node: ET.Element) -> None:
+        style_id = node.get('id')
+        if style_id:
+            if style_id not in self._styles:
+                self._bounded(self._styles)
+            self._styles[style_id] = KMLParser._style_data(node)
+
+    def _style_map(self, node: ET.Element) -> None:
+        style_id = node.get('id')
+        if style_id:
+            self._bounded(self._style_maps).append((style_id, KMLParser._style_map_data(node)))
+
+    def _nested_tour(self, node: ET.Element) -> None:
+        tour = {}
+        for key, tag in (('name', _NAME), ('description', _DESCRIPTION)):
+            child = node.find(tag)
+            if child is not None:
+                tour[key] = child.text
+        self._bounded(self._tours).append(tour)
+
+    def _count_track(self, _node: ET.Element) -> None:
+        self._tracks += 1
+
+    def _count_multitrack(self, _node: ET.Element) -> None:
+        self._multitracks += 1
+
+    # -------------------------------------------------------------------- Résultat
+
+    def metadata(self) -> Dict[str, Any]:
+        """Métadonnées du document, une fois la lecture terminée."""
+        metadata: Dict[str, Any] = {}
+        document = self._document or {}
+        for key in ('title', 'description', 'author'):
+            if key in document:
+                metadata[key] = document[key]
+        if self._links:
+            metadata['links'] = self._links
+        if self._timestamps is not None:
+            metadata['timestamps'] = self._timestamps
+        if self._timespans is not None:
+            metadata['timespans'] = self._timespans
+
+        extensions: Dict[str, Any] = {}
+        if self._tours:
+            extensions['tours'] = self._tours
+        if self._tracks:
+            extensions['track_count'] = self._tracks
+        if self._multitracks:
+            extensions['multitrack_count'] = self._multitracks
+        if extensions:
+            metadata['google_extensions'] = extensions
+
+        styles = dict(self._styles)
+        for style_id, pairs in self._style_maps:
+            # Une StyleMap prend les couleurs de son style « normal » : c'est elle que
+            # les placemarks référencent dans les fichiers Google Earth
+            target = styles.get(str(pairs.get('normal') or '').lstrip('#'))
+            styles[style_id] = {**(target or {}), **pairs}
+        if styles:
+            metadata['styles'] = styles
+        if self._folders:
+            metadata['folders'] = self._folders
+        return metadata
+

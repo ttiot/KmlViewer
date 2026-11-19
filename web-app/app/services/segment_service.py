@@ -21,12 +21,17 @@ LOOKAHEAD_M = 60.0        # marge de progression le long du tronçon entre deux 
 MIN_SEGMENT_M = 100.0
 MAX_SEGMENT_M = 200_000.0
 BBOX_MARGIN_DEG = 0.001   # ~100 m
+# Points de trace examinés au plus, par point de la trace, pour chercher un tronçon. Une
+# trace ordinaire en demande un à deux ; une trace qui oscille près du départ sans jamais
+# finir le tronçon relançait un suivi complet à chaque passage (quadratique : 28 s pour
+# 4 000 points). Au-delà du budget, la recherche s'arrête avec les efforts déjà trouvés.
+FOLLOW_WORK_FACTOR = 4
 
 
-def _follow(seg: np.ndarray, trk: np.ndarray, steps: np.ndarray, start: int) -> Optional[int]:
+def _follow(seg: np.ndarray, trk: np.ndarray, steps: np.ndarray, start: int) -> Tuple[Optional[int], int]:
     """
-    Suit le tronçon à partir du point `start` de la trace. Retourne l'indice du point
-    d'arrivée, ou None si la trace quitte le tronçon avant la fin.
+    Suit le tronçon à partir du point `start` de la trace. Retourne (indice du point
+    d'arrivée, ou None si la trace quitte le tronçon avant la fin ; nombre de points examinés).
     """
     last = len(seg) - 1
     k = 0            # position atteinte sur le tronçon
@@ -44,14 +49,14 @@ def _follow(seg: np.ndarray, trk: np.ndarray, steps: np.ndarray, start: int) -> 
         else:
             off += steps[i - 1] if i > start else 0.0
             if off > MAX_OFF_TRACK_M:
-                return None
+                return None, i - start + 1
         if k == last:
             end = i
             dist_end = lambda idx: math.hypot(trk[idx, 0] - seg[last, 0], trk[idx, 1] - seg[last, 1])  # noqa: E731
             while end + 1 < len(trk) and dist_end(end + 1) < dist_end(end):
                 end += 1
-            return end
-    return None
+            return end, end - start + 1
+    return None, len(trk) - start
 
 
 def find_efforts(seg_lat: Sequence[float], seg_lon: Sequence[float],
@@ -69,6 +74,7 @@ def find_efforts(seg_lat: Sequence[float], seg_lon: Sequence[float],
 
     efforts: List[Tuple[int, int, float]] = []
     i, n = 0, len(trk)
+    budget = FOLLOW_WORK_FACTOR * n
     while i < n:
         if not near[i]:
             i += 1
@@ -77,7 +83,12 @@ def find_efforts(seg_lat: Sequence[float], seg_lon: Sequence[float],
         while run_end + 1 < n and near[run_end + 1]:
             run_end += 1
         start = i + int(np.argmin(d_start[i:run_end + 1]))
-        end = _follow(seg, trk, steps, start)
+        if budget <= 0:
+            logger.warning("Recherche de tronçon interrompue : trace de %d points trop coûteuse à suivre "
+                           "(%d effort(s) retenus)", n, len(efforts))
+            break
+        end, examined = _follow(seg, trk, steps, start)
+        budget -= examined
         if end is not None and end > start and t[end] > t[start]:
             efforts.append((start, end, float(t[end] - t[start])))
             # Sur une boucle, l'arrivée peut être le départ du tour suivant

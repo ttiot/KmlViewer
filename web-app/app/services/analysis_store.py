@@ -14,7 +14,7 @@ import time
 import zlib
 from typing import Any, Dict, Mapping, Optional
 
-from app.services import activity_store, advanced_analysis, ingest_service
+from app.services import activity_store, advanced_analysis, file_formats, ingest_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +52,16 @@ def compute(db: sqlite3.Connection, cfg: Mapping, user_id: int, activity_id: int
     row = activity_store.get(db, user_id, activity_id)
     if row is None:
         raise LookupError("Activité introuvable")
-    ext = ingest_service.file_extension(row['filename'])
+    ext = file_formats.extension(row['filename'])
     path = activity_store.raw_file_path(cfg['DATA_DIR'], user_id, row['sha256'], ext)
     parsed = ingest_service.parse_raw(path.read_bytes(), row['filename'])
     if not parsed.get('success'):
         raise ValueError(str(parsed.get('error') or "Fichier d'origine illisible"))
-    analysis = advanced_analysis.analyze(parsed.get('features') or [], parsed.get('points') or [])
+    # Altitude corrigée par le MNT : l'analyse mesure alors le même dénivelé que la bibliothèque
+    # (ignorée par l'analyse si elle n'est pas alignée point pour point sur les traces)
+    elevation = activity_store.unpack_points(row['points']).get('ele_dem') if row['elev_source'] == 'dem' else None
+    analysis = advanced_analysis.analyze(parsed.get('features') or [], parsed.get('points') or [],
+                                         elevation=elevation)
 
     computed_at = activity_store.epoch_to_iso(time.time())
     blob = zlib.compress(json.dumps(analysis, separators=(',', ':')).encode('utf-8'), 6)
