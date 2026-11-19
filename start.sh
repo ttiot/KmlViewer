@@ -42,6 +42,13 @@ fi
 echo "🔧 Construction et démarrage de l'application..."
 echo ""
 
+# Version affichée en pied de page : tag git du commit courant, sinon empreinte courte.
+# L'image n'embarque pas .git : la valeur lui est passée au build (ARG APP_VERSION).
+if [ -z "${APP_VERSION:-}" ] && command -v git &> /dev/null; then
+    APP_VERSION=$(git describe --tags --exact-match HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || true)
+fi
+export APP_VERSION="${APP_VERSION:-dev}"
+
 # Construire et démarrer les conteneurs
 if run_compose up -d --build; then
     echo ""

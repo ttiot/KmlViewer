@@ -14,3 +14,4 @@ from . import activities_routes  # noqa: E402,F401
 from . import dashboard_routes  # noqa: E402,F401
 from . import segments_routes  # noqa: E402,F401
 from . import users_routes  # noqa: E402,F401
+from . import profile_routes  # noqa: E402,F401

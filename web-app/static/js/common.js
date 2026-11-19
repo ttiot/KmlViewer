@@ -91,5 +91,37 @@ const App = (() => {
     const date = (iso) => (iso ? new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
     const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
-    return { request, api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime };
+    // Grand chiffre suivi de son unité en petit : setFigure(node, '302,4', { unit: 'km' }).
+    // Les textes passent par des nœuds texte ; une unité devient un <span class="unit">.
+    function setFigure(node, ...parts) {
+        const children = [];
+        parts.forEach((part, index) => {
+            if (index) children.push(' ');
+            children.push(part && typeof part === 'object' ? el('span', { class: 'unit' }, part.unit) : String(part));
+        });
+        node.replaceChildren(...children);
+        return node;
+    }
+
+    // Durée en morceaux pour setFigure : « 7 h 00 », « 42 min », « 35 s » ; null si inconnue
+    function durationParts(seconds) {
+        if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return null;
+        const s = Math.round(Number(seconds));
+        if (s < 60) return [s, { unit: 's' }];
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h > 0 ? [h, { unit: 'h' }, String(m).padStart(2, '0')] : [m, { unit: 'min' }];
+    }
+
+    // Libellé d'un type d'activité, lu dans une liste déroulante rendue par le serveur
+    // (le catalogue des types n'existe qu'à un endroit : app/services/activity_types.py)
+    function typeLabels(select) {
+        const labels = {};
+        Array.from(select ? select.options : []).forEach((option) => {
+            if (option.value) labels[option.value] = option.textContent;
+        });
+        return labels;
+    }
+
+    return { request, api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime,
+             setFigure, durationParts, typeLabels };
 })();

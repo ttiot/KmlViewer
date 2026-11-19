@@ -4,118 +4,115 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}"/>
 {% endblock %}
 {% block page %}
-    <div class="main-content" id="mainContent">
-        <!-- Barre du visualiseur : ouverture de fichiers et onglets des fichiers ouverts -->
-        {% include 'viewer/toolbar.html' %}
+    <main class="viewer" id="mainContent">
+        <div class="viewer-top">
+            <!-- Panneau de l'activité : ouverture, résumé de la trace affichée, mesures sous le curseur -->
+            <section class="viewer-panel" aria-label="Activité">
+                {% include 'viewer/toolbar.html' %}
 
-        <!-- Contrôles de navigation -->
-        <div id="navigationControls" class="navigation-section" hidden>
-            <div class="row align-items-center">
-                <div class="col-md-6">
-                    <h6 class="section-title"><i class="fas fa-arrows-left-right"></i>Navigation entre les points</h6>
-                    <div id="navigationInfo" hidden>
-                        <!-- Informations sur le point actuel -->
+                <div class="empty-state" id="panelEmpty">
+                    <strong>Aucune trace ouverte.</strong>
+                    <span>Choisis une activité de ta bibliothèque, ouvre un fichier ou dépose-le sur la page.</span>
+                </div>
+
+                <div class="viewer-summary" id="fileSummary" hidden>
+                    <div class="viewer-title">
+                        <h1 id="fileTitle"></h1>
+                        <p class="page-count" id="fileMeta"></p>
+                    </div>
+
+                    <div class="field">
+                        <label class="eyebrow" for="typeSelect">Type de trace</label>
+                        <select id="typeSelect" class="form-select fw-semibold" disabled>
+                            <option value="">{{ unclassified[1] }}</option>
+                            {% for key, label in activity_types %}
+                            <option value="{{ key }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="hint" id="typeHint"></p>
+                    </div>
+
+                    <dl class="stat-grid">
+                        <div><dt class="eyebrow">Distance</dt><dd class="figure" id="totalDistance">—</dd></div>
+                        <div><dt class="eyebrow">Dénivelé +</dt><dd class="figure" id="totalAscent">—</dd></div>
+                        <div><dt class="eyebrow">Durée totale</dt><dd class="figure" id="totalDuration">—</dd></div>
+                        <div><dt class="eyebrow">En mouvement</dt><dd class="figure" id="movingDuration">—</dd></div>
+                        <div><dt class="eyebrow">Vitesse moy.</dt><dd class="figure" id="avgSpeed">—</dd></div>
+                        <div><dt class="eyebrow">Pointe</dt><dd class="figure" id="maxSpeed">—</dd></div>
+                    </dl>
+                    <div id="basicNotes"></div>
+
+                    <div class="cursor-box">
+                        <h2 class="eyebrow">Sous le curseur</h2>
+                        <div><span>Distance</span><span class="mono" id="cursorDistance">—</span></div>
+                        <div><span>Altitude</span><span class="mono" id="cursorAltitude">—</span></div>
+                        <div><span>Vitesse</span><span class="mono" id="cursorSpeed">—</span></div>
+                        <div><span>Position</span><span class="mono" id="cursorPosition">—</span></div>
+                        <div><span>Point</span><span class="mono" id="cursorPoint">—</span></div>
+                    </div>
+
+                    <!-- Chaque bouton ouvre l'onglet d'outils correspondant, sous le profil -->
+                    <div class="button-row">
+                        <button type="button" class="btn btn-dark" data-tool="export">Exporter</button>
+                        <button type="button" class="btn btn-outline-secondary" data-tool="editor">Éditer la trace</button>
+                        <button type="button" class="btn btn-ghost is-full" data-tool="advanced">Analyse avancée</button>
                     </div>
                 </div>
-                <div class="col-md-6 text-end">
-                    <div class="btn-group" role="group">
-                        <button type="button" class="btn btn-outline-primary" id="prevPointBtn">
-                            <i class="fas fa-arrow-left"></i> Précédent
-                        </button>
-                        <button type="button" class="btn btn-outline-primary" id="nextPointBtn">
-                            Suivant <i class="fas fa-arrow-right"></i>
-                        </button>
-                    </div>
-                    <div class="mt-2">
-                        <small class="text-muted">Utilisez les flèches ← → du clavier</small>
-                    </div>
-                </div>
-            </div>
-        </div>
+            </section>
 
-        <!-- Carte et listing des points : la liste ne prend de la place que si elle est affichée -->
-        <div class="viewer-grid">
-            <div class="map-area">
+            <section class="map-area" aria-label="Carte">
                 <div id="map"></div>
                 {% include 'viewer/empty_state.html' %}
-            </div>
-            <div id="pointsList" class="points-section" hidden>
-                <h6 class="section-title">
-                    <i class="fas fa-location-dot"></i>
-                    Points <span class="badge-soft" id="pointsCount">0</span>
-                </h6>
-                <div id="pointsListContent" class="points-list-content">
-                    <!-- Les points seront listés ici -->
-                </div>
-            </div>
+            </section>
         </div>
-        <div class="row">
-            <!-- Panneau d'analyse - Phase 3 -->
-            <div class="col-lg-12" id="analysisPanel" hidden>
-                <div class="analysis-section">
-                    <h6 class="section-title">
-                        <i class="fas fa-chart-line"></i>
-                        Analyse de trajet
-                    </h6>
 
-                    <!-- Onglets d'analyse -->
-                    <ul class="nav nav-tabs mb-3" id="analysisTab" role="tablist">
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link active" id="stats-tab" data-bs-toggle="tab" data-bs-target="#stats" type="button" role="tab">
-                                <i class="fas fa-calculator"></i> Stats
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="elevation-tab" data-bs-toggle="tab" data-bs-target="#elevation" type="button" role="tab">
-                                <i class="fas fa-mountain"></i> Élévation
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="speed-tab" data-bs-toggle="tab" data-bs-target="#speed" type="button" role="tab">
-                                <i class="fas fa-tachometer-alt"></i> Vitesse
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="advanced-tab" data-bs-toggle="tab" data-bs-target="#advanced" type="button" role="tab">
-                                <i class="fas fa-cogs"></i> Avancé
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="editor-tab" data-bs-toggle="tab" data-bs-target="#editor" type="button" role="tab">
-                                <i class="fas fa-edit"></i> Édition
-                            </button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="export-tab" data-bs-toggle="tab" data-bs-target="#export" type="button" role="tab">
-                                <i class="fas fa-download"></i> Export
-                            </button>
-                        </li>
-                    </ul>
-                    
-                    <!-- Contenu des onglets -->
-                    <div class="tab-content" id="analysisTabContent">
-                        <!-- Onglet Statistiques -->
-                        {% include 'tabs/stats.html' %}
-                        
-                        <!-- Onglet Élévation -->
-                        {% include 'tabs/elevation.html' %}
-                        
-                        <!-- Onglet Vitesse -->
-                        {% include 'tabs/vitesse.html' %}
-                        
-                        <!-- Onglet Analyses Avancées - Phase 4 -->
-                        {% include 'tabs/advanced.html' %}
-                            
-                        <!-- Onglet Édition - Phase 4 -->
-                        {% include 'tabs/edit.html' %}
-                        
-                        <!-- Onglet Export - Phase 4 -->
-                        {% include 'tabs/export.html' %}
-                    </div>    
+        <!-- Profil le long de la trace : altitude ou vitesse, curseur lié à la carte -->
+        <section class="strip" id="profileSection" aria-label="Profil de la trace" hidden>
+            <div class="strip-head">
+                <h2 class="eyebrow">Profil</h2>
+                <div class="segmented" role="group" aria-label="Courbe affichée" id="seriesSwitch">
+                    <button type="button" class="btn" data-series="elevation" aria-pressed="true">Élévation</button>
+                    <button type="button" class="btn" data-series="speed" aria-pressed="false">Vitesse</button>
                 </div>
+                <p class="strip-readout" id="stripReadout" aria-live="off"></p>
             </div>
-        </div>
-    </div>
+            <div id="profileStrip"></div>
+            <div class="strip-scrub">
+                <label for="scrub">Position sur la trace</label>
+                <input type="range" id="scrub" min="0" max="1000" step="1" value="0">
+            </div>
+            <p class="hint" id="stripMeta"></p>
+        </section>
+
+        <!-- Outils du fichier affiché -->
+        <section class="viewer-tools" id="analysisPanel" aria-label="Outils" hidden>
+            <ul class="nav nav-tabs" id="analysisTab" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="advanced-tab" data-bs-toggle="tab" data-bs-target="#advanced"
+                            type="button" role="tab" aria-controls="advanced" aria-selected="true">Analyse avancée</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="points-tab" data-bs-toggle="tab" data-bs-target="#points"
+                            type="button" role="tab" aria-controls="points" aria-selected="false">
+                        Points <span class="chip" id="pointsCount">0</span></button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="editor-tab" data-bs-toggle="tab" data-bs-target="#editor"
+                            type="button" role="tab" aria-controls="editor" aria-selected="false">Édition</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="export-tab" data-bs-toggle="tab" data-bs-target="#export"
+                            type="button" role="tab" aria-controls="export" aria-selected="false">Export</button>
+                </li>
+            </ul>
+            <div class="tab-content" id="analysisTabContent">
+                {% include 'tabs/advanced.html' %}
+                {% include 'tabs/points.html' %}
+                {% include 'tabs/edit.html' %}
+                {% include 'tabs/export.html' %}
+            </div>
+        </section>
+    </main>
 
     <!-- Réglages de la carte : déplacés par settings.js dans un contrôle Leaflet -->
     {% include 'viewer/map_settings.html' %}
@@ -123,8 +120,7 @@
     <!-- Voile affiché pendant le survol de la page avec des fichiers -->
     <div class="drop-overlay" id="dropOverlay" hidden>
         <div class="drop-overlay-box">
-            <i class="fas fa-cloud-arrow-up"></i>
-            <strong>Déposez vos fichiers KML, KMZ ou GPX</strong>
+            <strong>Dépose tes fichiers KML, KMZ ou GPX</strong>
         </div>
     </div>
 
@@ -134,13 +130,14 @@
 {% block scripts %}
     <!-- Bibliothèques embarquées, puis modules du visualiseur (ordre significatif) -->
     <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
-    <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/profile-strip.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/core.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/prefs.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/map.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/settings.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/payload.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/points.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/viewer/panel.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/files.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/opener.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/analysis.js') }}"></script>

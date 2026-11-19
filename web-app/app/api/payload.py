@@ -4,13 +4,14 @@ aucune route ne lit le corps JSON autrement.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from flask import current_app, request
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.errors import ApiError
 from app.security import SQLITE_MAX_INT
+from app.services import activity_types
 
 logger = logging.getLogger(__name__)
 
@@ -75,3 +76,11 @@ def int_arg(name: str, default: int, maximum: int = SQLITE_MAX_INT) -> int:
     except (TypeError, ValueError):
         return default
     return max(0, min(value, maximum))
+
+
+def type_filter() -> Optional[str]:
+    """Paramètre d'URL `type` : une clé du catalogue des types, « unclassified », ou rien."""
+    value = request.args.get('type') or None
+    if value is not None and not activity_types.is_filter(value):
+        raise ApiError("Type d'activité inconnu")
+    return value

@@ -8,10 +8,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.services import activity_types
+
 logger = logging.getLogger(__name__)
 
 PERIODS = ('week', 'month', 'year')
-WINDOW = {'week': 12, 'month': 12}  # nombre de périodes affichées ; 'year' : tout l'historique
+WINDOW = {'week': 12, 'month': 12}  # nombre de périodes glissantes ; 'year' : les 12 mois de l'année affichée
+MIN_YEAR, MAX_YEAR = 1970, 2100
 BEST_EFFORT_LABELS = {'1000': '1 km', '5000': '5 km', '10000': '10 km',
                       '21097': 'Semi-marathon', '42195': 'Marathon'}
 
@@ -49,11 +52,10 @@ def _bucket(day: date, period: str) -> str:
     return str(day.year)
 
 
-def _recent_buckets(today: date, period: str, first: Optional[date]) -> List[str]:
+def _recent_buckets(today: date, period: str, shown_year: int) -> List[str]:
     """Liste ordonnée des périodes à afficher, y compris celles sans activité."""
     if period == 'year':
-        start = first.year if first else today.year
-        return [str(y) for y in range(start, today.year + 1)]
+        return [f"{shown_year}-{month:02d}" for month in range(1, 13)]
     keys: List[str] = []
     cursor = today
     while len(keys) < WINDOW[period]:
@@ -65,36 +67,53 @@ def _recent_buckets(today: date, period: str, first: Optional[date]) -> List[str
 
 
 def _rows(db: sqlite3.Connection, user_id: int, activity_type: Optional[str], columns: str):
-    sql = f"SELECT {columns} FROM activities WHERE user_id = ?"
-    params: list = [user_id]
-    if activity_type:
-        sql += " AND activity_type = ?"
-        params.append(activity_type)
-    return db.execute(sql, params).fetchall()
+    clause, type_params = activity_types.sql_filter(activity_type)
+    return db.execute(f"SELECT {columns} FROM activities WHERE user_id = ?{clause}",
+                      [user_id, *type_params]).fetchall()
 
 
 def period_stats(db: sqlite3.Connection, user_id: int, period: str, tz_name: str,
-                 activity_type: Optional[str] = None, today: Optional[date] = None) -> Dict[str, Any]:
+                 activity_type: Optional[str] = None, today: Optional[date] = None,
+                 year: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Volumes par période et totaux de l'année affichée.
+
+    Année affichée : `year` si elle est demandée ; sinon l'année en cours, ou, quand elle
+    est vide, la dernière année qui porte des données (un tableau de bord vide en janvier
+    n'apprend rien). 'calendar_year' et 'latest_year' permettent à l'interface de le dire.
+    Série : 12 semaines ou 12 mois glissants ; en 'year', les 12 mois de l'année affichée.
+    """
     if period not in PERIODS:
         raise ValueError("Période invalide (week, month ou year)")
     tz = _timezone(tz_name)
     today = today or datetime.now(tz).date()
     rows = _rows(db, user_id, activity_type, "start_time, distance_m, ascent_m, moving_s, duration_s")
 
-    empty = lambda: {'count': 0, 'distance_km': 0.0, 'ascent_m': 0.0, 'time_s': 0.0}  # noqa: E731
-    totals, year_totals = empty(), empty()
-    buckets: Dict[str, Dict[str, float]] = {}
-    first_day: Optional[date] = None
-
+    dated = []
     for row in rows:
         day = _local_day(row['start_time'], tz)
         if day is None:
             logger.warning("Tableau de bord : date illisible %r, activité ignorée", row['start_time'])
             continue
-        first_day = day if first_day is None or day < first_day else first_day
-        targets = [totals, buckets.setdefault(_bucket(day, period), empty())]
-        if day.year == today.year:
+        dated.append((day, row))
+
+    years = {day.year for day, _ in dated}
+    latest_year = max(years) if years else None
+    if year is not None:
+        shown_year = year
+    else:
+        shown_year = today.year if today.year in years or latest_year is None else latest_year
+
+    empty = lambda: {'count': 0, 'distance_km': 0.0, 'ascent_m': 0.0, 'time_s': 0.0}  # noqa: E731
+    totals, year_totals = empty(), empty()
+    buckets: Dict[str, Dict[str, float]] = {}
+
+    for day, row in dated:
+        targets = [totals]
+        if day.year == shown_year:
             targets.append(year_totals)
+        if period != 'year' or day.year == shown_year:
+            targets.append(buckets.setdefault(_bucket(day, 'month' if period == 'year' else period), empty()))
         for target in targets:
             target['count'] += 1
             target['distance_km'] += _number(row['distance_m']) / 1000
@@ -106,15 +125,17 @@ def period_stats(db: sqlite3.Connection, user_id: int, period: str, tz_name: str
                 'ascent_m': round(values['ascent_m']), 'time_s': round(values['time_s'])}
 
     series = [{'period': key, **rounded(buckets.get(key, empty()))}
-              for key in _recent_buckets(today, period, first_day)]
+              for key in _recent_buckets(today, period, shown_year)]
     return {'period': period, 'series': series, 'totals': rounded(totals),
-            'current_year': {'year': today.year, **rounded(year_totals)}}
+            'current_year': {'year': shown_year, **rounded(year_totals)},
+            'calendar_year': today.year, 'latest_year': latest_year}
 
 
 def records(db: sqlite3.Connection, user_id: int, activity_type: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Records personnels : plus longue sortie, plus gros D+, plus longue durée, meilleurs temps."""
+    """Records personnels : distance, D+, durée, vitesse de pointe, meilleurs temps de course à pied."""
     rows = _rows(db, user_id, activity_type,
-                 "id, name, start_time, distance_m, ascent_m, moving_s, duration_s, best_efforts")
+                 "id, name, activity_type, start_time, distance_m, ascent_m, moving_s, duration_s, "
+                 "max_speed_ms, best_efforts")
     if not rows:
         return []
 
@@ -135,8 +156,13 @@ def records(db: sqlite3.Connection, user_id: int, activity_type: Optional[str] =
     if timed:
         duration = max(timed, key=elapsed)
         result.append(entry('Plus longue durée', 'time', elapsed(duration), duration))
+    fastest = max(rows, key=lambda r: _number(r['max_speed_ms']))
+    if _number(fastest['max_speed_ms']):
+        result.append(entry('Vitesse de pointe', 'speed', _number(fastest['max_speed_ms']), fastest))
 
-    # Décodé une fois par activité, pas une fois par distance de référence
+    # Meilleurs temps sur distance : seulement pour la course à pied (un trajet en voiture
+    # n'a pas de « meilleur temps sur 10 km »). Décodés une fois par activité.
+    rows = [row for row in rows if row['activity_type'] in activity_types.RUNNING]
     efforts: Dict[int, Dict[str, Any]] = {}
     for row in rows:
         try:
@@ -152,5 +178,5 @@ def records(db: sqlite3.Connection, user_id: int, activity_type: Optional[str] =
             if value > 0 and (best is None or value < best[0]):
                 best = (value, row)
         if best:
-            result.append(entry(f'Meilleur temps {label}', 'time', best[0], best[1]))
+            result.append(entry(f'Meilleur temps {label}', 'best_effort', best[0], best[1]))
     return result

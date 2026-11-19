@@ -5,10 +5,10 @@
 
 const SAVE_TO_LIBRARY_PREF = 'kmlviewer-save-to-library';
 
-// /?activity=<id> : charge l'activité demandée par le tableau de bord ou la page Tronçons.
-async function loadLibraryActivity() {
-    const id = new URLSearchParams(window.location.search).get('activity');
-    if (!id || !/^\d+$/.test(id)) return;
+// Charge une activité de la bibliothèque dans le visualiseur.
+async function openLibraryActivity(id) {
+    if (!/^\d+$/.test(String(id))) return;
+    showAlert('Chargement de l\'activité…', 'info', { spinner: true });
     try {
         const data = await App.api(`/api/activities/${id}/parsed`);
         if (data.success) addUploadedFile(data.filename || `Activité ${id}`, data);
@@ -16,6 +16,13 @@ async function loadLibraryActivity() {
     } catch (error) {
         showAlert(`Chargement de l'activité impossible : ${error.message}`, 'danger');
     }
+    updatePanel(); // en cas d'échec, le sélecteur revient sur le fichier réellement affiché
+}
+
+// /?activity=<id> : charge l'activité demandée par le tableau de bord ou la page Tronçons.
+function loadLibraryActivity() {
+    const id = new URLSearchParams(window.location.search).get('activity');
+    if (id) openLibraryActivity(id);
 }
 
 // Rattache les fichiers ouverts par un envoi à leur activité de bibliothèque : leur analyse
@@ -39,6 +46,7 @@ function linkToLibrary(sent, parsed, opened, results) {
         // Fichier fermé, déjà rattaché ou modifié entre-temps : jamais réaffecté
         if (!Viewer.files.has(file.id) || file.activityId || file.edited) return;
         file.activityId = result.activity_id;
+        if (file.id === Viewer.activeFileId) updatePanel(); // le type de trace devient modifiable
         // Un résultat déjà calculé, ou en cours de calcul, reste celui de la session ;
         // sinon on regarde si l'activité a déjà une analyse enregistrée
         if (file.id === Viewer.activeFileId && !file.advanced && !file.computing) restoreAdvancedAnalysis();
@@ -60,7 +68,10 @@ async function saveToLibrary(files) {
         const results = Array.isArray(data.results) ? data.results : [];
         const created = results.filter((r) => r.status === 'created').length;
         const errors = results.filter((r) => r.status === 'error').length;
-        if (created) showAlert(`${created} trace(s) enregistrée(s) dans ta bibliothèque`, 'success');
+        if (created) {
+            showAlert(`${created} trace(s) enregistrée(s) dans ta bibliothèque`, 'success');
+            loadLibraryOptions(); // le sélecteur d'activités les propose aussitôt
+        }
         if (errors) showAlert(`${errors} trace(s) non enregistrée(s) dans la bibliothèque`, 'warning');
         return results;
     } catch (error) {

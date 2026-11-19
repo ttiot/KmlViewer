@@ -1,21 +1,15 @@
-<div class="tab-pane fade" id="editor" role="tabpanel">
+<div class="tab-pane fade" id="editor" role="tabpanel" aria-labelledby="editor-tab">
     <div class="row g-3">
         <div class="col-12">
-            <h6><i class="fas fa-edit me-2"></i>Outils d'édition</h6>
-            <p class="text-muted small mb-2">
+            <h3 class="eyebrow mb-2">Points</h3>
+            <p class="hint mb-2">
                 Les modifications portent sur le fichier affiché, dans le navigateur : utilise l'onglet
                 Export pour les enregistrer.
             </p>
-            <div class="btn-group-vertical w-100" role="group">
-                <button type="button" class="btn btn-outline-primary btn-sm" id="addPointBtn">
-                    <i class="fas fa-plus"></i> Ajouter un point
-                </button>
-                <button type="button" class="btn btn-outline-warning btn-sm" id="editPointBtn">
-                    <i class="fas fa-edit"></i> Modifier un point
-                </button>
-                <button type="button" class="btn btn-outline-danger btn-sm" id="deletePointBtn">
-                    <i class="fas fa-trash"></i> Supprimer un point
-                </button>
+            <div class="button-row">
+                <button type="button" class="btn btn-outline-secondary" id="addPointBtn">Ajouter un point</button>
+                <button type="button" class="btn btn-outline-secondary" id="editPointBtn">Modifier un point</button>
+                <button type="button" class="btn btn-outline-danger" id="deletePointBtn">Supprimer un point</button>
             </div>
             <div class="alert alert-info py-2 px-3 mt-2 mb-0 small" id="editorHint" role="status" hidden></div>
         </div>
@@ -24,23 +18,19 @@
         <div class="col-12" id="pointEditForm" hidden>
             <div class="card">
                 <div class="card-body">
-                    <h6 class="card-title" id="pointEditTitle">Modifier le point</h6>
+                    <h3 class="eyebrow mb-3" id="pointEditTitle">Modifier le point</h3>
                     <form id="editPointForm">
                         <div class="mb-2">
                             <label class="form-label" for="editPointName">Nom</label>
-                            <input type="text" class="form-control form-control-sm" id="editPointName" maxlength="200" required>
+                            <input type="text" class="form-control" id="editPointName" maxlength="200" required>
                         </div>
                         <div class="mb-2">
                             <label class="form-label" for="editPointDescription">Description</label>
-                            <textarea class="form-control form-control-sm" id="editPointDescription" rows="2" maxlength="2000"></textarea>
+                            <textarea class="form-control" id="editPointDescription" rows="2" maxlength="2000"></textarea>
                         </div>
-                        <div class="btn-group w-100">
-                            <button type="submit" class="btn btn-success btn-sm">
-                                <i class="fas fa-save"></i> Enregistrer
-                            </button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="cancelPointEditBtn">
-                                <i class="fas fa-times"></i> Annuler
-                            </button>
+                        <div class="button-row mt-3">
+                            <button type="submit" class="btn btn-primary">Enregistrer</button>
+                            <button type="button" class="btn btn-outline-secondary" id="cancelPointEditBtn">Annuler</button>
                         </div>
                     </form>
                 </div>
@@ -48,14 +38,14 @@
         </div>
 
         <div class="col-12">
-            <h6><i class="fas fa-compress-alt me-2"></i>Simplifier les traces</h6>
-            <div class="input-group input-group-sm">
+            <h3 class="eyebrow mb-2">Simplifier les traces</h3>
+            <div class="input-group simplify-group">
                 <label class="input-group-text" for="simplifyTolerance">Tolérance</label>
                 <input type="number" class="form-control" id="simplifyTolerance" value="10" min="1" max="1000" step="1">
                 <span class="input-group-text">m</span>
-                <button type="button" class="btn btn-outline-info" id="simplifyTraceBtn">Simplifier</button>
+                <button type="button" class="btn btn-outline-secondary" id="simplifyTraceBtn">Simplifier</button>
             </div>
-            <div class="form-text">Écart maximal entre la trace d'origine et la trace simplifiée.</div>
+            <div class="hint mt-1">Écart maximal entre la trace d'origine et la trace simplifiée.</div>
         </div>
     </div>
 </div>

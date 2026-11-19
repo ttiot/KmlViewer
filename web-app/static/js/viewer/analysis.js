@@ -3,31 +3,39 @@
 
 let analysisRequest = 0;
 
+// Grands chiffres du panneau : [id, section de l'analyse, champ, unité, décimales]
 const STAT_FIELDS = [
-    // [id de l'élément, section de l'analyse, champ, suffixe, préfixe]
-    ['totalDistance', 'distance', 'total_distance_km', ' km', ''],
-    ['avgSpeed', 'speed', 'avg_speed_kmh', ' km/h', ''],
-    ['maxSpeed', 'speed', 'max_speed_kmh', ' km/h', ''],
-    ['totalAscent', 'elevation', 'total_ascent', ' m', '+'],
-    ['totalDescent', 'elevation', 'total_descent', ' m', '-'],
-    ['minElevation', 'elevation', 'min_elevation', ' m', ''],
-    ['maxElevation', 'elevation', 'max_elevation', ' m', ''],
-    ['minSpeed', 'speed', 'min_speed_kmh', ' km/h', ''],
-    ['avgSpeedDetail', 'speed', 'avg_speed_kmh', ' km/h', ''],
-    ['maxSpeedDetail', 'speed', 'max_speed_kmh', ' km/h', ''],
+    ['totalDistance', 'distance', 'total_distance_km', 'km', 2],
+    ['totalAscent', 'elevation', 'total_ascent', 'm', 0],
+    ['avgSpeed', 'speed', 'avg_speed_kmh', 'km/h', 1],
+    ['maxSpeed', 'speed', 'max_speed_kmh', 'km/h', 1],
 ];
 
 function updateBasicStats(analysis) {
-    STAT_FIELDS.forEach(([id, section, field, suffix, prefix]) => {
+    const { el, number, setFigure, durationParts } = App;
+    STAT_FIELDS.forEach(([id, section, field, unit, digits]) => {
         const value = (analysis[section] || {})[field];
-        // Un zéro mesuré (vitesse minimale à l'arrêt, altitude au niveau de la mer) s'affiche
-        document.getElementById(id).textContent = known(value) ? `${prefix}${value}${suffix}` : '-';
+        const node = document.getElementById(id);
+        // Un zéro mesuré (dénivelé nul, vitesse nulle) s'affiche ; « — » pour une mesure absente
+        if (known(value)) setFigure(node, number(value, digits), { unit }); else node.textContent = '—';
     });
-    // Durées réelles, lues dans les horodatages ; « - » pour une trace non horodatée
+    // Durées réelles, lues dans les horodatages ; « — » pour une trace non horodatée
     const duration = analysis.duration || {};
-    document.getElementById('totalDuration').textContent = formatDuration(duration.total_s);
-    document.getElementById('movingDuration').textContent = formatDuration(duration.moving_s);
-    const { el } = App;
+    [['totalDuration', duration.total_s], ['movingDuration', duration.moving_s]].forEach(([id, seconds]) => {
+        const parts = durationParts(seconds);
+        const node = document.getElementById(id);
+        if (parts) setFigure(node, ...parts); else node.textContent = '—';
+    });
+
+    // Sous le profil : ce que les grands chiffres ne disent pas
+    const elevation = analysis.elevation || {};
+    const meta = [];
+    if (known(elevation.total_descent)) meta.push(`Dénivelé − ${number(elevation.total_descent)} m`);
+    if (known(elevation.min_elevation) && known(elevation.max_elevation)) {
+        meta.push(`altitude de ${number(elevation.min_elevation)} à ${number(elevation.max_elevation)} m`);
+    }
+    document.getElementById('stripMeta').textContent = meta.join(' · ');
+
     const notes = [...(analysis.notes || [])];
     if (analysis.basic_stats && analysis.basic_stats.total_points && !analysis.basic_stats.has_time_data) {
         notes.push(analysis.basic_stats.has_speed_data
@@ -35,81 +43,12 @@ function updateBasicStats(analysis) {
             : 'Trace non horodatée : ni durée ni vitesse.');
     }
     document.getElementById('basicNotes').replaceChildren(...notes.map((note) =>
-        el('div', { class: 'small text-muted' }, el('i', { class: 'fas fa-circle-info me-1' }), String(note))));
-}
-
-// Courbe à série unique : trait fin, pas de marqueur par point (plusieurs milliers de
-// points), grille en retrait, infobulle au survol de n'importe où sur la colonne.
-function createLineChart(canvasId, labels, data, { colorToken, softToken, xTitle, yTitle, unit }) {
-    return new Chart(document.getElementById(canvasId).getContext('2d'), {
-        type: 'line',
-        data: {
-            labels,
-            datasets: [{
-                label: yTitle,
-                data,
-                // Couleurs lues dans les jetons à chaque rendu : suit le thème clair / sombre
-                borderColor: () => AppTheme.color(colorToken),
-                backgroundColor: () => AppTheme.color(softToken),
-                borderWidth: 2,
-                pointRadius: 0,
-                pointHoverRadius: 4,
-                pointHoverBackgroundColor: () => AppTheme.color(colorToken),
-                fill: true,
-                tension: 0.15,
-            }],
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        title: (items) => `${xTitle} : ${items[0].label}`,
-                        label: (item) => `${Number(item.parsed.y).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} ${unit}`,
-                    },
-                },
-            },
-            scales: {
-                x: {
-                    grid: { display: false },
-                    border: { display: false },
-                    ticks: { maxTicksLimit: 10, maxRotation: 0 },
-                    title: { display: true, text: xTitle },
-                },
-                y: { border: { display: false }, title: { display: true, text: yTitle } },
-            },
-        },
-    });
-}
-
-function destroyCharts() {
-    Object.keys(Viewer.charts).forEach((key) => {
-        if (Viewer.charts[key]) Viewer.charts[key].destroy();
-        Viewer.charts[key] = null;
-    });
+        el('p', { class: 'hint' }, String(note))));
 }
 
 function displayAnalysisResults(analysis) {
     updateBasicStats(analysis);
-    destroyCharts();
-    const elevationProfile = analysis.elevation && analysis.elevation.elevation_profile;
-    if (elevationProfile && elevationProfile.length) {
-        Viewer.charts.elevation = createLineChart('elevationChart',
-            elevationProfile.map((point) => (point.distance / 1000).toFixed(1)),
-            elevationProfile.map((point) => point.elevation),
-            { colorToken: '--viz-1', softToken: '--viz-1-soft', xTitle: 'Distance (km)', yTitle: 'Altitude (m)', unit: 'm' });
-    }
-    const speedProfile = analysis.speed && analysis.speed.speed_profile;
-    if (speedProfile && speedProfile.length) {
-        Viewer.charts.speed = createLineChart('speedChart',
-            speedProfile.map((point) => (point.distance / 1000).toFixed(1)),
-            speedProfile.map((point) => point.speed_kmh),
-            { colorToken: '--viz-2', softToken: '--viz-2-soft', xTitle: 'Distance (km)', yTitle: 'Vitesse (km/h)', unit: 'km/h' });
-    }
+    renderProfile(analysis);
 }
 
 function setAnalysisPanelVisible(visible) {
@@ -117,8 +56,8 @@ function setAnalysisPanelVisible(visible) {
     setTimeout(() => Viewer.map && Viewer.map.invalidateSize(), 300);
 }
 
-// Analyse le fichier actif. Le panneau reste affiché même si l'analyse échoue :
-// il porte aussi l'édition et l'export.
+// Analyse le fichier actif. Les outils restent affichés même si l'analyse échoue :
+// ils portent aussi l'édition et l'export.
 async function analyzeTrajectory() {
     const file = Viewer.activeFile();
     if (!file || file.data.features.length === 0) {
@@ -126,7 +65,7 @@ async function analyzeTrajectory() {
         // en route ne doit pas réafficher les résultats d'un autre fichier
         analysisRequest += 1;
         Viewer.analysis = null;
-        destroyCharts();
+        renderProfile(null);
         setAnalysisPanelVisible(false);
         return;
     }
@@ -213,7 +152,7 @@ function focusOnMap(item, color = '#e74c3c') {
         return;
     }
     Viewer.advancedHighlight = group.addTo(Viewer.map);
-    document.getElementById('map').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    document.getElementById('map').parentElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // Rend un nœud activable à la souris et au clavier.
@@ -551,9 +490,4 @@ function setupAnalysis() {
     document.getElementById('runAdvancedBtn').addEventListener('click', runAdvancedAnalysis);
     document.getElementById('clearAdvancedBtn').addEventListener('click', clearAdvancedAnalysis);
     updateAdvancedControls();
-    // Grille, axes et infobulles prennent leurs couleurs à la création du graphique :
-    // au changement de thème, on les recrée à partir de l'analyse déjà chargée.
-    document.addEventListener('themechange', () => {
-        if (Viewer.analysis && Viewer.hasData()) displayAnalysisResults(Viewer.analysis);
-    });
 }

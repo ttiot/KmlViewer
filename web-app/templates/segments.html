@@ -4,66 +4,106 @@
 <div class="page-header">
     <h1>Tronçons</h1>
 </div>
-<div class="row g-3">
-    <div class="col-lg-4">
-        <div class="card mb-3">
-            <div class="card-body">
-                <h2 class="card-title-sm mb-2">Mes tronçons</h2>
-                <div id="segmentList"></div>
-                <div class="empty-state" id="segmentsEmpty" hidden>
-                    <i class="fas fa-stopwatch"></i>
-                    <strong>Aucun tronçon</strong>
-                    <span>Crée ton premier tronçon ci-dessous.</span>
-                </div>
-            </div>
-        </div>
-        <div class="card">
-            <div class="card-body">
-                <h2 class="card-title-sm mb-3">Nouveau tronçon</h2>
-                <select id="activitySelect" class="form-select form-select-sm mb-2" aria-label="Activité de référence">
-                    <option value="">Activité de référence…</option>
+<div class="segments-layout">
+    <div class="segments-side">
+        <section class="panel" aria-labelledby="newSegmentTitle">
+            <h2 class="eyebrow" id="newSegmentTitle">Nouveau tronçon</h2>
+
+            <div class="field">
+                <label for="activitySelect">Activité</label>
+                <select id="activitySelect" class="form-select">
+                    <option value="">Choisir une activité…</option>
                 </select>
-                <button type="button" class="btn btn-sm btn-link px-0 mb-2" id="moreActivitiesButton" hidden>
+                <button type="button" class="btn btn-sm btn-ghost align-self-start" id="moreActivitiesButton" hidden>
                     Charger des activités plus anciennes</button>
-                <input type="text" id="segmentName" class="form-control form-control-sm mb-2"
-                       maxlength="100" placeholder="Nom du tronçon" aria-label="Nom du tronçon">
-                <div class="step-hint mb-3">
-                    <i class="fas fa-hand-pointer"></i>
-                    <span id="selectionInfo">Choisis une activité, puis clique deux fois sur la trace.</span>
+            </div>
+
+            <div class="field">
+                <label for="segmentName">Nom du tronçon</label>
+                <input type="text" id="segmentName" class="form-control" maxlength="100" placeholder="ex. Montée du col">
+            </div>
+
+            <div class="bound">
+                <div class="bound-head">
+                    <label for="startSlider"><span class="bound-pin" aria-hidden="true">A</span>Départ</label>
+                    <span class="mono" id="startReadout">—</span>
                 </div>
-                <div class="d-flex gap-2">
-                    <button type="button" class="btn btn-sm btn-primary" id="createButton" disabled>Créer le tronçon</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="resetButton">Réinitialiser</button>
+                <input type="range" id="startSlider" min="0" max="1" step="1" value="0" disabled>
+            </div>
+            <div class="bound">
+                <div class="bound-head">
+                    <label for="endSlider"><span class="bound-pin" aria-hidden="true">B</span>Arrivée</label>
+                    <span class="mono" id="endReadout">—</span>
+                </div>
+                <input type="range" id="endSlider" min="0" max="1" step="1" value="1" disabled>
+            </div>
+
+            <p class="hint" id="selectionInfo" aria-live="polite">Choisis une activité, puis règle le départ et l'arrivée.</p>
+
+            <dl class="readout">
+                <div>
+                    <dt class="eyebrow">Longueur</dt>
+                    <dd class="figure" id="selectionLength">—</dd>
+                </div>
+                <div>
+                    <dt class="eyebrow">Dénivelé +</dt>
+                    <dd class="figure" id="selectionAscent">—</dd>
+                </div>
+            </dl>
+
+            <div class="button-row">
+                <button type="button" class="btn btn-primary flex-grow-1" id="createButton" disabled>Créer le tronçon</button>
+                <button type="button" class="btn btn-outline-secondary" id="resetButton">Réinitialiser</button>
+            </div>
+        </section>
+
+        <section class="panel" aria-labelledby="segmentsTitle">
+            <h2 class="eyebrow" id="segmentsTitle">Mes tronçons</h2>
+            <div id="segmentList"></div>
+            <div class="empty-state" id="segmentsEmpty" hidden>
+                <strong>Aucun tronçon pour l'instant.</strong>
+                <span>Ceux que tu crées apparaîtront ici.</span>
+            </div>
+        </section>
+    </div>
+
+    <div class="segments-main">
+        <section class="map-card" aria-label="Sélection sur la carte">
+            <div id="segmentMap" class="segment-map"></div>
+            <div class="strip">
+                <div class="strip-head">
+                    <h2 class="eyebrow">Profil d'élévation</h2>
+                    <p class="strip-readout" id="stripReadout"></p>
+                </div>
+                <div id="segmentStrip"></div>
+            </div>
+        </section>
+
+        <section class="panel" id="segmentDetail" hidden>
+            <div class="panel-head">
+                <h2 class="h6 mb-0" id="detailTitle"></h2>
+                <div class="button-row">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="rescanButton">Rechercher à nouveau</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" id="deleteButton">Supprimer</button>
                 </div>
             </div>
-        </div>
-    </div>
-    <div class="col-lg-8">
-        <div id="segmentMap" class="segment-map mb-3"></div>
-        <div class="card" id="segmentDetail" hidden>
-            <div class="card-body">
-                <div class="d-flex align-items-center gap-2 mb-2">
-                    <h2 class="h6 mb-0 me-auto" id="detailTitle"></h2>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="rescanButton">
-                        <i class="fas fa-rotate me-1"></i>Rechercher à nouveau</button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" id="deleteButton">
-                        <i class="fas fa-trash me-1"></i>Supprimer</button>
-                </div>
-                <table class="table table-hover align-middle mb-0">
-                    <thead><tr><th>Rang</th><th>Temps</th><th>Vitesse moy.</th><th>Date</th><th>Activité</th></tr></thead>
+            <div class="table-responsive">
+                <table class="table align-middle mb-0">
+                    <thead><tr><th scope="col">Rang</th><th scope="col">Temps</th><th scope="col">Vitesse moy.</th>
+                        <th scope="col">Date</th><th scope="col">Activité</th></tr></thead>
                     <tbody id="efforts"></tbody>
                 </table>
-                <div class="empty-state" id="effortsEmpty" hidden>
-                    <i class="fas fa-magnifying-glass-location"></i>
-                    <strong>Aucun passage trouvé</strong>
-                    <span>Aucune de tes traces horodatées ne suit ce tronçon.</span>
-                </div>
             </div>
-        </div>
+            <div class="empty-state" id="effortsEmpty" hidden>
+                <strong>Aucun passage trouvé.</strong>
+                <span>Aucune de tes traces horodatées ne suit ce tronçon.</span>
+            </div>
+        </section>
     </div>
 </div>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/profile-strip.js') }}"></script>
 <script src="{{ url_for('static', filename='js/segments.js') }}"></script>
 {% endblock %}

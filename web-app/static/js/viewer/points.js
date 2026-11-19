@@ -235,6 +235,14 @@ function setupPointsNavigation() {
 
     pointsContent().addEventListener('scroll', onPointsScroll, { passive: true });
 
+    // La liste vit dans un onglet : masquée, ses lignes n'ont pas de hauteur mesurable.
+    // À l'ouverture de l'onglet, la fenêtre est redessinée et la hauteur de ligne mesurée.
+    document.getElementById('points-tab').addEventListener('shown.bs.tab', () => {
+        pointsView.measured = false;
+        renderPointsWindow(pointsView.start);
+        updatePointsListHighlight();
+    });
+
     // Un seul écouteur pour toute la liste (plusieurs milliers de points pour une trace GPX)
     pointsContent().addEventListener('click', (event) => {
         const item = event.target.closest('.point-item');

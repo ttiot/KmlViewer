@@ -14,7 +14,10 @@ function setFileVisibility(fileId, visible) {
     const eye = file.tab.querySelector('.file-tab-eye');
     eye.setAttribute('aria-pressed', visible ? 'true' : 'false');
     eye.querySelector('i').className = visible ? 'fas fa-eye' : 'fas fa-eye-slash';
-    if (fileId === Viewer.activeFileId) updateSelectionMarker();
+    if (fileId === Viewer.activeFileId) {
+        updateSelectionMarker();
+        setProfileCursor(Panel.t); // le repère du profil suit la visibilité du fichier
+    }
 }
 
 // Le fichier actif alimente la liste des points, l'analyse, l'édition et l'export.
@@ -33,17 +36,18 @@ function setActiveFile(fileId, { force = false } = {}) {
         // Beaucoup de fichiers : la barre défile, l'onglet actif doit rester en vue
         if (active) file.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
+    updatePanel();
     displayPointsList();
     restoreAdvancedAnalysis();
     analyzeTrajectory();
 }
 
-// Onglet d'un fichier : son nom (rend le fichier actif), un œil (affiche ou masque sa
+// Étiquette d'un fichier ouvert : son nom (rend le fichier actif), un œil (affiche ou masque sa
 // couche) et une croix (ferme le fichier). Le nom vient du fichier : nœuds texte et
 // attributs posés par setAttribute, jamais de HTML.
 function fileTab(file) {
     const { el, icon } = App;
-    return el('li', { class: 'nav-item file-tab', dataset: { fileId: file.id } },
+    return el('li', { class: 'file-tab', dataset: { fileId: file.id } },
         el('button', { type: 'button', class: 'nav-link', title: file.name, dataset: { fileId: file.id },
             onclick: () => setActiveFile(file.id) }, file.name),
         el('button', { type: 'button', class: 'file-tab-action file-tab-eye', 'aria-pressed': 'true',
@@ -60,7 +64,7 @@ function addUploadedFile(filename, data, { activate = true } = {}) {
     const file = {
         id, name: String(filename), layer: null, markers: [], tab: null, visible: true,
         activityId: data.activity_id || null,
-        edited: false, unsaved: false, revision: 0, advanced: null, computing: false,
+        activity: null, edited: false, unsaved: false, revision: 0, advanced: null, computing: false,
         data: { ...data, features: data.features || [], points: data.points || [] },
     };
     Viewer.files.set(id, file);
@@ -105,6 +109,7 @@ function closeFile(fileId) {
         if (next) {
             setActiveFile(next.id);
         } else {
+            updatePanel();
             displayPointsList();
             restoreAdvancedAnalysis();
             analyzeTrajectory();

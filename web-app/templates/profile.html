@@ -1,0 +1,98 @@
+{% extends 'layout.html' %}
+{% block title %}Mon profil · KmlViewer{% endblock %}
+{% block page_class %}is-narrow{% endblock %}
+{% block content %}
+{% set label = current_user['display_name'] or current_user['username'] or '?' %}
+<div class="profile-header">
+    <span class="avatar is-large" aria-hidden="true">{{ label[:1] }}</span>
+    <div>
+        <h1>Mon profil</h1>
+        <p class="page-count"><span class="mono">{{ current_user['username'] or '—' }}</span>
+            {%- if current_user['is_admin'] %} · administrateur{% endif %} ·
+            {{ nb_activities }} activité{{ 's' if nb_activities > 1 }}</p>
+    </div>
+</div>
+
+<form id="profileForm" class="profile-form" novalidate>
+    <section class="panel" aria-labelledby="p-compte">
+        <div>
+            <h2 class="eyebrow" id="p-compte">Compte</h2>
+            {# Jamais modifiables ici : l'email désigne le dossier d'import de la personne #}
+            <p class="hint">{% if oidc_enabled %}Nom et email viennent de ton fournisseur d'identité, à chaque connexion.
+                {%- else %}Compte unique du mode local, sans authentification.{% endif %}</p>
+        </div>
+        <div class="field-grid is-wide">
+            <div class="field">
+                <label for="p-nom">Nom affiché</label>
+                <input id="p-nom" type="text" class="form-control" value="{{ current_user['display_name'] or '' }}" readonly>
+            </div>
+            <div class="field">
+                <label for="p-mail">Email</label>
+                <input id="p-mail" type="email" class="form-control" value="{{ current_user['email'] or '' }}" readonly>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="p-mesures">
+        <div>
+            <h2 class="eyebrow" id="p-mesures">Mesures</h2>
+            <p class="hint">Tout est facultatif. Un champ vide désactive simplement les calculs qui en dépendent.</p>
+        </div>
+        <div class="field-grid">
+            <div class="field">
+                <label for="p-naissance">Date de naissance</label>
+                <input id="p-naissance" name="birth_date" type="date" class="form-control" min="1900-01-01"
+                       value="{{ profile.birth_date or '' }}">
+                <span class="hint">L'âge est calculé à la date de chaque activité.</span>
+            </div>
+            <div class="field">
+                <label for="p-sexe">Sexe</label>
+                <select id="p-sexe" name="sex" class="form-select">
+                    <option value="">Non renseigné</option>
+                    <option value="female" {{ 'selected' if profile.sex == 'female' }}>Femme</option>
+                    <option value="male" {{ 'selected' if profile.sex == 'male' }}>Homme</option>
+                </select>
+            </div>
+            {% macro measure(id, name, label, unit, mode, value) -%}
+            <div class="field">
+                <label for="{{ id }}">{{ label }}</label>
+                <div class="input-unit">
+                    <input id="{{ id }}" name="{{ name }}" type="text" inputmode="{{ mode }}" class="form-control"
+                           autocomplete="off" value="{{ '' if value is none else value }}">
+                    <span aria-hidden="true">{{ unit }}</span>
+                </div>
+            </div>
+            {%- endmacro %}
+            {{ measure('p-taille', 'height_cm', 'Taille', 'cm', 'numeric', profile.height_cm) }}
+            {{ measure('p-poids', 'weight_kg', 'Poids', 'kg', 'decimal', profile.weight_kg) }}
+            {{ measure('p-fcmax', 'hr_max', 'FC max', 'bpm', 'numeric', profile.hr_max) }}
+            {{ measure('p-fcrepos', 'hr_rest', 'FC au repos', 'bpm', 'numeric', profile.hr_rest) }}
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="p-prefs">
+        <h2 class="eyebrow" id="p-prefs">Traces</h2>
+        <div class="field-grid is-wide">
+            <div class="field">
+                <label for="p-type">Type par défaut à l'import</label>
+                <select id="p-type" name="default_activity_type" class="form-select">
+                    <option value="">{{ unclassified[1] }}</option>
+                    {% for key, label in activity_types %}
+                    <option value="{{ key }}" {{ 'selected' if profile.default_activity_type == key }}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <span class="hint">Appliqué aux fichiers qui n'indiquent pas leur type. Modifiable ensuite trace par
+                    trace, depuis la carte.</span>
+            </div>
+        </div>
+    </section>
+
+    <div class="button-row">
+        <button type="submit" class="btn btn-primary" id="saveProfileButton">Enregistrer</button>
+        <button type="reset" class="btn btn-outline-secondary">Annuler</button>
+    </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/profile.js') }}"></script>
+{% endblock %}

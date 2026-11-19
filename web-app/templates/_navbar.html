@@ -1,44 +1,38 @@
-<nav class="navbar navbar-expand app-navbar">
-    <div class="container-fluid px-3">
-        <a class="navbar-brand me-4" href="{{ url_for('main.index') }}">
-            <span class="brand-mark"><i class="fas fa-route"></i></span>
-            KmlViewer
+<header class="app-navbar">
+    <a class="app-brand" href="{{ url_for('main.index') }}">
+        <svg class="brand-mark" aria-hidden="true" viewBox="0 0 30 30">
+            <rect width="30" height="30" rx="7"></rect>
+            <path d="M9 21c0-6 12-6 12-12"></path>
+            <circle cx="9" cy="21" r="2.6"></circle><circle cx="21" cy="9" r="2.6"></circle>
+        </svg>
+        KmlViewer
+    </a>
+    {% macro nav_link(page, endpoint, label) -%}
+    <a href="{{ url_for(endpoint) }}" {% if active_page == page %}aria-current="page"{% endif %}>{{ label }}</a>
+    {%- endmacro %}
+    <nav class="app-nav" aria-label="Navigation principale">
+        {{ nav_link('viewer', 'main.index', 'Carte') }}
+        {{ nav_link('dashboard', 'main.dashboard', 'Tableau de bord') }}
+        {{ nav_link('segments', 'main.segments', 'Tronçons') }}
+        {% if current_user and current_user['is_admin'] and oidc_enabled %}
+        {{ nav_link('users', 'main.users', 'Utilisateurs') }}
+        {% endif %}
+    </nav>
+    <div class="app-navbar-tools">
+        <button type="button" class="icon-btn" id="themeToggle" title="Basculer le thème clair / sombre"
+                aria-label="Basculer le thème clair / sombre"><i class="fas fa-moon" aria-hidden="true"></i></button>
+        {% if current_user %}
+        <a class="navbar-user" href="{{ url_for('main.profile') }}" title="Mon profil"
+           {% if active_page == 'profile' %}aria-current="page"{% endif %}>
+            {{- current_user['display_name'] or current_user['username'] or 'Mon profil' -}}
         </a>
-        <ul class="navbar-nav me-auto">
-            <li class="nav-item">
-                <a class="nav-link {{ 'active' if active_page == 'viewer' }}" href="{{ url_for('main.index') }}">
-                    <i class="fas fa-map"></i><span>Carte</span></a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {{ 'active' if active_page == 'dashboard' }}" href="{{ url_for('main.dashboard') }}">
-                    <i class="fas fa-chart-column"></i><span>Tableau de bord</span></a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {{ 'active' if active_page == 'segments' }}" href="{{ url_for('main.segments') }}">
-                    <i class="fas fa-stopwatch"></i><span>Tronçons</span></a>
-            </li>
-            {% if current_user and current_user['is_admin'] and oidc_enabled %}
-            <li class="nav-item">
-                <a class="nav-link {{ 'active' if active_page == 'users' }}" href="{{ url_for('main.users') }}">
-                    <i class="fas fa-users-gear"></i><span>Utilisateurs</span></a>
-            </li>
-            {% endif %}
-        </ul>
-        <div class="d-flex align-items-center gap-2">
-            <button type="button" class="icon-btn" id="themeToggle" title="Basculer le thème clair / sombre"
-                    aria-label="Basculer le thème clair / sombre"><i class="fas fa-moon"></i></button>
-            {% if current_user and oidc_enabled %}
-            {% set label = current_user['display_name'] or current_user['username'] or '?' %}
-            <span class="navbar-user">
-                <span class="avatar" aria-hidden="true">{{ label[:1] }}</span>
-                <span class="d-none d-md-inline">{{ label }}</span>
-            </span>
-            {# POST : un lien ou une image d'un site tiers ne peut pas déconnecter l'utilisateur #}
-            <form method="post" action="{{ url_for('auth.logout') }}" class="d-inline">
-                <button type="submit" class="icon-btn" title="Déconnexion" aria-label="Déconnexion">
-                    <i class="fas fa-right-from-bracket"></i></button>
-            </form>
-            {% endif %}
-        </div>
+        {% endif %}
+        {% if current_user and oidc_enabled %}
+        {# POST : un lien ou une image d'un site tiers ne peut pas déconnecter l'utilisateur #}
+        <form method="post" action="{{ url_for('auth.logout') }}" class="d-flex">
+            <button type="submit" class="icon-btn" title="Se déconnecter" aria-label="Se déconnecter">
+                <i class="fas fa-right-from-bracket" aria-hidden="true"></i></button>
+        </form>
+        {% endif %}
     </div>
-</nav>
+</header>

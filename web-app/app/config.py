@@ -6,6 +6,8 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from app.version import resolve as resolve_version
+
 DEFAULT_SECRET_KEY = 'your-secret-key-change-in-production'
 
 
@@ -96,8 +98,9 @@ class Config:
     # Fuseau utilisé pour regrouper les activités par semaine/mois/année
     APP_TIMEZONE = os.environ.get('APP_TIMEZONE') or 'Europe/Paris'
 
-    # Version de l'application, injectée au build de l'image (ARG APP_VERSION)
-    APP_VERSION = os.environ.get('APP_VERSION') or 'dev'
+    # Version de l'application : injectée au build de l'image (ARG APP_VERSION), sinon lue
+    # dans git (tag du commit courant, à défaut son empreinte courte)
+    APP_VERSION = resolve_version(os.environ.get('APP_VERSION'))
 
 
 class DevelopmentConfig(Config):

@@ -1,106 +1,129 @@
-/* Pages bibliothèque : tableau de bord, tronçons, administration, messages. */
+/* Pages bibliothèque : tableau de bord, tronçons, administration, profil, messages. */
 
 .library-page {
-    max-width: 1360px;
-    padding: 28px 24px 48px;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 32px 24px 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.library-page.is-narrow {
+    max-width: 1000px;
 }
 
 .page-header {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 22px;
+    gap: 12px 16px;
 }
 
-.page-header h1 {
-    font-size: 1.5rem;
-    font-weight: 700;
-    letter-spacing: -0.025em;
+.page-header.is-baseline {
+    align-items: baseline;
+    gap: 4px 16px;
+}
+
+.page-header h1,
+.profile-header h1 {
     margin: 0 auto 0 0;
+    font-size: 1.75rem;
+    line-height: 1.15;
+}
+
+.page-header.is-baseline h1 {
+    margin-right: 0;
 }
 
 .page-header .form-select {
     width: auto;
 }
 
-/* Tuiles de synthèse */
-.stat-tile {
-    height: 100%;
-}
-
-.stat-tile .card-body {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.stat-icon {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: var(--accent-soft);
-    color: var(--accent-text);
-    font-size: 1rem;
-}
-
-.stat-tile .stat-value {
-    font-size: 1.65rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    line-height: 1.15;
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-}
-
-.stat-tile .stat-label {
-    margin-top: 4px;
-    font-size: 0.74rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
+.page-count {
+    margin: 0;
     color: var(--text-3);
 }
 
-/* Le graphique occupe toute la hauteur de sa carte (alignée sur celle des records) */
-.chart-card .card-body {
+.panel-head {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+}
+
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* ------------------------------------------------------- Tableau de bord */
+
+/* Bandeau de synthèse : quatre cases accolées, séparées par un filet */
+.stat-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1px;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    overflow: hidden;
+    background: var(--border);
+}
+
+.stat-strip > div {
+    padding: 20px 24px;
+    background: var(--surface);
+}
+
+.stat-strip dd {
+    margin: 4px 0 0;
+    font-size: 3rem;
+}
+
+.dash-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: stretch;
+}
+
+.chart-panel {
+    flex: 2 1 520px;
+    min-width: 0;
+}
+
+.records-panel {
+    flex: 1 1 320px;
+    min-width: 0;
+    gap: 4px;
+}
+
+.records-panel > .eyebrow {
+    margin-bottom: 8px;
+}
+
+.records-panel > .hint {
+    margin-top: 12px;
 }
 
 .chart-box {
     position: relative;
     flex: 1;
-    min-height: 320px;
+    min-height: 300px;
 }
 
-/* Records */
 .record-item {
     display: flex;
-    align-items: center;
+    align-items: baseline;
+    justify-content: space-between;
     gap: 12px;
-    padding: 11px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.record-item:last-child {
-    border-bottom: 0;
-    padding-bottom: 0;
-}
-
-.record-icon {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: var(--warn-soft);
-    color: var(--warn);
-    font-size: 0.8rem;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-soft);
 }
 
 /* min-width: 0 : sans lui, un enfant flex ne rétrécit pas sous son contenu et un nom
@@ -110,15 +133,13 @@
 }
 
 .record-item .record-label {
-    font-size: 0.86rem;
-    color: var(--text-2);
+    font-weight: 500;
 }
 
 .record-item .record-source {
     display: block;
-    font-size: 0.76rem;
+    font-size: 0.8125rem;
     color: var(--text-3);
-    text-decoration: none;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -129,53 +150,32 @@
 }
 
 .record-item .record-value {
-    margin-left: auto;
-    font-weight: 700;
-    font-size: 1rem;
+    font-size: 1.625rem;
     white-space: nowrap;
-    font-variant-numeric: tabular-nums;
 }
 
-/* Tableau des activités */
+#activitiesTable {
+    min-width: 760px;
+}
+
 .activity-name {
     font-weight: 600;
     color: var(--text);
-    text-decoration: none;
 }
 
 .activity-name:hover {
     color: var(--accent-text);
 }
 
-.type-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 9px;
-    border-radius: 999px;
-    background: var(--surface-3);
-    color: var(--text-2);
-    font-size: 0.76rem;
-    font-weight: 500;
-    text-transform: capitalize;
-}
-
 .row-actions {
     display: inline-flex;
     gap: 2px;
-    opacity: 0.55;
-    transition: opacity 0.12s ease;
-}
-
-tr:hover .row-actions,
-.row-actions:focus-within {
-    opacity: 1;
 }
 
 .row-actions .icon-btn {
-    width: 30px;
-    height: 30px;
-    font-size: 0.8rem;
+    width: 36px;
+    height: 36px;
+    font-size: 0.875rem;
 }
 
 .row-actions .icon-btn.is-danger:hover {
@@ -183,98 +183,252 @@ tr:hover .row-actions,
     color: var(--bad);
 }
 
-/* Tronçons */
-.segment-map {
-    height: 500px;
-    border-radius: var(--radius-l);
-    border: 1px solid var(--border);
-    box-shadow: var(--shadow-2);
-    overflow: hidden;
-}
-
-.segment-item {
-    display: block;
-    width: 100%;
-    padding: 10px 12px;
-    margin: 0 -12px;
-    width: calc(100% + 24px);
-    border: 0;
-    border-radius: var(--radius-s);
-    background: transparent;
-    color: var(--text);
-    text-align: left;
-    transition: background-color 0.12s ease;
-}
-
-.segment-item:hover {
-    background: var(--surface-2);
-}
-
-.segment-item.active {
-    background: var(--accent-soft);
-    box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.segment-item .segment-best {
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-}
-
-.rank-badge {
-    display: inline-grid;
-    place-items: center;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: var(--surface-3);
-    color: var(--text-2);
-    font-size: 0.75rem;
-    font-weight: 700;
-}
-
-.rank-badge.is-first {
-    background: var(--warn-soft);
-    color: var(--warn);
-}
-
-.step-hint {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 9px 12px;
-    border-radius: var(--radius-s);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    font-size: 0.84rem;
-    color: var(--text-2);
-}
-
-.step-hint i {
-    color: var(--accent-text);
-}
-
-/* Messages d'authentification */
-.auth-card {
-    max-width: 420px;
-    margin: 12vh auto 0;
-    text-align: center;
-}
-
-.auth-card .brand-mark {
-    width: 48px;
-    height: 48px;
-    border-radius: 14px;
-    font-size: 1.2rem;
-    margin-bottom: 14px;
-}
-
-/* Pied d'une liste paginée : compteur et bouton « charger plus » */
 .list-more {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
+}
+
+/* ---------------------------------------------------------------- Tronçons */
+
+.segments-layout {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+.segments-side {
+    flex: 1 1 360px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.segments-main {
+    flex: 999 1 560px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* Carte et profil dans un même cadre */
+.map-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    overflow: hidden;
+    background: var(--surface);
+}
+
+/* isolation : les couches Leaflet (z-index jusqu'à 1000) ne passent pas devant la barre de navigation */
+.segment-map {
+    height: 520px;
+    isolation: isolate;
+}
+
+.map-card .strip {
+    padding: 14px 20px 12px;
+    gap: 8px;
+    border-top: 0;
+}
+
+.map-card .strip-plot + .strip-xaxis {
+    margin-left: 72px;
+}
+
+.bound {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bound-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.bound-head label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+}
+
+.bound-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--ink-text);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* Mesures de la sélection en cours */
+.readout {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin: 0;
+    padding: 16px;
+    border-radius: var(--radius-m);
+    background: var(--surface-3);
+}
+
+.readout dd {
+    margin: 2px 0 0;
+    font-size: 2.125rem;
+}
+
+.segment-item {
+    display: block;
+    width: 100%;
+    padding: 12px 0;
+    border: 0;
+    border-bottom: 1px solid var(--border-soft);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+}
+
+.segment-item:last-child {
+    border-bottom: 0;
+}
+
+.segment-item:hover strong,
+.segment-item.active strong {
+    color: var(--accent-text);
+}
+
+.segment-item .segment-best {
+    font-family: var(--font-display);
+    font-size: 1.375rem;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.rank-badge {
+    display: inline-grid;
+    place-items: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 6px;
+    border-radius: 6px;
+    background: var(--surface-3);
+    color: var(--text-2);
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.rank-badge.is-first {
+    background: var(--ink);
+    color: var(--ink-text);
+}
+
+/* ------------------------------------------------------------ Utilisateurs */
+
+.users-panel {
+    padding: 8px 24px 12px;
+}
+
+.users-table {
+    min-width: 820px;
+}
+
+.users-table > thead th {
     padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.users-table > tbody td {
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.user-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+}
+
+.user-name .chip {
+    font-size: 0.75rem;
+}
+
+/* Case à cocher dans une cible de 44 px */
+.check-target {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--control-h);
+    height: var(--control-h);
+    margin: -10px 0;
+    cursor: pointer;
+}
+
+.check-target .form-check-input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+}
+
+/* ------------------------------------------------------------------ Profil */
+
+.profile-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+
+.profile-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.profile-form .panel > div > .hint {
+    margin-top: 4px;
+}
+
+.field-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+.field-grid.is-wide {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+/* Messages d'authentification */
+.auth-card {
+    width: 100%;
+    max-width: 440px;
+    margin: 10vh auto 0;
+}
+
+@media (max-width: 640px) {
+    .library-page {
+        padding: 24px 16px 40px;
+    }
+
+    .stat-strip dd {
+        font-size: 2.5rem;
+    }
+
+    .segment-map {
+        height: 380px;
+    }
 }

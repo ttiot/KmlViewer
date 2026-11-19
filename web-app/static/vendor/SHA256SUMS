@@ -6,6 +6,12 @@ d2af8974e95271638772e9e9524db5b9a6f58d6ec2d5d781400447b4a31c681e  ./chartjs/char
 8e7e5ea1b15f62ab14dbd41768e8fbcd21cc859a4ea5da812457ee714299fb35  ./fontawesome/webfonts/fa-regular-400.woff2
 7152a6933ee3d690ec2af3d09da9d701723d16aa3410a6d80f28ff8866f3b880  ./fontawesome/webfonts/fa-solid-900.woff2
 694a17c3d9d6c05f8aac63c544615552a4b220e9a4de863d87341a6bcfc1bc8d  ./fontawesome/webfonts/fa-v4compatibility.woff2
+2d2c4912162eaa41299aaf5063ecb92a26d76071fe6d1f77742b32c833daab99  ./fonts/barlow-condensed-latin-500-normal.woff2
+0b281bf2f4179c06ba68f0a427f2341287c41eacc2ce9d534c6f5c513ac633fb  ./fonts/barlow-condensed-latin-600-normal.woff2
+7c9c80a6c32c0619d61c28f28723e68c5f8f75163e77ee5cf64c39e640e0d71e  ./fonts/barlow-latin-400-normal.woff2
+7c0597b1b0c771139c958982210f05b275993037f0f3ba20d7a9300a0741dc80  ./fonts/barlow-latin-500-normal.woff2
+2b14e8397d552f351a4396dec25ec5da1348865683100e94c4ab0faea4a9a254  ./fonts/barlow-latin-600-normal.woff2
+7c53386f55c866c1b4c9309c4bcf74eda10896aab3a1780b0af5cc4976e27a27  ./fonts/jetbrains-mono-latin-400-normal.woff2
 066daca850d8ffbef007af00b06eac0015728dee279c51f3cb6c716df7c42edf  ./leaflet/images/layers-2x.png
 1dbbe9d028e292f36fcba8f8b3a28d5e8932754fc2215b9ac69e4cdecf5107c6  ./leaflet/images/layers.png
 00179c4c1ee830d3a108412ae0d294f55776cfeb085c60129a39aa6fc4ae2528  ./leaflet/images/marker-icon-2x.png

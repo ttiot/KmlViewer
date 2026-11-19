@@ -27,7 +27,15 @@ CREATE TABLE IF NOT EXISTS {name} (
     is_active     INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     last_login    TEXT,
-    session_token TEXT NOT NULL DEFAULT ''
+    session_token TEXT NOT NULL DEFAULT '',
+    -- Profil (app/services/profile_service.py) : tout est facultatif
+    birth_date    TEXT,
+    sex           TEXT,
+    height_cm     INTEGER,
+    weight_kg     REAL,
+    hr_max        INTEGER,
+    hr_rest       INTEGER,
+    default_activity_type TEXT
 );
 """
 # Colonnes reprises telles quelles lors de la reconstruction de la table (migration 3)
@@ -155,6 +163,32 @@ def _rebuild_users(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+_PROFILE_COLUMNS = (
+    ('birth_date', 'TEXT'), ('sex', 'TEXT'), ('height_cm', 'INTEGER'), ('weight_kg', 'REAL'),
+    ('hr_max', 'INTEGER'), ('hr_rest', 'INTEGER'), ('default_activity_type', 'TEXT'),
+)
+
+
+def _add_profile_columns(conn: sqlite3.Connection) -> None:
+    for column, definition in _PROFILE_COLUMNS:
+        _add_column(conn, 'users', column, definition)
+
+
+def _normalize_activity_types(conn: sqlite3.Connection) -> None:
+    """
+    Ramène les types lus tels quels dans les fichiers (« running », « Cycling »…) aux clés du
+    catalogue. Import local : le catalogue est un module pur, sans dépendance, et db.py ne
+    doit rien importer des services au chargement.
+    """
+    from app.services.activity_types import from_raw
+    rows = conn.execute("SELECT DISTINCT activity_type FROM activities WHERE activity_type IS NOT NULL").fetchall()
+    for row in rows:
+        normalized = from_raw(row['activity_type'])
+        if normalized != row['activity_type']:
+            conn.execute("UPDATE activities SET activity_type = ? WHERE activity_type = ?",
+                         (normalized, row['activity_type']))
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
 # dernière passée. SCHEMA décrit toujours l'état final : une base neuve le reçoit directement,
 # puis chaque migration est un no-op. Règle : on ajoute en fin de liste, on ne modifie jamais
@@ -166,6 +200,10 @@ MIGRATIONS = [
     lambda conn: _add_column(conn, 'activities', 'start_time_known', 'INTEGER NOT NULL DEFAULT 1'),
     # 3 - identifiants de compte jamais réattribués, jeton de session par compte
     _rebuild_users,
+    # 4 - profil utilisateur (mesures facultatives, type par défaut à l'import)
+    _add_profile_columns,
+    # 5 - types d'activité ramenés à la liste fermée du catalogue
+    _normalize_activity_types,
 ]
 
 

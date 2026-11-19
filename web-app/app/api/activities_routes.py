@@ -2,16 +2,19 @@
 
 import logging
 
-from flask import current_app, jsonify, request
+import numpy as np
+from flask import current_app, jsonify
 
 from app.api import bp
-from app.api.payload import int_arg, json_body, json_name
+from app.api.payload import int_arg, json_body, json_name, type_filter
 from app.api.uploads import public_error, uploaded_files
 from app.api.workload import heavy_slot
 from app.auth import admin_required, current_user_id
 from app.db import get_db
 from app.errors import ApiError
-from app.services import activity_store, analysis_store, dem_service, inbox_watcher, ingest_service
+from app.services import (
+    activity_store, activity_types, analysis_store, dem_service, geo, inbox_watcher, ingest_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +35,7 @@ def list_activities():
     db, user_id = get_db(), current_user_id()
     return jsonify({
         'activities': activity_store.list_for_user(
-            db, user_id, request.args.get('type') or None,
-            int_arg('limit', 100), int_arg('offset', 0)),
+            db, user_id, type_filter(), int_arg('limit', 100), int_arg('offset', 0)),
         'types': activity_store.list_types(db, user_id),
         'dem_enabled': dem_service.is_enabled(current_app.config),
     })
@@ -80,6 +82,8 @@ def get_activity_track(activity_id):
     """
     Tracé allégé (pour choisir un tronçon sur la carte). Au-delà de max_points, un point
     sur N est renvoyé ; 'indices' donne la position de chacun dans la trace complète.
+    'distances_m' (cumulée sur la trace complète) et 'elevations' (MNT si l'altitude a été
+    corrigée, sinon GPS) alimentent le profil affiché sous la carte.
     """
     row = activity_store.get(get_db(), current_user_id(), activity_id)
     if row is None:
@@ -91,9 +95,18 @@ def get_activity_track(activity_id):
     indices = list(range(0, total, step))
     if indices and indices[-1] != total - 1:
         indices.append(total - 1)  # la trace allégée finit là où finit la vraie
+    # Rien n'est mesuré d'une trace du fichier à la suivante ('breaks'), comme dans le résumé
+    steps = geo.step_distances(pts['lat'], pts['lon'])
+    for first in pts.get('breaks') or []:
+        if 0 < first <= len(steps):
+            steps[first - 1] = 0.0
+    cumulative = np.concatenate(([0.0], np.cumsum(steps)))
+    elevations = pts.get('ele_dem') or pts['ele']
     return jsonify({'id': row['id'], 'name': row['name'], 'has_time': bool(row['has_time']),
                     'total_points': total, 'indices': indices,
-                    'coordinates': [[pts['lat'][i], pts['lon'][i]] for i in indices]})
+                    'coordinates': [[pts['lat'][i], pts['lon'][i]] for i in indices],
+                    'distances_m': [round(float(cumulative[i]), 1) for i in indices],
+                    'elevations': [elevations[i] for i in indices]})
 
 
 @bp.route('/activities/<int:activity_id>/parsed')
@@ -119,9 +132,20 @@ def get_activity_parsed(activity_id):
 
 
 @bp.route('/activities/<int:activity_id>', methods=['PATCH'])
-def rename_activity(activity_id):
-    name = json_name(json_body(), ingest_service.MAX_NAME_LENGTH, 'Nom invalide')
-    if not activity_store.rename(get_db(), current_user_id(), activity_id, name):
+def update_activity(activity_id):
+    """Renomme et/ou classe une activité. 'activity_type' : une clé du catalogue, ou null (non classé)."""
+    data = json_body()
+    values = {}
+    if 'name' in data:
+        values['name'] = json_name(data, ingest_service.MAX_NAME_LENGTH, 'Nom invalide')
+    if 'activity_type' in data:
+        activity_type = data['activity_type']
+        if activity_type is not None and (not isinstance(activity_type, str) or activity_type not in activity_types.KEYS):
+            raise ApiError("Type d'activité inconnu")
+        values['activity_type'] = activity_type
+    if not values:
+        raise ApiError('Rien à modifier')
+    if not activity_store.update_fields(get_db(), current_user_id(), activity_id, values):
         raise _not_found()
     return jsonify({'success': True})
 

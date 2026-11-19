@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from app.services import file_formats
+from app.services import activity_types, file_formats
 
 MAX_PENDING_LATE = 500  # borne la liste passée à pending_dem (nombre de variables SQL)
 
@@ -129,11 +129,9 @@ def to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 def list_for_user(db: sqlite3.Connection, user_id: int, activity_type: Optional[str] = None,
                   limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-    sql = f"SELECT {SUMMARY_COLUMNS} FROM activities WHERE user_id = ?"
-    params: list = [user_id]
-    if activity_type:
-        sql += " AND activity_type = ?"
-        params.append(activity_type)
+    clause, type_params = activity_types.sql_filter(activity_type)
+    sql = f"SELECT {SUMMARY_COLUMNS} FROM activities WHERE user_id = ?{clause}"
+    params: list = [user_id, *type_params]
     sql += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
     params += [max(1, min(int(limit), 500)), max(0, int(offset))]
     return [to_dict(r) for r in db.execute(sql, params).fetchall()]
@@ -151,9 +149,20 @@ def get(db: sqlite3.Connection, user_id: int, activity_id: int) -> Optional[sqli
                       (activity_id, user_id)).fetchone()
 
 
-def rename(db: sqlite3.Connection, user_id: int, activity_id: int, name: str) -> bool:
-    cur = db.execute("UPDATE activities SET name = ? WHERE id = ? AND user_id = ?",
-                     (name, activity_id, user_id))
+def count_for_user(db: sqlite3.Connection, user_id: int) -> int:
+    return db.execute("SELECT COUNT(*) FROM activities WHERE user_id = ?", (user_id,)).fetchone()[0]
+
+
+EDITABLE_COLUMNS = frozenset({'name', 'activity_type'})
+
+
+def update_fields(db: sqlite3.Connection, user_id: int, activity_id: int, values: Dict[str, Any]) -> bool:
+    """Modifie le nom et/ou le type. Les valeurs sont validées par l'appelant ; les colonnes, ici."""
+    if not values or not set(values) <= EDITABLE_COLUMNS:
+        raise ValueError("Colonnes non modifiables")
+    assignments = ', '.join(f"{column} = ?" for column in values)
+    cur = db.execute(f"UPDATE activities SET {assignments} WHERE id = ? AND user_id = ?",
+                     (*values.values(), activity_id, user_id))
     db.commit()
     return cur.rowcount > 0
 

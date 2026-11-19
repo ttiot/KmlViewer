@@ -14,13 +14,13 @@ def test_upload_list_dashboard(client):
     assert [r['status'] for r in response.get_json()['results']] == ['created', 'created']
 
     listing = client.get('/api/activities').get_json()
-    assert len(listing['activities']) == 2 and listing['types'] == ['running']
+    assert len(listing['activities']) == 2 and listing['types'] == ['run']
     assert 'points' not in listing['activities'][0] and 'sha256' not in listing['activities'][0]
 
     dash = client.get('/api/dashboard?period=year').get_json()
     assert dash['stats']['totals']['count'] == 2
     assert dash['stats']['totals']['distance_km'] > 5
-    assert any(s['period'] == '2025' and s['count'] == 2 for s in dash['stats']['series'])
+    assert any(s['period'] == '2025-06' and s['count'] == 2 for s in dash['stats']['series'])
     assert dash['records'][0]['label'] == 'Plus longue distance'
     assert client.get('/api/dashboard?period=decade').status_code == 400
     for period in ('week', 'month'):

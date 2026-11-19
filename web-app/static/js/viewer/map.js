@@ -5,7 +5,9 @@ const LINE_TYPES = ['polyline', 'track', 'multitrack'];
 const METERS_PER_DEGREE = 111000; // 1° ≈ 111 km : ordre de grandeur, pas une mesure
 
 function initMap() {
-    Viewer.map = L.map('map').setView([46.603354, 1.888334], 6); // centre de la France
+    // Zoom en haut à droite, au-dessus du bouton des réglages
+    Viewer.map = L.map('map', { zoomControl: false }).setView([46.603354, 1.888334], 6); // centre de la France
+    L.control.zoom({ position: 'topright' }).addTo(Viewer.map);
 
     Viewer.baseLayers = {
         osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -21,8 +23,8 @@ function initMap() {
     };
     setBaseLayer('osm');
 
-    // La carte change de largeur quand la liste des points apparaît : Leaflet doit
-    // recalculer sa taille, sinon une bande grise reste affichée.
+    // La carte change de taille avec le panneau voisin (résumé affiché, fenêtre redimensionnée) :
+    // Leaflet doit recalculer sa taille, sinon une bande grise reste affichée.
     if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(() => Viewer.map.invalidateSize()).observe(Viewer.map.getContainer());
     }
@@ -41,7 +43,7 @@ function setBaseLayer(name) {
 
 const DEFAULT_STYLES = {
     marker: { color: '#4ecdc4', fillColor: '#4ecdc4', lineColor: '#4ecdc4', width: 2 },
-    line: { color: '#2a78d6', fillColor: '#2a78d6', lineColor: '#2a78d6', width: 3 },
+    line: { color: '#c2410c', fillColor: '#c2410c', lineColor: '#c2410c', width: 3.5 },
     polygon: { color: '#28a745', fillColor: '#28a745', lineColor: '#28a745', width: 2 },
 };
 
@@ -183,7 +185,9 @@ function buildFileLayer(file) {
         let layer = null;
 
         if (LINE_TYPES.includes(feature.type) && Array.isArray(feature.coordinates) && feature.coordinates.length) {
-            layer = L.polyline(feature.coordinates, { color: style.lineColor, weight: style.width, opacity: 0.8 });
+            // Liseré blanc sous le trait : la trace reste lisible sur n'importe quel fond de carte
+            group.addLayer(L.polyline(feature.coordinates, { color: '#fff', weight: style.width + 3.5, interactive: false }));
+            layer = L.polyline(feature.coordinates, { color: style.lineColor, weight: style.width, opacity: 0.95 });
             const description = descriptionNodes(feature.description);
             layer.bindPopup(el('div', { class: 'popup-content' },
                 el('strong', {}, feature.name || 'Trace'), el('br'),

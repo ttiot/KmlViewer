@@ -7,7 +7,8 @@ const Viewer = {
     map: null,
     baseLayers: {},
     // id -> { id, name, data, layer, markers, tab, visible, activityId, edited, unsaved, … }
-    //   tab        : onglet du fichier dans la barre du visualiseur
+    //   tab        : étiquette du fichier dans la liste des fichiers ouverts
+    //   activity   : résumé de l'activité de bibliothèque (date, type), lu à la demande
     //   activityId : activité de la bibliothèque correspondante (null sinon)
     //   edited     : la trace a été modifiée dans l'éditeur depuis son chargement
     //   unsaved    : des modifications n'ont pas encore été exportées
@@ -19,8 +20,7 @@ const Viewer = {
     activeFileId: null,
     currentPointIndex: -1,
     selectionMarker: null,   // repère du point sélectionné sur la carte
-    analysis: null,          // dernière analyse de base (pour redessiner au changement de thème)
-    charts: { elevation: null, speed: null },
+    analysis: null,          // dernière analyse de base du fichier actif
     advancedHighlight: null, // surbrillance sur la carte d'un résultat de l'analyse avancée
 
     activeFile() {

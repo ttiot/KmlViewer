@@ -15,7 +15,9 @@ from typing import Any, Dict, Mapping, Optional, Set
 
 import numpy as np
 
-from app.services import activity_stats, activity_store, dem_service, file_formats, segment_service
+from app.services import (
+    activity_stats, activity_store, activity_types, dem_service, file_formats, profile_service, segment_service,
+)
 from app.services.gpx_parser import GPXParser
 from app.services.kml_parser import KMLParser
 
@@ -157,7 +159,9 @@ def _ingest(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, file
     name = (track.name or PurePath(filename).stem)[:MAX_NAME_LENGTH]
     values = {
         'name': name, 'filename': filename, 'sha256': sha256, 'source': source,
-        'activity_type': track.activity_type[:50] or None,
+        # Type du fichier ramené au catalogue ; sans type, celui que l'utilisateur a choisi par défaut
+        'activity_type': (activity_types.from_raw(track.activity_type)
+                          or profile_service.default_activity_type(db, user_id)),
         'start_time': activity_store.epoch_to_iso(start_epoch),
         'start_time_known': int(known_epoch is not None),
         'has_time': int(summary['has_time']),

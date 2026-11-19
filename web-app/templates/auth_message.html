@@ -1,14 +1,11 @@
 {% extends 'layout.html' %}
 {% block title %}{{ title }} · KmlViewer{% endblock %}
 {% block content %}
-<div class="card auth-card">
-    <div class="card-body p-4">
-        <span class="brand-mark"><i class="fas fa-route"></i></span>
-        <h1 class="h4 mb-2">{{ title }}</h1>
-        <p class="text-muted mb-3">{{ message }}</p>
-        {% if show_login %}
-        <a class="btn btn-primary" href="{{ url_for('auth.login') }}">Se connecter</a>
-        {% endif %}
-    </div>
-</div>
+<section class="panel auth-card">
+    <h1 class="h4 mb-0">{{ title }}</h1>
+    <p class="mb-0">{{ message }}</p>
+    {% if show_login %}
+    <a class="btn btn-primary align-self-start" href="{{ url_for('auth.login') }}">Se connecter</a>
+    {% endif %}
+</section>
 {% endblock %}

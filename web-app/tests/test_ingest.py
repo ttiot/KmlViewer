@@ -20,7 +20,7 @@ def test_ingest_creates_then_deduplicates(app, db, local_user_id):
     first = _ingest(db, app, local_user_id, raw)
     assert first.status == 'created'
     row = activity_store.get(db, local_user_id, first.activity_id)
-    assert row['name'] == 'Sortie test' and row['activity_type'] == 'running'
+    assert row['name'] == 'Sortie test' and row['activity_type'] == 'run'
     assert row['start_time'] == '2025-06-01T08:00:00Z' and row['elev_source'] == 'gps'
     stored = activity_store.raw_file_path(app.config['DATA_DIR'], local_user_id, row['sha256'], 'gpx')
     assert stored.read_bytes() == raw and oct(stored.stat().st_mode)[-3:] == '600'

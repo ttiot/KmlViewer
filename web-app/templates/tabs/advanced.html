@@ -1,13 +1,13 @@
-<div class="tab-pane fade" id="advanced" role="tabpanel">
+<div class="tab-pane fade show active" id="advanced" role="tabpanel" aria-labelledby="advanced-tab">
     <div class="row g-3">
         <div class="col-12">
-            <button type="button" class="btn btn-primary btn-sm me-2" id="runAdvancedBtn">
-                <i class="fas fa-play"></i> <span id="runAdvancedLabel">Lancer l'analyse avancée</span>
-            </button>
-            <button type="button" class="btn btn-outline-secondary btn-sm" id="clearAdvancedBtn">
-                <i class="fas fa-trash"></i> Effacer
-            </button>
-            <small class="text-muted ms-2" id="advancedStatus"></small>
+            <div class="button-row align-items-center">
+                <button type="button" class="btn btn-primary" id="runAdvancedBtn">
+                    <span id="runAdvancedLabel">Lancer l'analyse avancée</span>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" id="clearAdvancedBtn">Effacer</button>
+                <span class="hint" id="advancedStatus"></span>
+            </div>
         </div>
         
         <!-- Résultats des analyses avancées -->

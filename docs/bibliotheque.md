@@ -10,6 +10,9 @@
 | Tronçons | `/segments` | Un tronçon se définit en deux clics sur une trace ; il est recherché dans toutes les traces, existantes et futures. |
 | Correction d'altitude | `DEM_URL` | D+ recalculé sur un MNT (API OpenTopoData). Le D+ GPS reste conservé à côté. |
 | Utilisateurs | OIDC + `/admin/users` | Chaque activité et chaque tronçon appartient à un utilisateur et n'est visible que de lui. |
+| Types d'activité | `app/services/activity_types.py` | Liste fermée (course à pied, trail, randonnée…). Le type lu dans le fichier y est ramené ; il se modifie depuis la carte. Les meilleurs temps sur distance ne sont calculés que pour la course à pied. |
+| Profil | `/profile` | Mesures facultatives (date de naissance, taille, poids, FC) et type donné par défaut aux fichiers importés sans type. Nom et email restent ceux du fournisseur d'identité. |
+| Version | pied de page, `/api/health` | Tag git du commit, sinon empreinte courte : injectée au build de l'image (`APP_VERSION`), lue dans git hors image (`app/version.py`). |
 
 ## Organisation du code
 
@@ -20,6 +23,7 @@ web-app/app/
 ├── db.py                  schéma SQLite et connexions
 ├── security.py            en-têtes HTTP, contrôle d'origine (CSRF), reverse proxy
 ├── cli.py                 commandes d'exploitation
+├── version.py             version affichée (build de l'image, sinon git)
 ├── auth/
 │   ├── checks.py          contrôles de configuration au démarrage (mode, clé, hôtes)
 │   ├── oidc.py            client OIDC, login / callback / logout
@@ -27,12 +31,15 @@ web-app/app/
 │   └── users.py           persistance des comptes, jeton de session
 ├── api/                   une famille de routes par fichier, aucune logique métier
 │   ├── activities_routes.py · dashboard_routes.py · segments_routes.py · users_routes.py
+│   ├── profile_routes.py  profil de l'utilisateur courant (aucun identifiant dans l'URL)
 │   ├── payload.py         lecture validée des entrées (corps JSON borné, entiers, noms)
 │   ├── uploads.py         fichiers envoyés : parsing, budget de points, messages d'erreur
 │   └── workload.py        places de traitement lourd (503 quand tout est pris)
 └── services/              logique métier, sans dépendance à Flask
     ├── geo.py             distances, projection, D+ (numpy)
     ├── activity_stats.py  trace -> résumé (fonctions pures)
+    ├── activity_types.py  catalogue des types d'activité (clés stockées, libellés)
+    ├── profile_service.py profil : validation en liste blanche et persistance
     ├── activity_store.py  SQL des activités, filtré par utilisateur
     ├── ingest_service.py  pipeline d'ingestion
     ├── inbox_watcher.py   dossier surveillé
@@ -53,6 +60,8 @@ mapping de configuration, ce qui les rend testables et réutilisables hors requ�
   une migration déjà publiée.
 - **Thème** : toutes les couleurs sont des jetons définis dans `static/css/theme.css`, en clair
   et en sombre ; les autres feuilles ne référencent que des rôles (`--surface`, `--accent`…).
+  Les polices (Barlow, Barlow Condensed, JetBrains Mono) sont embarquées dans `static/vendor/fonts`.
+  Le profil le long d'une trace (carte, tronçons) est un composant commun : `static/js/profile-strip.js`.
   Le mode suit le système, avec une bascule mémorisée dans le navigateur (`static/js/theme.js`).
 
 ## Analyse avancée conservée

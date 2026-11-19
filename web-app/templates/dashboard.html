@@ -3,74 +3,76 @@
 {% block content %}
 <div class="page-header">
     <h1>Tableau de bord</h1>
-    <select id="typeFilter" class="form-select form-select-sm" aria-label="Type d'activité">
+    <label class="visually-hidden-label" for="typeFilter">Type d'activité</label>
+    <select id="typeFilter" class="form-select">
         <option value="">Tous les types</option>
+        <option value="{{ unclassified[0] }}">{{ unclassified[1] }}</option>
+        {% for key, label in activity_types %}
+        <option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
     </select>
     <div class="segmented" role="group" aria-label="Période" id="periodSwitch">
-        <button type="button" class="btn active" data-period="week">Semaine</button>
-        <button type="button" class="btn" data-period="month">Mois</button>
-        <button type="button" class="btn" data-period="year">Année</button>
+        <button type="button" class="btn" data-period="week" aria-pressed="false">Semaine</button>
+        <button type="button" class="btn" data-period="month" aria-pressed="false">Mois</button>
+        <button type="button" class="btn" data-period="year" aria-pressed="true">Année</button>
     </div>
-    <button type="button" class="btn btn-sm btn-primary" id="importButton">
-        <i class="fas fa-arrow-up-from-bracket me-1"></i>Importer</button>
+    <button type="button" class="btn btn-primary" id="importButton">Importer</button>
     <input type="file" id="importInput" accept=".gpx,.kml,.kmz" multiple hidden>
 </div>
 
-<div class="row g-3 mb-3" id="totals"></div>
-
-<div class="row g-3 mb-3">
-    <div class="col-lg-8">
-        <div class="card h-100 chart-card">
-            <div class="card-body">
-                <div class="d-flex align-items-center mb-3">
-                    <h2 class="card-title-sm me-auto" id="chartTitle">Distance par semaine</h2>
-                    <div class="segmented" role="group" aria-label="Mesure" id="metricSwitch">
-                        <button type="button" class="btn active" data-metric="distance_km">Distance</button>
-                        <button type="button" class="btn" data-metric="ascent_m">D+</button>
-                        <button type="button" class="btn" data-metric="time_s">Temps</button>
-                    </div>
-                </div>
-                <div class="chart-box"><canvas id="volumeChart"></canvas></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-lg-4">
-        <div class="card h-100">
-            <div class="card-body">
-                <h2 class="card-title-sm mb-2">Records</h2>
-                <div id="records"></div>
-            </div>
-        </div>
-    </div>
+<!-- Année affichée différente de l'année en cours (ou année en cours vide) -->
+<div class="notice" id="yearNotice" hidden>
+    <p id="yearNoticeText"></p>
+    <button type="button" class="btn btn-outline-secondary" id="yearNoticeButton"></button>
 </div>
 
-<div class="card">
-    <div class="card-body">
-        <h2 class="card-title-sm mb-2">Activités</h2>
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0" id="activitiesTable">
-                <thead>
-                    <tr>
-                        <th>Date</th><th>Nom</th><th>Type</th>
-                        <th class="text-end">Distance</th><th class="text-end">D+</th>
-                        <th class="text-end">Temps</th><th class="text-end">Vitesse moy.</th><th></th>
-                    </tr>
-                </thead>
-                <tbody id="activities"></tbody>
-            </table>
+<dl class="stat-strip" id="totals"></dl>
+
+<div class="dash-row">
+    <section class="panel chart-panel" aria-labelledby="chartTitle">
+        <div class="panel-head">
+            <h2 class="eyebrow" id="chartTitle">Distance par mois</h2>
+            <div class="segmented" role="group" aria-label="Mesure" id="metricSwitch">
+                <button type="button" class="btn" data-metric="distance_km" aria-pressed="true">Distance</button>
+                <button type="button" class="btn" data-metric="ascent_m" aria-pressed="false">D+</button>
+                <button type="button" class="btn" data-metric="time_s" aria-pressed="false">Temps</button>
+            </div>
         </div>
-        <div class="list-more" id="activitiesMore" hidden>
-            <span class="text-muted small" id="activitiesCount" aria-live="polite"></span>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="loadMoreButton" hidden>
-                Charger plus d'activités</button>
-        </div>
-        <div class="empty-state" id="activitiesEmpty" hidden>
-            <i class="fas fa-person-hiking"></i>
-            <strong>Aucune activité pour l'instant</strong>
-            <span>Dépose des GPX dans le dossier surveillé, ou utilise « Importer ».</span>
-        </div>
-    </div>
+        <div class="chart-box"><canvas id="volumeChart"></canvas></div>
+    </section>
+    <section class="panel records-panel" aria-labelledby="recordsTitle">
+        <h2 class="eyebrow" id="recordsTitle">Records</h2>
+        <div id="records"></div>
+        <p class="hint" id="bestEffortsHint" hidden>Meilleurs temps du 1 km au marathon : affichés dès
+            qu'une activité de type Course à pied existe.</p>
+    </section>
 </div>
+
+<section class="panel" aria-labelledby="activitiesTitle">
+    <h2 class="eyebrow" id="activitiesTitle">Activités</h2>
+    <div class="table-responsive">
+        <table class="table align-middle mb-0" id="activitiesTable">
+            <thead>
+                <tr>
+                    <th scope="col">Date</th><th scope="col">Nom</th><th scope="col">Type</th>
+                    <th scope="col" class="text-end">Distance</th><th scope="col" class="text-end">D+</th>
+                    <th scope="col" class="text-end">Temps</th><th scope="col" class="text-end">Vitesse moy.</th>
+                    <th scope="col"><span class="visually-hidden-label">Actions</span></th>
+                </tr>
+            </thead>
+            <tbody id="activities"></tbody>
+        </table>
+    </div>
+    <div class="list-more" id="activitiesMore" hidden>
+        <span class="hint" id="activitiesCount" aria-live="polite"></span>
+        <button type="button" class="btn btn-outline-secondary" id="loadMoreButton" hidden>
+            Charger plus d'activités</button>
+    </div>
+    <div class="empty-state" id="activitiesEmpty" hidden>
+        <strong>Aucune activité pour l'instant.</strong>
+        <span>Dépose des GPX dans le dossier surveillé, ou utilise « Importer ».</span>
+    </div>
+</section>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>

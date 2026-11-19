@@ -1,6 +1,10 @@
 services:
   kml-viewer:
-    build: ./web-app
+    build:
+      context: ./web-app
+      args:
+        # Renseignée par start.sh (tag git du commit courant, sinon empreinte courte)
+        APP_VERSION: ${APP_VERSION:-dev}
     image: kml-viewer:local
     container_name: kml-viewer-app
     ports:
