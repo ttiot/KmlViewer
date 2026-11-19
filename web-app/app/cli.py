@@ -64,8 +64,13 @@ def register_cli(app) -> None:
                 found = ', '.join(f"#{row['id']} {row['username']} <{row['email']}>" for row in matches)
                 raise click.ClickException(f"« {login} » désigne plusieurs comptes ({found}) : rien n'est modifié")
             target = matches[0]
-            db.execute("UPDATE users SET is_admin = ?, is_active = 1 WHERE id = ?",
-                       (0 if revoke else 1, target['id']))
+            if revoke:
+                # Retirer un droit ne doit rien donner d'autre : un compte désactivé le reste
+                db.execute("UPDATE users SET is_admin = 0 WHERE id = ?", (target['id'],))
+            else:
+                # Promouvoir active aussi le compte : c'est ainsi que se désigne le premier
+                # admin, dont le compte attend sinon une activation que personne ne peut donner
+                db.execute("UPDATE users SET is_admin = 1, is_active = 1 WHERE id = ?", (target['id'],))
             db.commit()
         finally:
             db.close()

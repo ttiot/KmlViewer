@@ -21,11 +21,15 @@ web-app/app/
 ├── security.py            en-têtes HTTP, contrôle d'origine (CSRF), reverse proxy
 ├── cli.py                 commandes d'exploitation
 ├── auth/
+│   ├── checks.py          contrôles de configuration au démarrage (mode, clé, hôtes)
 │   ├── oidc.py            client OIDC, login / callback / logout
-│   ├── guard.py           contrôle d'accès global (fermé par défaut)
-│   └── users.py           persistance des comptes
+│   ├── guard.py           contrôle d'accès global (fermé par défaut), session liée au compte
+│   └── users.py           persistance des comptes, jeton de session
 ├── api/                   une famille de routes par fichier, aucune logique métier
 │   ├── activities_routes.py · dashboard_routes.py · segments_routes.py · users_routes.py
+│   ├── payload.py         lecture validée des entrées (corps JSON borné, entiers, noms)
+│   ├── uploads.py         fichiers envoyés : parsing, budget de points, messages d'erreur
+│   └── workload.py        places de traitement lourd (503 quand tout est pris)
 └── services/              logique métier, sans dépendance à Flask
     ├── geo.py             distances, projection, D+ (numpy)
     ├── activity_stats.py  trace -> résumé (fonctions pures)
@@ -118,35 +122,72 @@ Deux pièges constatés sur FusionAuth 1.69 :
 Les rôles applicatifs ne figurent pas dans l'ID token : ils sont lus via `/userinfo`, puis à
 défaut dans l'access token après vérification de sa signature, de son audience et de son sujet.
 
-Puis renseigner `.env` (modèle : `.env.example`) : `SECRET_KEY`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`,
-`OIDC_CLIENT_SECRET`, `SESSION_COOKIE_SECURE=1`, `TRUST_PROXY=1`.
+Puis renseigner `.env` (modèle : `.env.example`) : `AUTH_MODE=oidc`, `SECRET_KEY`, `OIDC_ISSUER`,
+`OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `TRUSTED_HOSTS`, `TRUST_PROXY=1`.
+
+L'application refuse de démarrer, avec le motif dans les logs, plutôt que de tourner sur une
+configuration dangereuse :
+
+| Configuration | Refus |
+|---|---|
+| `AUTH_MODE=oidc` sans `OIDC_ISSUER` | l'authentification aurait disparu |
+| Pas d'`OIDC_ISSUER`, pas d'`AUTH_MODE`, mais `TRUSTED_HOSTS`, `TRUST_PROXY`, `SESSION_COOKIE_SECURE`, `OIDC_CLIENT_ID` ou `OIDC_CLIENT_SECRET` renseigné | ressemble à une production sans authentification |
+| `AUTH_MODE=local` avec `OIDC_ISSUER` | contradictoire |
+| OIDC sans `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | incomplet |
+| OIDC avec la `SECRET_KEY` par défaut ou de moins de 32 caractères | cookies falsifiables |
+| OIDC sans `TRUSTED_HOSTS` | l'en-tête `Host` du client servirait à construire l'URL de retour |
+
+Écrire `AUTH_MODE=oidc` en production : c'est ce qui transforme une variable OIDC perdue en
+arrêt franc. Sans `AUTH_MODE`, une instance lancée sans aucune variable démarre en mode local,
+limitée au nom `localhost`.
 
 Points de sécurité à connaître :
 
 - **Session** : 12 h à compter de la connexion (`SESSION_LIFETIME_HOURS`), sans prolongation
   par l'activité ; un rôle retiré côté IdP est donc relu au plus tard à cette échéance.
-- **Nom d'hôte** : sans OIDC, l'appli ne répond qu'à `localhost` / `127.0.0.1` (protection
-  contre le DNS rebinding). Pour la joindre sous un autre nom, renseigner `TRUSTED_HOSTS`.
+  La session porte un jeton propre au compte, vérifié à chaque requête : se déconnecter ou
+  être désactivé change ce jeton et ferme **toutes** les sessions du compte, sur tous les
+  appareils (un cookie copié avant ne vaut plus rien). Le cookie est marqué `Secure` d'office
+  avec l'OIDC ; `SESSION_COOKIE_SECURE=0` est une dérogation pour le développement en HTTP.
+- **Nom d'hôte** : l'appli ne répond qu'aux noms de `TRUSTED_HOSTS` (400 sinon). La liste est
+  obligatoire avec l'OIDC ; en mode local, vide signifie `localhost` / `127.0.0.1`
+  (protection contre le DNS rebinding).
 - **Reverse proxy** : `X-Forwarded-Host` n'est cru qu'avec `TRUST_PROXY_HOST=1`. Derrière
   HAProxy, qui transmet `Host` tel quel, le laisser à 0.
 - **Volumes** : 200 000 points par fichier, 50 fichiers par envoi, `USER_QUOTA_MB` (2 Go par
-  défaut) de fichiers d'origine par utilisateur. Pas de limitation de débit dans l'appli :
-  la poser sur le reverse proxy si l'instance est ouverte à des comptes peu sûrs.
+  défaut) de fichiers d'origine par utilisateur. Un envoi groupé vers le visualiseur renvoie
+  au plus l'équivalent de deux fichiers pleins : au-delà, les fichiers restants sont refusés
+  (« charge ce fichier séparément »). Les corps JSON sont limités à 2 Mo, sauf l'analyse et
+  l'export d'une trace entière (16 Mo). La simplification accepte 50 000 points par trace.
+- **Traitements lourds** : deux à la fois (parsing, analyse d'une trace entière, export,
+  simplification), tous utilisateurs confondus ; une requête qui n'obtient pas de place en
+  20 s reçoit un 503 et peut être relancée. Pas de limitation de débit dans l'appli : la
+  poser sur le reverse proxy si l'instance est ouverte à des comptes peu sûrs.
 
 Gestion des comptes :
 
 - Création à la première connexion à partir des claims `sub`, `email`, `preferred_username`, `name`.
-- Sans `OIDC_ADMIN_ROLE` : le premier compte connecté est admin et gère les autres dans `/admin/users`.
-- Avec `OIDC_ADMIN_ROLE` : le droit admin suit le claim `roles` à chaque connexion.
-- `OIDC_AUTO_ACTIVATE=0` : un nouveau compte attend l'activation par un admin.
-- Dépannage : `flask --app kml_viewer user-admin <login>` donne le rôle admin en ligne de commande.
+- Sans `OIDC_ADMIN_ROLE` : aucun compte ne devient admin en se connectant (« le premier arrivé
+  est admin » offrait l'instance à quiconque passait avant son propriétaire). Le propriétaire
+  se connecte une fois, ce qui crée son compte, puis se désigne :
+  `docker compose exec kml-viewer flask user-admin <login>`. La commande active aussi le
+  compte ; il gère ensuite les autres dans `/admin/users`.
+- Avec `OIDC_ADMIN_ROLE` : le droit admin suit le claim `roles` à chaque connexion, et un
+  compte qui porte le rôle est actif d'office.
+- Un nouveau compte attend l'activation par un admin (`OIDC_AUTO_ACTIVATE=0`, le défaut) ;
+  `OIDC_AUTO_ACTIVATE=1` rend actif tout compte de l'IdP dès sa première connexion.
+- `user-admin <login> --revoke` retire le rôle admin sans toucher à l'activation : un compte
+  désactivé le reste.
 - Un login contenant « @ » désigne un email, sinon un username (jamais l'un pour l'autre) ; s'il
   correspond à plusieurs comptes, il n'en désigne aucun : la commande et le dossier surveillé
-  refusent d'agir. Un email que l'IdP déclare non vérifié n'est pas retenu.
+  refusent d'agir. Un email n'est retenu que si l'IdP le déclare vérifié (claim
+  `email_verified` à `true`) ; sinon le compte est désigné par son username.
 - Supprimer un compte ne le bannit pas : avec l'activation automatique, la personne peut se
-  reconnecter. Pour bloquer un accès, désactiver le compte.
+  reconnecter (sous un nouvel identifiant interne : celui d'un compte supprimé n'est jamais
+  réattribué). Pour bloquer un accès, désactiver le compte.
 
-Sans `OIDC_ISSUER`, l'application tourne en mono-utilisateur local **sans authentification**.
+En mode local (`AUTH_MODE=local`, ou aucune variable), l'application tourne en mono-utilisateur
+**sans authentification** : chaque visiteur est administrateur.
 
 ## Sécurité
 
@@ -154,12 +195,16 @@ Sans `OIDC_ISSUER`, l'application tourne en mono-utilisateur local **sans authen
   (`auth/guard.py`). Un test parcourt toutes les routes pour le garantir.
 - Cloisonnement : chaque requête SQL métier filtre sur l'utilisateur courant ; l'accès à la
   ressource d'un autre répond 404.
-- Session : cookie signé `HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS, 12 h ; régénérée au login.
+- Session : cookie signé `HttpOnly`, `SameSite=Lax`, `Secure` avec l'OIDC, 12 h ; régénérée au
+  login et liée à un jeton du compte, renouvelé à la déconnexion et à la désactivation.
   Démarrage refusé si l'OIDC est actif avec la `SECRET_KEY` par défaut.
 - CSRF : les requêtes modifiantes dont l'origine n'est pas celle de l'appli sont refusées.
 - XML : parsing via `defusedxml` (XXE, bombes d'entités).
 - Fichiers : noms de stockage dérivés du SHA-256, jamais du nom fourni ; droits `0600`.
-- En-têtes : CSP, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`.
+- En-têtes : CSP (dont `form-action` : nous-mêmes, plus l'origine de l'IdP pour la
+  déconnexion), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`.
+- Erreurs : une entrée mal formée reçoit un 400/404 au message fixe ; le détail d'une
+  exception (parser, SQL) ne part que dans les logs.
 - Scripts : la CSP n'autorise que ceux servis par l'application (`script-src 'self'`). Les
   bibliothèques front sont embarquées dans `static/vendor` (aucun CDN) et aucun template ne
   contient de script ou de gestionnaire inline ; un test le vérifie. Les données issues des

@@ -13,7 +13,8 @@ def _env_list(name: str) -> list:
     return [item.strip() for item in (os.environ.get(name) or '').split(',') if item.strip()]
 
 
-def _env_bool(name: str, default: bool) -> bool:
+def _env_bool(name: str, default):
+    """Booléen d'environnement ; `default` (éventuellement None : « non renseigné ») si la variable est vide."""
     value = os.environ.get(name)
     if value is None or value == '':
         return default
@@ -28,7 +29,9 @@ class Config:
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
-    SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', False)
+    # Non renseigné (None) : vrai dès que l'OIDC est actif, faux en mode local. Le mettre à 0
+    # avec l'OIDC est une dérogation explicite, réservée au développement en HTTP.
+    SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', None)
     # Durée absolue d'une session, comptée depuis la connexion
     PERMANENT_SESSION_LIFETIME = timedelta(hours=float(os.environ.get('SESSION_LIFETIME_HOURS') or 12))
     # Nombre de reverse proxies de confiance devant l'appli (X-Forwarded-For/Proto)
@@ -60,21 +63,33 @@ class Config:
     # Activités corrigées par cycle de la tâche de fond (rattrapage d'altitude)
     DEM_BACKFILL_BATCH = int(os.environ.get('DEM_BACKFILL_BATCH') or 25)
 
-    # OIDC (FusionAuth ou autre). Sans OIDC_ISSUER : mode mono-utilisateur local.
+    # Mode d'authentification : « oidc » ou « local » (mono-utilisateur SANS authentification).
+    # Vide : déduit d'OIDC_ISSUER, et le mode local est refusé au démarrage si la configuration
+    # ressemble à une mise en production (voir app/auth/checks.py).
+    AUTH_MODE = (os.environ.get('AUTH_MODE') or '').strip().lower()
+
+    # OIDC (FusionAuth ou autre)
     OIDC_ISSUER = (os.environ.get('OIDC_ISSUER') or '').rstrip('/')
     OIDC_CLIENT_ID = os.environ.get('OIDC_CLIENT_ID') or ''
     OIDC_CLIENT_SECRET = os.environ.get('OIDC_CLIENT_SECRET') or ''
     OIDC_SCOPES = os.environ.get('OIDC_SCOPES') or 'openid email profile'
-    # Si défini, le flag admin suit ce rôle (claim "roles") à chaque connexion
+    # Si défini, le flag admin suit ce rôle (claim "roles") à chaque connexion. Sinon aucun
+    # compte ne devient admin tout seul : `flask user-admin <login>` désigne le premier.
     OIDC_ADMIN_ROLE = os.environ.get('OIDC_ADMIN_ROLE') or ''
-    # False : les nouveaux comptes attendent l'activation par un admin
-    OIDC_AUTO_ACTIVATE = _env_bool('OIDC_AUTO_ACTIVATE', True)
+    # False (défaut) : un nouveau compte attend l'activation par un admin
+    OIDC_AUTO_ACTIVATE = _env_bool('OIDC_AUTO_ACTIVATE', False)
 
     # Correction d'altitude : URL d'un dataset OpenTopoData,
     # ex. http://opentopodata:5000/v1/copernicus30 (vide = désactivé)
     DEM_URL = (os.environ.get('DEM_URL') or '').rstrip('/')
     DEM_BATCH_SIZE = int(os.environ.get('DEM_BATCH_SIZE') or 100)
     DEM_TIMEOUT = float(os.environ.get('DEM_TIMEOUT') or 15)
+    # Budget de temps d'une correction complète (toutes requêtes, pauses et reprises comprises)
+    DEM_TOTAL_TIMEOUT = float(os.environ.get('DEM_TOTAL_TIMEOUT') or 90)
+    DEM_RETRIES = int(os.environ.get('DEM_RETRIES') or 2)
+    DEM_RETRY_BACKOFF = float(os.environ.get('DEM_RETRY_BACKOFF') or 0.25)
+    # Au-delà de cette longueur sans altitude MNT, la trace est déclarée hors couverture
+    DEM_MAX_GAP_M = float(os.environ.get('DEM_MAX_GAP_M') or 1000)
     # Pause entre deux requêtes (1 s requis sur l'API publique opentopodata.org)
     DEM_REQUEST_DELAY = float(os.environ.get('DEM_REQUEST_DELAY') or 0)
 
@@ -88,13 +103,11 @@ class Config:
 class DevelopmentConfig(Config):
     """Configuration pour le développement."""
     DEBUG = True
-    FLASK_ENV = 'development'
 
 
 class ProductionConfig(Config):
     """Configuration pour la production."""
     DEBUG = False
-    FLASK_ENV = 'production'
 
 
 class TestingConfig(Config):
@@ -102,6 +115,9 @@ class TestingConfig(Config):
     TESTING = True
     INBOX_ENABLED = False
     OIDC_ISSUER = ''
+    # Les tests de parcours se connectent sans passer par l'activation d'un admin ; le défaut
+    # de production (comptes en attente) a son propre test
+    OIDC_AUTO_ACTIVATE = True
     DEM_URL = ''
 
 
@@ -109,5 +125,4 @@ config = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
     'testing': TestingConfig,
-    'default': DevelopmentConfig
 }

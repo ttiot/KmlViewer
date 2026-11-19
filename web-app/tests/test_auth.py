@@ -24,12 +24,14 @@ def test_everything_requires_login(oidc_app):
     assert '/auth/login' in client.get('/dashboard').headers['Location']
 
 
-def test_first_user_is_admin_then_not(db):
-    first = users.upsert_from_claims(db, {'sub': 'a', 'email': 'a@x.io', 'name': 'A'})
+def test_no_account_becomes_admin_by_logging_in_first(db):
+    first = users.upsert_from_claims(db, {'sub': 'a', 'email': 'a@x.io', 'email_verified': True, 'name': 'A'})
     second = users.upsert_from_claims(db, {'sub': 'b', 'preferred_username': 'bee'})
-    assert first['is_admin'] and not second['is_admin'] and second['is_active']
+    assert not first['is_admin'] and not second['is_admin'] and second['is_active']
     assert second['username'] == 'bee' and first['username'] == 'a@x.io'
     # Les claims ne peuvent pas retirer un admin géré dans l'appli
+    db.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (first['id'],))
+    db.commit()
     assert users.upsert_from_claims(db, {'sub': 'a', 'roles': []})['is_admin']
 
 
@@ -64,7 +66,7 @@ def test_callback_creates_session(oidc_app, monkeypatch):
     response = client.get('/auth/callback?code=x&state=y')
     assert response.status_code == 302 and response.headers['Location'] == '/dashboard'
     me = client.get('/api/me').get_json()
-    assert me['user']['username'] == 'jm' and me['user']['is_admin']
+    assert me['user']['username'] == 'jm' and not me['user']['is_admin']
     cookie = response.headers['Set-Cookie']
     assert 'HttpOnly' in cookie and 'SameSite=Lax' in cookie
 
@@ -80,15 +82,18 @@ def test_callback_failure_gives_no_session_and_no_detail(oidc_app, monkeypatch):
 
 
 def test_inactive_user_is_blocked(oidc_app):
-    admin, _ = login_as(oidc_app, 'admin')
+    admin, _ = login_as(oidc_app, 'admin', admin=True)
     bob, bob_id = login_as(oidc_app, 'bob')
     assert admin.patch(f'/api/users/{bob_id}', json={'is_active': False}).status_code == 200
+    # La désactivation ferme les sessions ouvertes ; une nouvelle connexion tombe sur le refus
+    assert bob.get('/api/activities').status_code == 401
+    bob, _ = login_as(oidc_app, 'bob')
     assert bob.get('/api/activities').status_code == 403
     assert bob.get('/dashboard').status_code == 403
 
 
 def test_user_admin_api(oidc_app):
-    admin, admin_id = login_as(oidc_app, 'admin')
+    admin, admin_id = login_as(oidc_app, 'admin', admin=True)
     bob, bob_id = login_as(oidc_app, 'bob')
     assert bob.get('/api/users').status_code == 403
     assert bob.patch(f'/api/users/{bob_id}', json={'is_admin': True}).status_code == 403

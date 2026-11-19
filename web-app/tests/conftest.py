@@ -74,16 +74,24 @@ def oidc_app(tmp_path):
         yield app
 
 
-def login_as(app, sub, **claims):
-    """Crée (ou retrouve) un utilisateur et renvoie un client porteur de sa session."""
+def login_as(app, sub, admin=False, **claims):
+    """
+    Crée (ou retrouve) un utilisateur et renvoie un client porteur de sa session.
+    admin=True : lui donne le rôle admin, comme le ferait `flask user-admin`.
+    """
     from app.auth import users
     conn = connect(app.config['DB_PATH'])
     try:
         user = users.upsert_from_claims(conn, {'sub': sub, 'preferred_username': sub, **claims})
+        if admin:
+            conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
+            conn.commit()
+        token = users.session_token(conn, user['id'])
     finally:
         conn.close()
     client = app.test_client()
     with client.session_transaction() as session:
         session['user_id'] = user['id']
+        session['token'] = token
         session['login_at'] = int(time.time())
     return client, user['id']

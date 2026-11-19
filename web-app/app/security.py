@@ -1,21 +1,29 @@
-"""Durcissement HTTP : reverse proxy, en-têtes de sécurité, protection CSRF."""
+"""Durcissement HTTP : reverse proxy, en-têtes de sécurité, protection CSRF, bornes d'URL."""
 
 import logging
 from urllib.parse import urlsplit
 
-from flask import jsonify, request
+from flask import request
+from werkzeug.exceptions import SecurityError
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.routing import IntegerConverter
+
+from app.errors import json_error
 
 logger = logging.getLogger(__name__)
 
 UNSAFE_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 LOCAL_HOSTS = ('localhost', '127.0.0.1', '[::1]')
+# Plus grand entier qu'une colonne SQLite sait stocker
+SQLITE_MAX_INT = 2 ** 63 - 1
 
 # Scripts : uniquement ceux servis par l'application (bibliothèques embarquées dans
 # static/vendor, aucun gestionnaire inline). Un contenu injecté ne peut donc rien exécuter.
 # Styles : 'unsafe-inline' reste nécessaire pour les attributs style des templates.
 # Images : https: pour les tuiles des fonds de carte.
-CONTENT_SECURITY_POLICY = "; ".join([
+# form-action n'hérite pas de default-src : sans lui, un formulaire injecté pourrait poster
+# vers un site tiers.
+CSP_DIRECTIVES = (
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
@@ -25,7 +33,43 @@ CONTENT_SECURITY_POLICY = "; ".join([
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",
-])
+)
+
+
+class SqliteIntConverter(IntegerConverter):
+    """
+    Remplace le convertisseur `int` des routes : un identifiant hors des bornes d'un entier
+    SQLite ne correspond à aucune route (404) au lieu de faire échouer la requête SQL (500).
+    """
+
+    def __init__(self, url_map, *args, **kwargs):
+        super().__init__(url_map, *args, **kwargs)
+        if self.max is None:
+            self.max = SQLITE_MAX_INT
+
+
+def content_security_policy(oidc_issuer: str = '') -> str:
+    """
+    Politique de l'application. Avec l'OIDC, le formulaire de déconnexion est redirigé vers
+    l'IdP (end_session) : Chrome applique form-action aux redirections, son origine est donc
+    autorisée en plus de la nôtre.
+    """
+    form_targets = ["'self'"]
+    issuer = urlsplit(oidc_issuer or '')
+    if issuer.scheme and issuer.netloc:
+        form_targets.append(f"{issuer.scheme}://{issuer.netloc}")
+    return "; ".join([*CSP_DIRECTIVES, "form-action " + " ".join(form_targets)])
+
+
+def _reject_untrusted_host():
+    """
+    Un en-tête Host hors de TRUSTED_HOSTS est refusé (400) avant tout autre traitement. Flask
+    ne lève ce refus qu'au moment du routage, après les before_request : le contrôle d'accès
+    tournerait d'abord, sans pouvoir construire la moindre URL (redirection vers le login).
+    """
+    if isinstance(request.routing_exception, SecurityError):
+        logger.warning("Requête refusée : en-tête Host %r hors de TRUSTED_HOSTS", request.headers.get('Host'))
+        raise request.routing_exception
 
 
 def _check_same_origin():
@@ -40,26 +84,12 @@ def _check_same_origin():
         if urlsplit(origin).netloc != request.host:
             # %r : le chemin est décodé (%0a -> saut de ligne), il ne doit pas forger de ligne de log
             logger.warning("Requête %s %r refusée : origine %r", request.method, request.path, origin)
-            return jsonify({'success': False, 'error': 'Origine de la requête refusée'}), 403
+            return json_error('Origine de la requête refusée', 403)
     elif request.headers.get('Sec-Fetch-Site') in {'cross-site', 'same-site'}:
         logger.warning("Requête %s %r refusée : Sec-Fetch-Site=%r", request.method, request.path,
                        request.headers.get('Sec-Fetch-Site'))
-        return jsonify({'success': False, 'error': 'Origine de la requête refusée'}), 403
+        return json_error('Origine de la requête refusée', 403)
     return None
-
-
-def _set_security_headers(response):
-    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
-    response.headers.setdefault('X-Frame-Options', 'DENY')
-    # L'origine seule part vers les tiers : les serveurs de tuiles OSM refusent (403) les
-    # requêtes sans Referer, et aucun chemin ni paramètre de l'appli ne fuit.
-    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
-    response.headers.setdefault('Content-Security-Policy', CONTENT_SECURITY_POLICY)
-    if request.is_secure:
-        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
-    if request.path.startswith(('/api/', '/auth/')):
-        response.headers.setdefault('Cache-Control', 'no-store')
-    return response
 
 
 def init_security(app) -> None:
@@ -68,13 +98,34 @@ def init_security(app) -> None:
         x_host = hops if app.config.get('TRUST_PROXY_HOST') else 0
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=hops, x_host=x_host)
 
+    # À poser avant l'enregistrement des blueprints : toutes les routes <int:…> en héritent
+    app.url_map.converters['int'] = SqliteIntConverter
+
     # Sans authentification, l'en-tête Host est la seule barrière contre le DNS rebinding :
     # un site tiers qui se résout vers 127.0.0.1 deviendrait « même origine » que l'appli.
+    # Avec l'OIDC, la liste est exigée au démarrage (app/auth/checks.py).
     hosts = list(app.config.get('TRUSTED_HOSTS') or [])
     if not hosts and not app.config.get('OIDC_ISSUER'):
         hosts = list(LOCAL_HOSTS)
     app.config['TRUSTED_HOSTS'] = hosts or None
     if hosts:
         logger.info("Noms d'hôte acceptés : %s", ', '.join(hosts))
+
+    policy = content_security_policy(app.config.get('OIDC_ISSUER') or '')
+
+    def set_security_headers(response):
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        # L'origine seule part vers les tiers : les serveurs de tuiles OSM refusent (403) les
+        # requêtes sans Referer, et aucun chemin ni paramètre de l'appli ne fuit.
+        response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        response.headers.setdefault('Content-Security-Policy', policy)
+        if request.is_secure:
+            response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
+        if request.path.startswith(('/api/', '/auth/')):
+            response.headers.setdefault('Cache-Control', 'no-store')
+        return response
+
+    app.before_request(_reject_untrusted_host)
     app.before_request(_check_same_origin)
-    app.after_request(_set_security_headers)
+    app.after_request(set_security_headers)

@@ -11,18 +11,29 @@ from flask import current_app, g
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    id           INTEGER PRIMARY KEY,
-    sub          TEXT NOT NULL UNIQUE,
-    email        TEXT,
-    username     TEXT,
-    display_name TEXT,
-    is_admin     INTEGER NOT NULL DEFAULT 0,
-    is_active    INTEGER NOT NULL DEFAULT 1,
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    last_login   TEXT
+# AUTOINCREMENT : l'identifiant d'un compte supprimé n'est jamais réattribué. Sans lui, SQLite
+# redonne au compte créé ensuite l'id du dernier supprimé, et tout ce qui désigne encore
+# l'ancien compte (cookie de session, dossier de fichiers) désignerait le nouveau.
+# session_token : jeton que doit présenter une session pour être acceptée (auth/guard.py) ;
+# le changer ferme d'un coup toutes les sessions du compte.
+_USERS_TABLE = """
+CREATE TABLE IF NOT EXISTS {name} (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    sub           TEXT NOT NULL UNIQUE,
+    email         TEXT,
+    username      TEXT,
+    display_name  TEXT,
+    is_admin      INTEGER NOT NULL DEFAULT 0,
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    last_login    TEXT,
+    session_token TEXT NOT NULL DEFAULT ''
 );
+"""
+# Colonnes reprises telles quelles lors de la reconstruction de la table (migration 3)
+_USERS_LEGACY_COLUMNS = "id, sub, email, username, display_name, is_admin, is_active, created_at, last_login"
+
+SCHEMA = _USERS_TABLE.format(name='users') + """
 
 CREATE TABLE IF NOT EXISTS activities (
     id            INTEGER PRIMARY KEY,
@@ -112,6 +123,38 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: s
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def _rebuild_users(conn: sqlite3.Connection) -> None:
+    """
+    Recrée la table users avec AUTOINCREMENT et session_token (SQLite ne sait pas modifier une
+    clé primaire en place). Les lignes gardent leur id, donc les activités et tronçons restent
+    rattachés. Les clés étrangères sont suspendues le temps de l'échange, sans quoi supprimer
+    l'ancienne table emporterait par cascade les données de tous les comptes ; elles sont
+    revérifiées avant de valider.
+    """
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone()
+    if row is None or 'AUTOINCREMENT' in row['sql'].upper():
+        return
+    conn.commit()  # PRAGMA foreign_keys est sans effet dans une transaction ouverte
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DROP TABLE IF EXISTS users_new")
+        conn.execute(_USERS_TABLE.format(name='users_new'))
+        conn.execute(f"INSERT INTO users_new ({_USERS_LEGACY_COLUMNS}) SELECT {_USERS_LEGACY_COLUMNS} FROM users")
+        conn.execute("DROP TABLE users")
+        conn.execute("ALTER TABLE users_new RENAME TO users")
+        orphans = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if orphans:
+            raise sqlite3.IntegrityError(f"{len(orphans)} référence(s) orpheline(s) après reconstruction de users")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("Reconstruction de la table users annulée, base inchangée")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
 # dernière passée. SCHEMA décrit toujours l'état final : une base neuve le reçoit directement,
 # puis chaque migration est un no-op. Règle : on ajoute en fin de liste, on ne modifie jamais
@@ -121,6 +164,8 @@ MIGRATIONS = [
     lambda conn: _add_column(conn, 'activities', 'dem_status', 'TEXT'),
     # 2 - distingue une vraie date de début d'une date d'import (fichier sans horodatage)
     lambda conn: _add_column(conn, 'activities', 'start_time_known', 'INTEGER NOT NULL DEFAULT 1'),
+    # 3 - identifiants de compte jamais réattribués, jeton de session par compte
+    _rebuild_users,
 ]
 
 

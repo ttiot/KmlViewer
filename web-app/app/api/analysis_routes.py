@@ -5,47 +5,65 @@ Les erreurs inattendues remontent au gestionnaire global (app.errors) : elles so
 journalisées et le client reçoit un message générique.
 """
 
+import logging
 import math
 
-from flask import jsonify, request
+from flask import jsonify
 
 from app.errors import ApiError
-from app.services import file_formats
 from app.services.advanced_analysis import STOP_MIN_DURATION_S, STOP_SPEED_KMH
 from app.services.timing_tools import track_time
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
 
 from . import bp
 from .payload import json_body, json_list
-from .routes import parse_upload
+from .uploads import parse_upload, uploaded_file
+from .workload import heavy_slot
+
+logger = logging.getLogger(__name__)
+
+TRACE_REFUSED = 'Trace trop volumineuse ou données invalides'
+
+
+def _trace_refused(exc: ValueError) -> ApiError:
+    """Refus d'un service d'analyse : le motif part dans les logs, le client reçoit un message fixe."""
+    logger.info("Analyse refusée : %s", exc)
+    return ApiError(TRACE_REFUSED)
 
 
 @bp.route('/analysis/trajectory', methods=['POST'])
 @track_time
 def analyze_trajectory():
-    """Analyse complète d'une trajectoire à partir de ses features."""
-    features = json_list(json_body(), 'features', 'Features')
-    return jsonify({'success': True, 'analysis': TrajectoryAnalyzer.analyze_trajectory(features)})
+    """
+    Analyse complète d'une trajectoire à partir de ses features. 'points' (optionnel) porte
+    les points de mesure à part : le client n'a alors pas à renvoyer chaque marqueur dans
+    'features', ce qui garde le corps de la requête petit pour une longue trace.
+    """
+    with heavy_slot():
+        data = json_body(large=True)
+        features = json_list(data, 'features', 'Features')
+        points = data.get('points')
+        if points is not None and not isinstance(points, list):
+            raise ApiError('Points invalides')
+        try:
+            analysis = TrajectoryAnalyzer.analyze_trajectory(features, points)
+        except ValueError as exc:  # trace trop volumineuse
+            raise _trace_refused(exc) from exc
+        return jsonify({'success': True, 'analysis': analysis})
 
 
 @bp.route('/analysis/upload-and-analyze', methods=['POST'])
 @track_time
 def upload_and_analyze():
     """Parse un fichier et l'analyse en une seule requête."""
-    file = request.files.get('file')
-    if file is None or not file.filename:
-        raise ApiError('Aucun fichier fourni')
-    try:
-        kml_data = parse_upload(file, request.form.get('display_mode', 'double'))
-    except file_formats.FileFormatError as exc:
-        raise ApiError(str(exc)) from exc
-    if not kml_data.get('success'):
-        return jsonify(kml_data), 400
-    return jsonify({
-        'success': True,
-        'kml_data': kml_data,
-        'analysis': TrajectoryAnalyzer.analyze_trajectory(kml_data['features']),
-    })
+    file = uploaded_file('Aucun fichier fourni')
+    with heavy_slot():
+        kml_data = parse_upload(file)
+        try:
+            analysis = TrajectoryAnalyzer.analyze_trajectory(kml_data['features'])
+        except ValueError as exc:
+            raise _trace_refused(exc) from exc
+        return jsonify({'success': True, 'kml_data': kml_data, 'analysis': analysis})
 
 
 @bp.route('/analysis/elevation-profile', methods=['POST'])
@@ -70,7 +88,12 @@ def get_speed_analysis():
 def calculate_distance():
     """Distance totale d'une liste de [lat, lon, alt]."""
     coordinates = json_list(json_body(), 'coordinates', 'Points', 2)
-    total = TrajectoryAnalyzer.calculate_total_distance(coordinates)
+    try:
+        total = TrajectoryAnalyzer.calculate_total_distance(coordinates)
+    except (TypeError, ValueError, IndexError) as exc:  # points non numériques ou incomplets
+        raise ApiError('Coordonnées invalides') from exc
+    if not math.isfinite(total):
+        raise ApiError('Coordonnées invalides')
     return jsonify({'success': True, 'distance': {
         'total_distance_m': round(total, 2), 'total_distance_km': round(total / 1000, 2)}})
 
@@ -79,16 +102,17 @@ def calculate_distance():
 @track_time
 def get_advanced_analysis():
     """Analyse avancée : arrêts, segments, zones de vitesse, terrain."""
-    data = json_body()
-    features = data.get('features') or []
-    points = data.get('points') or []
-    if not isinstance(features, list) or not isinstance(points, list):
-        raise ApiError('Features et points doivent être des listes')
-    try:
-        analysis = TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)
-    except ValueError as exc:  # trace trop volumineuse
-        raise ApiError(str(exc)) from exc
-    return jsonify({'success': True, 'analysis': analysis})
+    with heavy_slot():
+        data = json_body(large=True)
+        features = data.get('features') or []
+        points = data.get('points') or []
+        if not isinstance(features, list) or not isinstance(points, list):
+            raise ApiError('Features et points doivent être des listes')
+        try:
+            analysis = TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)
+        except ValueError as exc:  # trace trop volumineuse
+            raise _trace_refused(exc) from exc
+        return jsonify({'success': True, 'analysis': analysis})
 
 
 @bp.route('/analysis/stops', methods=['POST'])

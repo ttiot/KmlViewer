@@ -122,7 +122,8 @@ def test_log_lines_cannot_be_forged_through_the_path(client, caplog):
 # --- Identité des comptes --------------------------------------------------------------
 
 def test_login_matches_email_or_username_never_both(db):
-    victim = users.upsert_from_claims(db, {'sub': 'v', 'email': 'boss@corp.io', 'preferred_username': 'boss'})
+    victim = users.upsert_from_claims(db, {'sub': 'v', 'email': 'boss@corp.io', 'email_verified': True,
+                                            'preferred_username': 'boss'})
     users.upsert_from_claims(db, {'sub': 'x', 'email': 'x@evil.io', 'preferred_username': 'boss@corp.io'})
     assert users.find_by_login(db, 'boss@corp.io')['id'] == victim['id']
     assert users.find_by_login(db, 'BOSS')['id'] == victim['id']
@@ -175,9 +176,11 @@ def test_files_with_too_many_points_are_refused(client, monkeypatch):
         archive.writestr('doc.kml', _kml(51))
     results = _post_files(client, '/api/multi-upload', (buffer.getvalue(), 'bombe.kmz'),
                           (make_gpx(line(51)), 'long.gpx'), (_kml(30, 30), 'deux.kml'),
-                          (_kml(50), 'ok.kml'), (make_gpx(line(50)), 'ok.gpx')).get_json()['files']
-    assert [r['success'] for r in results] == [False, False, False, True, True]
+                          (_kml(50), 'ok.kml')).get_json()['files']
+    assert [r['success'] for r in results] == [False, False, False, True]
     assert all('trop volumineux' in r['error'] for r in results[:3])
+    # Un fichier au plafond passe ; le budget d'une requête vaut un fichier plein, donc à part
+    assert _post_files(client, '/api/multi-upload', (make_gpx(line(50)), 'ok.gpx')).get_json()['files'][0]['success']
     imported = _post_files(client, '/api/activities', (make_gpx(line(51)), 'long.gpx')).get_json()['results'][0]
     assert imported['status'] == 'error' and 'trop volumineux' in imported['message']
 

@@ -2,9 +2,11 @@
 Routes API du visualiseur : chargement de fichiers, exemples, santé.
 """
 
-from flask import current_app, jsonify, request
+from flask import current_app, jsonify
 
 from app.api import bp
+from app.api.uploads import parse_upload, parse_uploads, public_error, uploaded_file, uploaded_files
+from app.api.workload import heavy_slot
 from app.auth import admin_required
 from app.errors import ApiError
 from app.services import file_formats, timing_tools
@@ -12,48 +14,23 @@ from app.services.cache_service import parse_gpx_cached, parse_kml_cached
 from app.services.file_service import FileService
 from app.services.timing_tools import track_time
 
-MAX_FILES_PER_UPLOAD = 50
-
-
-def parse_upload(file, display_mode: str = 'double') -> dict:
-    """Parse un fichier envoyé (GPX, KML ou KMZ). Lève FileFormatError si le fichier est refusé."""
-    content, fmt = file_formats.decode(file.read(), file.filename)
-    return parse_gpx_cached(content) if fmt == 'gpx' else parse_kml_cached(content, display_mode)
-
 
 @bp.route('/upload', methods=['POST'])
 @track_time
 def upload_file():
     """Parse un fichier et renvoie ses données pour le visualiseur."""
-    file = request.files.get('file')
-    if file is None or not file.filename:
-        raise ApiError('Aucun fichier sélectionné')
-    try:
-        result = parse_upload(file, request.form.get('display_mode', 'double'))
-    except file_formats.FileFormatError as exc:
-        raise ApiError(str(exc)) from exc
-    return jsonify(result), 200 if result.get('success') else 400
+    file = uploaded_file('Aucun fichier sélectionné')
+    with heavy_slot():
+        return jsonify(parse_upload(file))
 
 
 @bp.route('/multi-upload', methods=['POST'])
 @track_time
 def multi_upload():
     """Parse plusieurs fichiers en une requête ; un fichier refusé n'empêche pas les autres."""
-    files = [f for f in request.files.getlist('files') if f and f.filename]
-    if not files:
-        raise ApiError('Aucun fichier fourni')
-    if len(files) > MAX_FILES_PER_UPLOAD:
-        raise ApiError(f'{MAX_FILES_PER_UPLOAD} fichiers maximum par envoi')
-    display_mode = request.form.get('display_mode', 'double')
-    results = []
-    for file in files:
-        try:
-            # Copie superficielle : le résultat sort d'un cache partagé, on n'y écrit pas
-            result = {**parse_upload(file, display_mode), 'filename': file.filename}
-        except file_formats.FileFormatError as exc:
-            result = {'filename': file.filename, 'success': False, 'error': str(exc)}
-        results.append(result)
-    return jsonify({'files': results})
+    files = uploaded_files()
+    with heavy_slot():
+        return jsonify({'files': parse_uploads(files)})
 
 
 @bp.route('/sample-files')
@@ -72,9 +49,11 @@ def load_sample_file(filename):
         raise ApiError('Fichier non trouvé ou type invalide', 404) from exc
     except file_formats.FileFormatError as exc:
         raise ApiError(str(exc)) from exc
-    if fmt == 'gpx':
-        return jsonify(parse_gpx_cached(content))
-    return jsonify(parse_kml_cached(content, request.args.get('display_mode', 'double')))
+    with heavy_slot():
+        parsed = parse_gpx_cached(content) if fmt == 'gpx' else parse_kml_cached(content)
+        if not parsed.get('success'):
+            raise ApiError(public_error(parsed.get('error'), filename))
+        return jsonify(parsed)
 
 
 @bp.route('/health')

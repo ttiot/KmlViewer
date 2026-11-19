@@ -9,6 +9,7 @@ import pytest
 
 from app.services import file_formats
 from app.services.kml_editor import KMLEditor
+from app.services.trajectory_analyzer import TrajectoryAnalyzer
 from tests.conftest import line, login_as, make_gpx
 
 KML = """<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>
@@ -85,6 +86,55 @@ def test_analysis_trajectory_and_advanced(client):
     assert advanced.status_code == 200 and advanced.get_json()['success']
 
 
+def _measure_point(point):
+    """Point réduit aux champs lus par l'analyse, tel que l'envoie le visualiseur (payload.js)."""
+    return {'type': 'marker', 'coordinates': point['coordinates'], 'altitude': point['altitude'],
+            'visibility': point['visibility'], 'parsed_info': {'speed_kmh': point['parsed_info']['speed_kmh']},
+            'time_info': {'timestamp': point['time_info'].get('timestamp')}}
+
+
+@pytest.mark.parametrize('with_time', [True, False])
+def test_long_trace_is_analysed_and_exported_with_a_compact_body(client, app, with_time):
+    """
+    Une trace de 40 000 points : renvoyer tous ses marqueurs dépasse la taille de requête
+    acceptée. Le visualiseur n'envoie que les traces (et, sans horodatage sur les traces,
+    des points réduits) : le résultat doit être celui du fichier complet.
+    """
+    gpx = make_gpx(line(40_000, dlat=0.00003, ele=lambda i: 500 + (i % 400) * 0.5), step_s=1, with_time=with_time)
+    parsed = _upload(client, gpx.encode(), 'longue.gpx').get_json()
+    features, points = parsed['features'], parsed['points']
+    assert parsed['success'] and len(points) == 40_000
+    limit = app.config['MAX_CONTENT_LENGTH']
+
+    full = client.post('/api/analysis/advanced', json={'features': features, 'points': points})
+    assert full.status_code == 413  # le corps complet ne passe pas : c'est le défaut corrigé
+
+    lines = [f for f in features if f['type'] != 'marker']
+    body = {'features': lines, 'points': [] if with_time else [_measure_point(p) for p in points]}
+    assert len(client.application.json.dumps(body)) < limit / 2
+
+    expected_basic = TrajectoryAnalyzer.analyze_trajectory(features)
+    expected_advanced = TrajectoryAnalyzer.advanced_trajectory_analysis(features, points)
+    basic = client.post('/api/analysis/trajectory', json=body)
+    advanced = client.post('/api/analysis/advanced', json=body)
+    assert basic.status_code == 200 and advanced.status_code == 200
+    assert basic.get_json()['analysis'] == client.application.json.loads(client.application.json.dumps(expected_basic))
+    assert advanced.get_json()['analysis'] == client.application.json.loads(
+        client.application.json.dumps(expected_advanced))
+    assert basic.get_json()['analysis']['basic_stats']['has_time_data'] is with_time
+
+    # Export : les points de trace masqués ne sont jamais écrits, inutile de les envoyer
+    for fmt in ('gpx', 'csv', 'geojson', 'kml'):
+        compact = client.post(f'/api/export/{fmt}', json={'features': lines})
+        assert compact.status_code == 200
+        assert compact.data == client.post(f'/api/export/{fmt}', json={'features': features}).data
+
+
+def test_trajectory_points_must_be_a_list(client):
+    response = client.post('/api/analysis/trajectory', json={'features': [], 'points': 'abc'})
+    assert response.status_code == 400
+
+
 @pytest.mark.parametrize('path, body', [
     ('/api/analysis/trajectory', {}),
     ('/api/analysis/trajectory', {'features': 'abc'}),
@@ -149,7 +199,7 @@ def test_exports(client):
 # ------------------------------------------------------------- Erreurs, accès
 
 def test_unexpected_error_is_logged_not_leaked(client, monkeypatch, caplog):
-    def boom(_features):
+    def boom(*_args):
         raise RuntimeError('secret interne')
     monkeypatch.setattr('app.api.analysis_routes.TrajectoryAnalyzer.analyze_trajectory', boom)
     response = client.post('/api/analysis/trajectory', json={'features': []})
@@ -166,7 +216,7 @@ def test_api_http_errors_are_json(client):
 
 
 def test_stats_requires_admin(oidc_app):
-    admin, _ = login_as(oidc_app, 'alice')  # premier compte : administrateur
+    admin, _ = login_as(oidc_app, 'alice', admin=True)
     member, _ = login_as(oidc_app, 'bob')
     assert admin.get('/api/stats').status_code == 200
     assert member.get('/api/stats').status_code == 403

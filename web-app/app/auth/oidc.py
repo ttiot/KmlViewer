@@ -1,44 +1,32 @@
 """Client OIDC (authorization code + PKCE) et routes de connexion."""
 
 import logging
+import sqlite3
 import time
 from urllib.parse import urlencode
 
 from authlib.integrations.flask_client import OAuth
 from joserfc import jwt
 from joserfc.jwk import KeySet
-from flask import current_app, redirect, render_template, request, session, url_for
+from flask import current_app, g, redirect, render_template, request, session, url_for
 
 from app.auth import bp, users
 from app.auth.guard import oidc_enabled, safe_next
-from app.config import DEFAULT_SECRET_KEY
 from app.db import get_db
 
 logger = logging.getLogger(__name__)
 
 oauth = OAuth()
-MIN_SECRET_KEY_LENGTH = 32
+# Authlib range chaque demande de connexion en cours dans la session, sous cette clé + state
+STATE_PREFIX = '_state_oidc_'
+# Connexions entamées conservées en parallèle (plusieurs onglets) ; au-delà, les plus anciennes sautent
+MAX_PENDING_LOGINS = 3
 
 
 def init_oidc(app) -> None:
+    """Enregistre le client OIDC. La configuration a déjà été validée (auth/checks.py)."""
     if not app.config.get('OIDC_ISSUER'):
-        logger.warning("OIDC non configuré : mode mono-utilisateur local SANS authentification")
         return
-
-    missing = [k for k in ('OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET') if not app.config.get(k)]
-    if missing:
-        raise RuntimeError(f"OIDC activé mais configuration incomplète : {', '.join(missing)}")
-    if app.config['SECRET_KEY'] == DEFAULT_SECRET_KEY and not app.config.get('TESTING'):
-        raise RuntimeError(
-            "OIDC activé avec la SECRET_KEY par défaut : les cookies de session seraient "
-            "falsifiables. Définis SECRET_KEY (ex. `openssl rand -hex 32`).")
-    if len(app.config['SECRET_KEY']) < MIN_SECRET_KEY_LENGTH and not app.config.get('TESTING'):
-        raise RuntimeError(
-            f"SECRET_KEY trop courte (moins de {MIN_SECRET_KEY_LENGTH} caractères) : "
-            "génère-la avec `openssl rand -hex 32`.")
-    if not app.config.get('SESSION_COOKIE_SECURE'):
-        logger.warning("OIDC activé sans SESSION_COOKIE_SECURE : le cookie de session peut partir "
-                       "en clair. À réserver au développement local.")
 
     oauth.init_app(app)
     oauth.register(
@@ -110,10 +98,32 @@ def _jwks_has_keys() -> bool:
         return True
 
 
+def _purge_pending_logins() -> None:
+    """
+    Retire de la session les connexions entamées périmées ou trop nombreuses. Authlib ne les
+    nettoie qu'après une connexion réussie : chaque tentative abandonnée restait dans le
+    cookie, qui finissait par dépasser la taille acceptée par le navigateur (4 ko) et
+    bloquait toute nouvelle connexion.
+    """
+    now = time.time()
+    pending = []
+    for key in [k for k in session if k.startswith(STATE_PREFIX)]:
+        entry = session[key]
+        expires = entry.get('exp') if isinstance(entry, dict) else None
+        if not isinstance(expires, (int, float)) or expires < now:
+            session.pop(key)
+        else:
+            pending.append((expires, key))
+    # La demande en cours va s'ajouter : on garde les plus récentes, moins une
+    for _expires, key in sorted(pending)[:max(0, len(pending) - (MAX_PENDING_LOGINS - 1))]:
+        session.pop(key)
+
+
 @bp.route('/auth/login')
 def login():
     if not oidc_enabled():
         return redirect(url_for('main.index'))
+    _purge_pending_logins()
     session['next'] = safe_next(request.args.get('next', ''))
     return oauth.oidc.authorize_redirect(url_for('auth.callback', _external=True))
 
@@ -128,6 +138,7 @@ def callback():
             get_db(), _fetch_claims(token),
             admin_role=current_app.config['OIDC_ADMIN_ROLE'],
             auto_activate=current_app.config['OIDC_AUTO_ACTIVATE'])
+        token_value = users.session_token(get_db(), user['id'])
     except Exception:  # noqa: BLE001 - toute erreur OIDC => échec de login propre
         # Détail dans les logs uniquement : rien d'exploitable renvoyé au navigateur
         logger.exception("Échec de l'authentification OIDC")
@@ -140,6 +151,7 @@ def callback():
     next_url = session.pop('next', None)
     session.clear()  # nouvelle session après login (anti-fixation)
     session['user_id'] = user['id']
+    session['token'] = token_value
     session['login_at'] = int(time.time())
     session.permanent = True
     return redirect(safe_next(next_url or ''))
@@ -147,7 +159,15 @@ def callback():
 
 @bp.route('/auth/logout', methods=['POST'])
 def logout():
+    user = g.get('user')
     session.clear()
+    if user is not None:
+        # Le cookie est signé mais vit chez le client : le vider ne suffit pas, une copie faite
+        # avant resterait valable. Changer le jeton du compte ferme toutes ses sessions.
+        try:
+            users.revoke_sessions(get_db(), user['id'])
+        except sqlite3.Error:
+            logger.exception("Déconnexion : jeton de session du compte %s non renouvelé", user['id'])
     if not oidc_enabled():
         return redirect(url_for('main.index'))
     try:

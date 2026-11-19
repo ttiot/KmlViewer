@@ -4,10 +4,11 @@ import time
 from functools import wraps
 from urllib.parse import urlsplit
 
-from flask import abort, current_app, g, jsonify, redirect, render_template, request, session, url_for
+from flask import abort, current_app, g, redirect, render_template, request, session, url_for
 
 from app.auth import users
 from app.db import get_db
+from app.errors import is_api_request, json_error
 
 # Seuls ces endpoints sont accessibles sans session. Toute nouvelle route est protégée d'office.
 PUBLIC_ENDPOINTS = frozenset({
@@ -16,11 +17,8 @@ PUBLIC_ENDPOINTS = frozenset({
 
 
 def oidc_enabled() -> bool:
+    """Mode validé au démarrage (auth/checks.py) : un OIDC_ISSUER défini équivaut au mode OIDC."""
     return bool(current_app.config.get('OIDC_ISSUER'))
-
-
-def wants_json() -> bool:
-    return request.path.startswith('/api/')
 
 
 def safe_next(target: str) -> str:
@@ -51,6 +49,27 @@ def session_expired() -> bool:
     return not 0 <= time.time() - login_at <= lifetime
 
 
+def _session_user():
+    """
+    Compte désigné par la session, ou None. La session est vidée si elle ne tient plus :
+    expirée, compte supprimé, ou jeton qui n'est plus celui du compte. L'identifiant seul ne
+    suffit pas : le jeton change à la déconnexion et à la désactivation, ce qui rend inutilisable
+    un cookie copié avant, et un cookie ne peut pas désigner un autre compte que celui pour
+    lequel il a été émis.
+    """
+    user_id = session.get('user_id')
+    if user_id is None:
+        return None
+    user = None
+    if isinstance(user_id, int) and not session_expired():
+        user = users.get_by_id(get_db(), user_id)
+        if user is not None and not users.owns_session(user, session.get('token')):
+            user = None
+    if user is None:
+        session.clear()
+    return user
+
+
 def _load_user_and_guard():
     g.user = None
     if request.endpoint == 'static':
@@ -60,26 +79,19 @@ def _load_user_and_guard():
         g.user = users.get_or_create_local_user(get_db())
         return None
 
-    user_id = session.get('user_id')
-    if user_id is not None:
-        if session_expired():
-            session.clear()
-        else:
-            g.user = users.get_by_id(get_db(), user_id)
-            if g.user is None:
-                session.clear()
+    g.user = _session_user()
 
     if request.endpoint in PUBLIC_ENDPOINTS:
         return None
 
     if g.user is None:
-        if wants_json():
-            return jsonify({'success': False, 'error': 'Authentification requise'}), 401
+        if is_api_request():
+            return json_error('Authentification requise', 401)
         return redirect(url_for('auth.login', next=request.full_path.rstrip('?')))
 
     if not g.user['is_active']:
-        if wants_json():
-            return jsonify({'success': False, 'error': 'Compte désactivé'}), 403
+        if is_api_request():
+            return json_error('Compte désactivé', 403)
         return render_template(
             'auth_message.html', title='Compte en attente',
             message="Ton compte n'est pas (ou plus) activé. Contacte un administrateur."), 403
@@ -102,8 +114,8 @@ def admin_required(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
         if g.get('user') is None or not g.user['is_admin']:
-            if wants_json():
-                return jsonify({'success': False, 'error': 'Droits administrateur requis'}), 403
+            if is_api_request():
+                return json_error('Droits administrateur requis', 403)
             abort(403)
         return view(*args, **kwargs)
     return wrapper

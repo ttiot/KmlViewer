@@ -20,6 +20,11 @@ def create_app(config_class=Config, overrides=None):
     app.config.from_object(config_class)
     app.config.update(overrides or {})
 
+    # Avant tout câblage : une configuration dangereuse (prod sans authentification, clé de
+    # session par défaut…) arrête le démarrage ici
+    from app.auth.checks import check_startup_config
+    check_startup_config(app)
+
     # Chemins dérivés du dossier de données
     data_dir = Path(app.config['DATA_DIR']).resolve()
     data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -64,7 +69,11 @@ def _start_inbox_watcher(app) -> None:
         return
     if os.environ.get('FLASK_RUN_FROM_CLI') == 'true' and os.environ.get('KMLVIEWER_WATCHER') != '1':
         return
-    if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+    # Serveur de développement : le parent du reloader ne sert aucune requête, seul son
+    # enfant lance la tâche. gunicorn n'a pas de reloader : même en configuration de
+    # développement, son worker doit la lancer (il annonce sa présence par SERVER_SOFTWARE).
+    under_gunicorn = os.environ.get('SERVER_SOFTWARE', '').startswith('gunicorn')
+    if app.debug and not under_gunicorn and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         return
     from app.services.inbox_watcher import InboxWatcher
     InboxWatcher(app.config).start()

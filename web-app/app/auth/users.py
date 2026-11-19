@@ -1,6 +1,8 @@
 """Persistance des comptes utilisateurs."""
 
+import hmac
 import logging
+import secrets
 import sqlite3
 from typing import List, Mapping, Optional
 
@@ -12,6 +14,38 @@ _NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
 
 def get_by_id(db: sqlite3.Connection, user_id: int) -> Optional[sqlite3.Row]:
     return db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def _new_session_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def session_token(db: sqlite3.Connection, user_id: int) -> str:
+    """
+    Jeton à déposer dans la session à la connexion. Il n'est pas renouvelé à chaque login
+    (se connecter sur un second appareil ne déconnecte pas le premier), seulement créé s'il
+    manque : compte antérieur à la colonne.
+    """
+    row = db.execute("SELECT session_token FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise LookupError("Compte introuvable")
+    if row['session_token']:
+        return row['session_token']
+    return revoke_sessions(db, user_id)
+
+
+def revoke_sessions(db: sqlite3.Connection, user_id: int) -> str:
+    """Change le jeton du compte : toutes ses sessions ouvertes sont refusées dès la requête suivante."""
+    token = _new_session_token()
+    db.execute("UPDATE users SET session_token = ? WHERE id = ?", (token, user_id))
+    db.commit()
+    return token
+
+
+def owns_session(user: sqlite3.Row, token) -> bool:
+    """Vrai si le jeton porté par la session est celui du compte (jamais vrai pour un jeton vide)."""
+    expected = user['session_token']
+    return bool(expected) and isinstance(token, str) and hmac.compare_digest(expected, token)
 
 
 def get_or_create_local_user(db: sqlite3.Connection) -> sqlite3.Row:
@@ -61,14 +95,18 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
     Crée ou met à jour un compte à partir des claims OIDC.
 
     - admin_role défini : le flag admin suit ce rôle (claim "roles") à chaque connexion.
-    - sinon : le tout premier compte OIDC devient admin, les suivants sont gérés dans l'appli.
+    - sinon : aucun compte ne devient admin par sa seule connexion. Le droit se donne dans
+      l'appli (/admin/users) ou, pour le tout premier, par `flask user-admin <login>` :
+      « le premier arrivé est admin » offrait l'instance à quiconque se connectait avant
+      son propriétaire.
     """
     sub = claims.get('sub')
     if not sub or sub == LOCAL_SUB:
         raise ValueError("Claim 'sub' absent ou invalide dans le jeton OIDC")
 
-    # Un email explicitement non vérifié n'identifie personne : il n'est pas retenu
-    email = claims.get('email') if claims.get('email_verified') is not False else None
+    # Seul un email que l'IdP déclare vérifié identifie quelqu'un (il désigne un dossier de
+    # l'inbox) : sans claim email_verified à true, il n'est pas retenu
+    email = claims.get('email') if claims.get('email_verified') is True else None
     username = claims.get('preferred_username') or email or sub
     display_name = (claims.get('name')
                     or ' '.join(filter(None, [claims.get('given_name'), claims.get('family_name')]))
@@ -77,13 +115,12 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
 
     row = db.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
     if row is None:
-        nb_users = db.execute("SELECT COUNT(*) FROM users WHERE sub != ?", (LOCAL_SUB,)).fetchone()[0]
-        is_admin = role_admin if role_admin is not None else nb_users == 0
+        is_admin = bool(role_admin)
         is_active = auto_activate or is_admin
         db.execute(
-            "INSERT INTO users (sub, email, username, display_name, is_admin, is_active, last_login) "
-            f"VALUES (?, ?, ?, ?, ?, ?, {_NOW})",
-            (sub, email, username, display_name, int(is_admin), int(is_active)))
+            "INSERT INTO users (sub, email, username, display_name, is_admin, is_active, last_login, session_token) "
+            f"VALUES (?, ?, ?, ?, ?, ?, {_NOW}, ?)",
+            (sub, email, username, display_name, int(is_admin), int(is_active), _new_session_token()))
         logger.info("Nouvel utilisateur OIDC : %s (admin=%s, actif=%s)", username, is_admin, is_active)
     else:
         is_admin = role_admin if role_admin is not None else bool(row['is_admin'])
