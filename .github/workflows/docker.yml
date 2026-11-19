@@ -197,8 +197,11 @@ jobs:
           exit-code: '1'
           format: table
 
+      # Pas de publication pour une pull request ni pour une branche poussée par Dependabot :
+      # ses exécutions n'ont pas accès aux secrets des registres, la connexion échouerait.
+      # L'image y est quand même construite, essayée et scannée.
       - name: Connexion à GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           registry: ${{ env.REGISTRY_GHCR }}
@@ -206,14 +209,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Connexion à Docker Hub
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Tags et labels de l'image
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
         with:
@@ -231,7 +234,7 @@ jobs:
             type=sha,prefix=sha-,enable=${{ github.event_name != 'schedule' }}
 
       - name: Build multi-architecture et publication
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
@@ -253,7 +256,7 @@ jobs:
           sbom: true
 
       - name: Résumé
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.push.outputs.digest }}

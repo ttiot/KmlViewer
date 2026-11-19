@@ -1,6 +1,6 @@
 # Lint : erreurs réelles et pièges courants, sans imposer de reformatage.
 line-length = 130
-target-version = "py313"
+target-version = "py315"
 extend-exclude = ["static"]
 
 [lint]
