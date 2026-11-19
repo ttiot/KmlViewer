@@ -1,7 +1,8 @@
 name: CI et publication de l'image
 
 # Chaîne : tests -> build -> essai de l'image -> scan de vulnérabilités -> publication.
-# Rien n'est publié tant que l'image n'a pas démarré et passé le scan.
+# Rien n'est publié tant que l'image n'a pas démarré et passé le scan (amd64 et arm64) ;
+# la publication réutilise les couches des images scannées.
 #
 # Tags produits :
 #   tag git vX.Y.Z      -> X.Y.Z, X.Y, X, latest
@@ -66,7 +67,7 @@ jobs:
         run: python -m pytest --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=75
 
       - name: Vulnérabilités connues des dépendances
-        run: pipx run pip-audit --require-hashes --disable-pip -r web-app/requirements.txt
+        run: pipx run pip-audit==2.10.1 --require-hashes --disable-pip -r web-app/requirements.txt
 
   image:
     name: Build, essai, scan et publication de l'image
@@ -125,8 +126,24 @@ jobs:
           tags: kml-viewer:candidate
           build-args: |
             APP_VERSION=${{ steps.version.outputs.app_version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+
+      # L'image arm64 est publiée elle aussi : elle passe le même scan avant
+      - name: Build de l'image candidate (arm64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: ./web-app
+          file: ./web-app/Dockerfile
+          platforms: linux/arm64
+          load: true
+          pull: true
+          no-cache: ${{ steps.version.outputs.no_cache }}
+          tags: kml-viewer:candidate-arm64
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.app_version }}
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
 
       - name: Essai de l'image dans les conditions de production
         env:
@@ -160,10 +177,20 @@ jobs:
           test "$(docker exec candidate id -u)" = "10001"
           docker rm -f candidate
 
-      - name: Scan de vulnérabilités (Trivy)
+      - name: Scan de vulnérabilités (Trivy, amd64)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: kml-viewer:candidate
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+      - name: Scan de vulnérabilités (Trivy, arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: kml-viewer:candidate-arm64
           scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -212,14 +239,16 @@ jobs:
           file: ./web-app/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          pull: true
-          no-cache: ${{ steps.version.outputs.no_cache }}
+          # Ni pull ni no-cache : les couches publiées sont celles des images candidates,
+          # qui viennent d'être essayées et scannées (elles-mêmes reconstruites sans cache
+          # pour une release). Reconstruire ici publierait une image que personne n'a vue.
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ steps.version.outputs.app_version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
           provenance: mode=max
           sbom: true
 
