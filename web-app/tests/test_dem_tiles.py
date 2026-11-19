@@ -13,7 +13,8 @@ def test_bbox_parsing_and_validation():
 def test_tiles_cover_bbox_including_negative_coordinates():
     assert dem_tiles.tiles_for_bbox((45.1, 5.6, 45.3, 5.8)) == [(45, 5)]
     assert dem_tiles.tiles_for_bbox((44.9, -0.5, 45.1, 0.5)) == [(44, -1), (44, 0), (45, -1), (45, 0)]
-    assert len(dem_tiles.tiles_for_bbox((41, -6, 52, 10))) == 12 * 17
+    # Une borne haute entière ne réclame pas la rangée (ni la colonne) suivante
+    assert len(dem_tiles.tiles_for_bbox((41, -6, 52, 10))) == 11 * 16
 
 
 def test_names_match_opentopodata_and_copernicus_conventions():
@@ -22,6 +23,9 @@ def test_names_match_opentopodata_and_copernicus_conventions():
     assert dem_tiles.tile_url(45, 5).endswith(
         '/Copernicus_DSM_COG_10_N45_00_E005_00_DEM/Copernicus_DSM_COG_10_N45_00_E005_00_DEM.tif')
     assert 'S34_00_W071_00' in dem_tiles.tile_url(-34, -71)
+
+
+TIFF = b'II*\x00' + b'\x00' * 2048  # signature et taille minimale d'une dalle
 
 
 class _Response:
@@ -44,19 +48,20 @@ class _Response:
 
 
 def test_fetch_downloads_skips_and_handles_sea(tmp_path, monkeypatch):
-    responses = {'N45E005': _Response(200, b'tif-data'), 'N45E006': _Response(404)}
+    responses = {'N45E005': _Response(200, TIFF), 'N45E006': _Response(404)}
     monkeypatch.setattr(dem_tiles.requests.Session, 'get',
                         lambda self, url, **kw: next(r for n, r in responses.items()
                                                      if n[:3] + '_00_' + n[3:] in url))
     bbox = (45.2, 5.5, 45.4, 6.5)
     assert dict(dem_tiles.fetch(bbox, tmp_path)) == {'N45E005': 'downloaded', 'N45E006': 'absent'}
-    assert (tmp_path / 'N45E005.tif').read_bytes() == b'tif-data'
+    assert (tmp_path / 'N45E005.tif').read_bytes() == TIFF
     responses['N45E005'] = _Response(500)  # dalle déjà là : plus aucun appel réseau pour elle
     assert dict(dem_tiles.fetch(bbox, tmp_path))['N45E005'] == 'present'
     assert not list(tmp_path.glob('*.part'))
 
 
 def test_truncated_download_leaves_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(dem_tiles, 'RETRY_BACKOFF_S', 0)
     monkeypatch.setattr(dem_tiles.requests.Session, 'get',
                         lambda self, url, **kw: _Response(200, b'court', length=9999))
     with pytest.raises(IOError):

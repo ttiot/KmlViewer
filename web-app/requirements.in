@@ -15,5 +15,4 @@ defusedxml
 tzdata
 
 # Calcul géospatial
-geopy
 numpy
