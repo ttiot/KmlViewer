@@ -75,10 +75,19 @@ def test_non_object_json_body_is_a_400(client, method, path, body):
     assert response.status_code == 400 and _error(response)
 
 
-def test_deeply_nested_json_is_a_400(client):
+def test_deeply_nested_json_never_crashes(client):
+    """
+    100 000 niveaux d'imbrication. Jusqu'à Python 3.14 le décodeur JSON lève RecursionError
+    (réponse 400) ; à partir de 3.15 il décode le corps, qui ne contient alors aucune trace
+    (réponse 200, analyse vide). Dans les deux cas : jamais de 500.
+    """
     body = '{"features":' + '[' * 100_000 + ']' * 100_000 + '}'
     response = client.post('/api/analysis/trajectory', data=body, content_type='application/json')
-    assert response.status_code == 400 and _error(response)
+    if response.status_code == 400:
+        assert _error(response)
+    else:
+        assert response.status_code == 200
+        assert response.get_json()['analysis']['distance']['total_distance_m'] == 0
 
 
 @pytest.mark.parametrize('method, path', [
