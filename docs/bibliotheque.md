@@ -38,7 +38,9 @@ web-app/app/
 │   ├── users.py           persistance des comptes, jeton de session
 │   ├── tokens.py · token_routes.py · invitations.py   jetons à usage unique, invitations
 │   ├── passwords.py       politique et hachage argon2id (liste : auth/wordlists/)
-│   └── factors.py         seconds facteurs (lecture et remise à zéro ; TOTP, WebAuthn non livrés)
+│   ├── password_login.py · mfa_login.py · pending.py   connexion par mot de passe en deux étapes, état de connexion côté serveur
+│   ├── second_factor.py · factors.py   TOTP et codes de secours ; lecture et remise à zéro des facteurs (WebAuthn non livré)
+│   └── ...                (api/admin_routes.py, account_routes.py, mfa_routes.py, invitations_routes.py : API d'administration et de profil)
 ├── api/                   une famille de routes par fichier, aucune logique métier
 │   ├── activities_routes.py · dashboard_routes.py · segments_routes.py · users_routes.py
 │   ├── profile_routes.py  profil de l'utilisateur courant (aucun identifiant dans l'URL)
@@ -197,8 +199,8 @@ Points de sécurité à connaître :
   20 s reçoit un 503 et peut être relancée. Pas de limitation de débit sur les routes du visualiseur
   ni de la bibliothèque : la poser sur le reverse proxy si l'instance est ouverte à des comptes peu sûrs.
   Un limiteur en mémoire (`ratelimit.py`) protège seulement les routes publiques de jeton
-  (`/auth/token*`, 10 essais par 15 min et par IP par défaut) et, quand elles seront livrées, celles de la
-  connexion par mot de passe.
+  (`/auth/token*`, 10 essais par 15 min et par IP par défaut), la connexion par mot de passe, le mot de passe oublié
+  et le second facteur (seuils réglables dans l'administration, voir le README).
 
 Gestion des comptes :
 

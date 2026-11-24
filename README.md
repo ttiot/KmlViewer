@@ -100,10 +100,10 @@ Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 | `inbox-scan` | Passe une fois sur le dossier surveillé. Refuse de tourner (« Un autre processus… ») tant que l'application servie détient le verrou du dossier, c'est-à-dire en temps normal : le dossier est déjà scruté toutes les `INBOX_SCAN_INTERVAL` secondes |
 | `recompute-stats` | Recalcule distance, durées et records des activités déjà stockées (à lancer après une mise à jour qui corrige ces calculs) |
 | `user-admin <login>` | Donne le rôle admin et active le compte (c'est ainsi que se désigne le premier admin) ; `--revoke` retire le rôle. Sur un compte à mot de passe sans second facteur : refusé |
-| `user-invite --admin <e-mail>` | Amorçage d'une instance à comptes à mot de passe : émet un jeton de 24 h à usage unique et affiche son lien (**consommation non livrée**, voir [Non livré](#non-livré)). `--account <login>` reprend l'amorçage d'un compte existant sans facteur |
-| `user-mfa-reset <login>` | Perte de tous les seconds facteurs d'un compte à mot de passe : retire ses facteurs, ferme ses sessions, le rétrograde s'il est admin |
+| `user-invite --admin <e-mail>` | Amorçage du premier admin d'une instance à comptes à mot de passe : émet un jeton de 24 h à usage unique et affiche son lien une seule fois ([pas à pas](#amorçage-du-premier-administrateur)). `--account <login>` reprend l'amorçage d'un compte existant sans facteur. L'option `--reset-password` (mot de passe perdu) **n'existe pas** : voir [Non livré](#non-livré) |
+| `user-mfa-reset <login>` | Perte de tous les seconds facteurs d'un compte à mot de passe : retire ses facteurs (TOTP, codes de secours), ferme ses sessions, le rétrograde s'il est admin. Annonce « dernier administrateur » **avant** d'agir si c'est le cas |
 | `secrets-rotate` | Rechiffre les secrets avec la première clé de `SECRETS_KEY` (rotation) |
-| `secrets-reset [--yes]` | Clé `SECRETS_KEY` perdue : efface tous les secrets chiffrés (à ressaisir) |
+| `secrets-reset [--yes]` | Clé `SECRETS_KEY` perdue : efface tous les secrets chiffrés (à ressaisir) et les secrets TOTP ; rétrograde les admins qui n'ont plus aucun facteur |
 | `settings-list` | Valeur effective et source (base / env / défaut) de chaque réglage administrable |
 | `settings-reset <clé>` ou `--all` | Supprime la valeur en base d'un réglage (ou de tous) : retour à la valeur d'env, sinon au défaut |
 
@@ -183,8 +183,10 @@ sous le nom `localhost`. Une configuration incomplète ou dangereuse **empêche 
 motif dans les logs (`./logs.sh`).
 
 > **Statut** : tout ce qui est décrit ici est livré, sauf ce qui porte la mention **non livré**
-> (liste récapitulative : [Non livré](#non-livré)). Le mode `password` démarre mais **personne ne peut
-> encore s'y connecter** ; ne pas l'utiliser.
+> (liste récapitulative : [Non livré](#non-livré)). Les trois modes d'authentification sont utilisables ;
+> le mode `password` (comptes sur invitation, second facteur TOTP) se met en route avec
+> [l'amorçage du premier administrateur](#amorçage-du-premier-administrateur). Reste non livré : WebAuthn,
+> le constructeur de traces (le moteur de routage, lui, se déploie) et `user-invite --reset-password`.
 
 ### Déploiement géré par Ansible
 
@@ -206,15 +208,18 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
   CLI, et aucun autre utilisateur système ne doit exister sur le serveur. Les commandes se lancent à la main
   (`docker compose exec` ou `run`), pas depuis un playbook.
 - **Premier admin** : en mode `oidc`, `OIDC_ADMIN_ROLE` ou première connexion SSO puis `flask user-admin <login>` ;
-  en mode `password` (non utilisable aujourd'hui), `flask user-invite --admin <adresse>`.
+  en mode `password`, `flask user-invite --admin <adresse>` puis le lien, le mot de passe et l'enrôlement TOTP
+  ([pas à pas](#amorçage-du-premier-administrateur)).
+- **Moteur de routage** : service `graphhopper` du compose (profil `routing`), graphe mis à jour chaque mois par
+  `routing/update.sh` (timer ou cron posé par Ansible) : [Service de routage](#service-de-routage-graphhopper).
 
 ### Modes d'authentification (`AUTH_MODE`)
 
 | Mode | Connexion | Exigences au démarrage | État |
 |------|-----------|------------------------|------|
-| `oidc` | SSO obligatoire (FusionAuth ou autre IdP OIDC) ; en plus, comptes à mot de passe **sur invitation** si `SECRETS_KEY` **et** `PUBLIC_URL` sont renseignées | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS` | livré (SSO) ; comptes à mot de passe : invitations livrées, connexion **non livrée** |
+| `oidc` | SSO obligatoire (FusionAuth ou autre IdP OIDC) ; en plus, comptes à mot de passe **sur invitation** si `SECRETS_KEY` **et** `PUBLIC_URL` sont renseignées | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS` | livré (SSO) ; comptes à mot de passe sur invitation (connexion avec second facteur TOTP) livrés |
 | `local` | aucune : mono-utilisateur, **chaque visiteur est administrateur** | aucune ; interdit avec `OIDC_ISSUER` | livré |
-| `password` | identifiant + mot de passe + second facteur, sans SSO | `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS`, `SECRETS_KEY`, `PUBLIC_URL` couverte par `TRUSTED_HOSTS` ; interdit avec `OIDC_ISSUER` | démarrage livré, **connexion non livrée** (T10, T11, T12) |
+| `password` | identifiant + mot de passe + second facteur, sans SSO | `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS`, `SECRETS_KEY`, `PUBLIC_URL` couverte par `TRUSTED_HOSTS` ; interdit avec `OIDC_ISSUER` | livré (second facteur : TOTP ; WebAuthn **non livré**) |
 
 - `AUTH_MODE=password` s'écrit toujours explicitement : un `AUTH_MODE` vide ne le choisit jamais
   (il donne `oidc` si `OIDC_ISSUER` est renseigné, sinon `local`).
@@ -234,6 +239,87 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
 
 Détails OIDC (FusionAuth), session, comptes SSO : [docs/bibliotheque.md](docs/bibliotheque.md).
 
+### Amorçage du premier administrateur
+
+Mode `password`, instance neuve (aucun compte). Vérifié de bout en bout sur le code livré.
+
+1. **Déployer** avec `AUTH_MODE=password`, `SECRET_KEY`, `SECRETS_KEY`, `TRUSTED_HOSTS` et `PUBLIC_URL` (son hôte dans
+   `TRUSTED_HOSTS`) ; ne pas définir `OIDC_ISSUER`. Contrôler le démarrage (`docker compose logs kml-viewer`) : le
+   `WARNING` « SMTP non configuré : les adresses e-mail ne peuvent pas être validées » est normal tant que l'e-mail n'est
+   pas réglé.
+2. **Émettre le jeton**, sur le serveur, dans le dossier du projet :
+
+   ```bash
+   docker compose exec kml-viewer flask user-invite --admin admin@exemple.fr
+   ```
+
+   ```text
+   Jeton d'amorçage créé (valable jusqu'au 2026-11-25T18:33:04Z, usage unique). Lien, montré une seule fois :
+   https://traces.example.com/auth/token#t=…
+   E-mail non configuré : transmets ce lien à la seule personne concernée.
+   ```
+
+   Le lien est valable 24 h et n'est affiché **qu'une fois** ; avec le SMTP configuré il part aussi par e-mail. Le jeton
+   n'est jamais écrit dans les journaux (il est dans le fragment `#t=`, que le navigateur n'envoie pas au serveur).
+3. **Ouvrir le lien** dans un navigateur : la page efface le jeton de la barre d'adresse et propose un identifiant et un
+   mot de passe. Identifiant : 3 à 64 caractères `[a-z0-9._-]`, sans `@` ; `cli`, `system`, `local`, `admin` et `root`
+   sont réservés (« Identifiant indisponible »). Mot de passe : 12 à 128 caractères, ni l'identifiant, ni l'adresse, ni
+   un mot de passe courant (« Ce mot de passe est trop courant. »). Un refus ne consomme pas le jeton.
+4. **Enrôler le second facteur**, dans le **même navigateur** (aucune session n'est ouverte à ce stade) : la page affiche un QR code
+   et le secret en texte. Scanner le QR code avec une application TOTP (SHA-1, 6 chiffres, 30 s), saisir le code à
+   6 chiffres. Le compte **devient admin à cet instant, pas avant**. La page affiche alors **10 codes de secours**,
+   **une seule fois** (`XXXX-XXXX-XXXX-XXXX`) : les noter. La fenêtre d'enrôlement dure 15 minutes.
+5. **Se connecter** : on est renvoyé à la page de connexion ; identifiant, mot de passe, puis le code TOTP (ou un code de
+   secours, à usage unique). Le lien **Administration** apparaît dans la barre de navigation.
+6. **Suite** : [espace d'administration](#espace-dadministration-admin) : régler le SMTP (onglet « Clés API et e-mail »),
+   valider l'adresse de l'admin (elle reste « en attente » tant que le mail de validation n'a pas été reçu et le lien
+   ouvert **connecté**), inviter les autres comptes, garder **un second admin**.
+
+Enrôlement abandonné (fenêtre expirée, navigateur fermé) : le compte existe, **non admin et sans facteur**, et le lien est
+consommé. Reprise : `flask user-invite --admin --account <identifiant>` ; le nouveau lien demande le **mot de passe actuel**
+du compte (conservé tel quel), puis mène au même enrôlement. Relancer sans `--account` créerait un second compte. Mot de
+passe perdu : `--reset-password` **n'existe pas** (non livré).
+
+### Second facteur (TOTP) et codes de secours
+
+- **TOTP** (RFC 6238, SHA-1, 6 chiffres, 30 s, tolérance ±1 pas ; **l'horloge du serveur doit être juste**, voir
+  [docs/exploitation.md](docs/exploitation.md#horloge-et-ntp)). Secret de 160 bits chiffré au repos par `SECRETS_KEY`. Un code
+  n'est accepté qu'**une fois** (le même code rejoué est refusé : « Code invalide ou déjà utilisé »). 5 essais par connexion
+  puis il faut ressaisir le mot de passe, et un limiteur par compte (`ratelimit.mfa_per_account`).
+- **Obligatoire pour les admins** (un admin à mot de passe a toujours un facteur actif, à tout instant) ; pour tous si
+  `auth.mfa_policy` vaut `all` : un compte sans facteur est alors conduit à l'enrôlement à sa prochaine connexion.
+- **Codes de secours** : 10 codes de 16 caractères, générés avec le **premier** facteur, montrés une seule fois, à usage
+  unique ; leur utilisation envoie une notification par e-mail. Ils servent à se connecter quand le TOTP est perdu mais ne
+  comptent **pas** comme un facteur. Régénérables depuis le profil (les anciens sont invalidés).
+- **Profil › Second facteur** : ajouter ou retirer le TOTP, régénérer les codes ; toute modification exige le mot de passe
+  actuel, et retirer le TOTP ou régénérer les codes exige en plus un code TOTP valide. Le dernier facteur d'un admin ne
+  peut pas être retiré. Changer son mot de passe ou son adresse e-mail (profil) exige le mot de passe actuel **et** un code
+  du second facteur ; l'ancienne adresse est notifiée.
+- **Facteur perdu** : un autre admin réinitialise le compte (onglet Utilisateurs, ou `POST /api/admin/users/<id>/mfa-reset` ;
+  jamais sur soi-même), ou l'opérateur du serveur lance `flask user-mfa-reset <identifiant>`. Les facteurs sont retirés, les
+  sessions fermées, le compte est **rétrogradé** s'il était admin ; le titulaire se reconnecte avec son mot de passe, enrôle
+  un nouveau facteur, puis un admin le repromeut (`flask user-admin` est **refusé** tant que le compte n'a pas de
+  facteur). Procédure : [docs/exploitation.md](docs/exploitation.md#perte-dun-second-facteur).
+- **WebAuthn** (clés de sécurité) : **non livré** (T12) ; seul le TOTP est proposé.
+
+### Espace d'administration (`/admin`)
+
+Réservé aux admins (un admin à mot de passe doit avoir un second facteur actif, vérifié à chaque requête) ; lien
+« Administration » de la barre de navigation. `/admin/users` mène à la même page. Onglets :
+
+| Onglet | Contenu |
+|--------|---------|
+| Utilisateurs | liste (méthode d'authentification, adresse validée ou en attente, facteurs, crédits d'invitation) ; activer, promouvoir (refusé sans facteur pour un compte à mot de passe), crédits, lien de réinitialisation du mot de passe, réinitialisation du second facteur, fermeture des sessions, renvoi de la validation d'adresse, conversion SSO → mot de passe (mode `password` seulement), suppression ; le dernier admin actif ne peut être ni désactivé, ni rétrogradé, ni supprimé |
+| Invitations | toutes les invitations ; créer (note libre réservée aux admins), révoquer ; lien affiché une seule fois |
+| Fonctions bêta | état de chaque fonction : désactivée, liste d'utilisateurs, ou tous (aujourd'hui `route_builder`, dont l'écran n'est **pas livré**) |
+| Réglages | valeur, source (base / env / défaut), surcharge, retour au défaut ; bornes validées, lot tout ou rien |
+| Clés API et e-mail | SMTP (hôte, port, sécurité, identifiant, expéditeur), secrets en écriture seule, e-mail de test (réponse « ok » ou « ko » sans détail) |
+| Journal | journal d'audit paginé et filtrable ; l'origine se lit sur le type d'acteur (compte, ligne de commande, système) |
+
+L'API correspondante est sous `/api/admin/*` (utilisateurs, invitations, réglages et `settings/diagnostic`, secrets
+et leur test, `mail/test`, `features`, `audit`). Les secrets ne sont jamais relus : on ne reçoit que « configuré »,
+la date, l'auteur et la destination liée.
+
 ### Variables d'amorçage et de sécurité (environnement seulement)
 
 | Variable | Rôle | Défaut |
@@ -249,7 +335,10 @@ Détails OIDC (FusionAuth), session, comptes SSO : [docs/bibliotheque.md](docs/b
 | `SESSION_LIFETIME_HOURS` | Durée absolue d'une session, depuis la connexion | `12` |
 | `OUTBOUND_ALLOWED_HOSTS` | Liste blanche des destinations sortantes. Voir ci-dessous | vide |
 | `SCHEDULER_ENABLED` | `0` coupe l'ordonnanceur de fond (réplique secondaire, diagnostic). Par défaut il démarre dans tout processus servi, jamais en ligne de commande | `1` |
-| `WEBAUTHN_RP_ID` | Identifiant de partie de confiance WebAuthn. **Non lue** (WebAuthn : T12, non livré) | — |
+| `WEBAUTHN_RP_ID` | Identifiant de partie de confiance WebAuthn. **Non lue** (WebAuthn : T12, **non livré**) | — |
+| `ROUTING_BASE_URL` | URL du moteur de routage (`http://graphhopper:8989` avec le service du compose). Valeur initiale du réglage `routing.base_url` ; autorisée d'office pour le service `routing` quand elle vient de l'environnement. Voir [Service de routage](#service-de-routage-graphhopper) | vide |
+| `ROUTING_XMX`, `ROUTING_MEM_LIMIT`, `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT` | Mémoire du moteur (tas Java, limite du conteneur) et de l'import mensuel ; lues par `docker-compose.yml` et `routing/update.sh`, pas par l'appli | `1536m`, `2g`, `6g`, `8g` |
+| `ROUTING_EXTRACT_URLS`, `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS`, `ROUTING_HEALTH_TIMEOUT`, `ROUTING_MAX_DOWNLOAD_BYTES`, `ROUTING_LOCK` | Lues par `routing/update.sh` seulement (voir [Service de routage](#service-de-routage-graphhopper)) | voir le script |
 | `DATA_DIR`, `DB_PATH`, `INBOX_DIR` | Dossier de données (`/data` dans l'image), base SQLite (`DATA_DIR/kmlviewer.sqlite3`), dossier surveillé (`/inbox` avec le compose) | — |
 | `LOG_LEVEL` | Niveau de logs | `INFO` |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_SCOPES`, `OIDC_ADMIN_ROLE` | Client OIDC ; `OIDC_ADMIN_ROLE` : le droit admin suit ce rôle à chaque connexion | — |
@@ -280,7 +369,7 @@ OUTBOUND_ALLOWED_HOSTS=routing=graphhopper:8989,dem=opentopodata:5000,smtp=relay
 
 | Service | Ce qu'il autorise | Destination attendue |
 |---------|-------------------|----------------------|
-| `routing` | `routing.base_url` (moteur de routage ; **non livré**) | `hôte:port` |
+| `routing` | `routing.base_url` (moteur de routage ; service du compose livré, **constructeur de traces non livré**) | `hôte:port` |
 | `dem` | `DEM_URL` (service d'altitude) | `hôte:port` |
 | `smtp` | `smtp.host` + `smtp.port` (envoi d'e-mails) | `hôte:port` |
 | `tiles` | hôtes des fonds de carte (navigateur des utilisateurs) | `hôte` seul (https, 443) |
@@ -301,7 +390,7 @@ OUTBOUND_ALLOWED_HOSTS=routing=graphhopper:8989,dem=opentopodata:5000,smtp=relay
   grise après avoir posé un `tiles=` signifie qu'il manque un hôte (par exemple `a|b|c.tile.openstreetmap.org`,
   `server.arcgisonline.com`, `a|b|c.tile.opentopomap.org`, `a|b|c.basemaps.cartocdn.com`). La liste est lue
   au démarrage : ajouter un fournisseur de tuiles = ajouter son `tiles=`, recréer le conteneur, puis saisir
-  le fond dans l'administration (**non livré** : les fonds restent codés en dur dans `map.js`, voir plus bas).
+  le fond dans l'administration (réglage `map.basemaps`, onglet Réglages).
 - Une destination effective qui sort de la liste (liste réduite après coup) est refusée à l'appel, inscrite
   au journal d'audit (dédoublonnée), et ne reçoit jamais de secret.
 
@@ -333,8 +422,9 @@ facultative qui donne sa valeur initiale.
 
 - **Retour à la valeur d'environnement ou au défaut** : `flask settings-reset <clé>` (une valeur) ou
   `flask settings-reset --all` (toutes les valeurs en base). Tracé dans l'audit.
-- **Écrire une valeur en base** : par l'API d'administration (`/api/admin/settings`), **non livrée (T14)**.
-  Tant qu'elle n'existe pas, la valeur effective est celle de l'environnement, ou le défaut.
+- **Écrire une valeur en base** : dans l'espace d'administration (onglet Réglages) ou par l'API
+  (`PATCH /api/admin/settings`, `DELETE /api/admin/settings/<clé>` pour revenir au défaut,
+  `GET /api/admin/settings/diagnostic`). Une écriture invalide est refusée (400, avec le champ) et rien n'est écrit.
 
 | Réglage | Variable d'env | Défaut | Bornes |
 |---------|----------------|--------|--------|
@@ -363,17 +453,18 @@ facultative qui donne sa valeur initiale.
 | `ratelimit.forgot_per_ip` (/ h / IP) | — | 10 | 10 – 100 |
 | `ratelimit.token_per_ip` (essais de jeton, / 15 min / IP) | — | 10 | 5 – 30 |
 | `map.basemaps`, `map.default_basemap`, `map.center_lat`, `map.center_lon`, `map.zoom` | — | 5 fonds embarqués, `osm`, 46,603354 / 1,888334, zoom 6 | ≤ 10 fonds ; lat −85 – 85, lon −180 – 180, zoom 1 – 22 |
-| `routing.*` (traces planifiées : délais, budgets, tolérances, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | — | bornées dans le registre ; **fonction non livrée** |
+| `routing.*` (traces planifiées : délais, budgets, appels, points, distance, tolérances, recouvrement, stratégie de détours `s1` / `s2` / `hybrid` (défaut `hybrid`), essais de graine 0 – 2, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | voir le registre | bornées dans le registre ; **la fonction qui les lit (constructeur de traces) n'est pas livrée** |
 
 Les seuils du limiteur s'appliquent à chaud, sans remettre les compteurs à zéro. Ne sont **pas**
 administrables (environnement ou code seulement) : tout ce qui figure dans « Variables d'amorçage et de
 sécurité », `DEM_RETRIES`, `DEM_RETRY_BACKOFF`, `DEM_MAX_GAP_M` et les limites dures contre les abus
 (taille de fichier, nombre de points, cache).
 
-**Fonds de carte** : les réglages `map.*` existent et se valident, mais le visualiseur (`map.js`,
-`segments.js`) **ne les lit pas encore** : les 5 fonds restent déclarés dans
-`web-app/static/js/viewer/map.js` (`initMap`) et `web-app/templates/viewer/map_settings.html`. Tant que
-le branchement n'est pas livré (T15), ils n'ont aucun effet visible.
+**Fonds de carte** : le visualiseur et la page des tronçons lisent `GET /api/map-config` (fonds dont **tous** les
+hôtes sont autorisés par `tiles=`, fond par défaut, cadrage) ; les 5 fonds embarqués
+(`web-app/static/js/viewer/map.js`) ne servent que d'attente avant la réponse. Un fond saisi dans l'administration dont
+un hôte n'est pas dans `tiles=` est refusé à l'écriture (400) ; un fond devenu non autorisé disparaît de la liste envoyée
+au navigateur.
 
 ### E-mail et notifications
 
@@ -383,8 +474,9 @@ mot de passe oublié, notifications de sécurité. Tous les liens sont construit
 - **Réglages** : `smtp.host` et `smtp.sender` (si l'un des deux est vide, ou si la destination n'est pas dans la
   liste blanche : aucun e-mail), `smtp.port` (587), `smtp.security`, `smtp.username`, `smtp.timeout_s` (10 s), plus le **secret** `smtp.password`. Il n'existe **aucune variable
   d'environnement SMTP** : ils s'écrivent par l'API d'administration (`/api/admin/settings`,
-  `/api/admin/secrets`), **non livrée (T14)**. En l'état, aucun e-mail ne part ; les liens d'invitation et
-  d'amorçage sont montrés à l'émetteur, qui les transmet lui-même.
+  `/api/admin/secrets`), c'est-à-dire dans l'onglet « Clés API et e-mail » de l'administration. Tant que le SMTP n'est pas
+  réglé, aucun e-mail ne part : les liens d'invitation et d'amorçage sont montrés à l'émetteur, qui les transmet lui-même,
+  et les adresses restent « en attente de validation ». Un `WARNING` au démarrage le rappelle en mode `password`.
 - **Sécurité** : `starttls` (par défaut ; si la négociation échoue, l'envoi échoue, **jamais de repli en
   clair**), `tls` (TLS dès la connexion) ou `none` (**aucune authentification n'est envoyée**, un identifiant
   ou un mot de passe enregistré avec `none` est refusé). Le certificat du serveur est toujours vérifié.
@@ -407,8 +499,12 @@ mot de passe oublié, notifications de sécurité. Tous les liens sont construit
   | `settings-reset` (`smtp.*` ou `--all`) | les admins actifs ayant une adresse, **avant** le changement | configuration e-mail réinitialisée |
 
   Sans SMTP configuré, la commande le signale (« E-mail non configuré ») et réussit.
-- **Mot de passe oublié** : actif dès que le SMTP est configuré (désactivable : `auth.forgot_enabled`) ;
-  **connexion non livrée (T10)**.
+- **Mot de passe oublié** : actif dès que le SMTP est configuré (désactivable : `auth.forgot_enabled`) ; la réponse est
+  toujours la même (compte existant ou non) et l'envoi se fait hors requête ; lien valable 1 h, qui ne retire pas le
+  second facteur.
+- **Validation d'adresse** : toute adresse d'un compte à mot de passe est validée par un aller-retour (lien valable 48 h,
+  à ouvrir **connecté au compte concerné**, sinon rien n'est validé). Tant qu'elle ne l'est pas, le compte fonctionne mais ne
+  peut ni inviter ni utiliser « mot de passe oublié ».
 
 ### Mots de passe : politique et liste de mots de passe courants
 
@@ -447,38 +543,66 @@ pas chargée.
 
 | Route | Accès | Rôle |
 |-------|-------|------|
-| `GET /auth/token`, `POST /auth/token/inspect`, `POST /auth/token/consume` | publiques | Page et API de consommation d'un lien à usage unique (invitation, réinitialisation, validation d'adresse). Le jeton est dans le **fragment** de l'URL (`/auth/token#t=…`), jamais dans le chemin ni la requête, donc absent des journaux d'accès |
-| `GET /api/invitations`, `POST /api/invitations`, `DELETE /api/invitations/<id>` | session complète ; comptes à mot de passe disponibles | Ses invitations, création, révocation. **Pas d'interface** (T15) |
-| `GET /api/map-config` | session | Fonds de carte autorisés (liste blanche `tiles=`), fond par défaut, cadrage. Pas encore lue par le front |
+| `GET /auth/token`, `POST /auth/token/inspect`, `POST /auth/token/consume` | publiques | Page et API de consommation d'un lien à usage unique (invitation, amorçage, réinitialisation, validation d'adresse, conversion SSO). Le jeton est dans le **fragment** de l'URL (`/auth/token#t=…`), jamais dans le chemin ni la requête, donc absent des journaux d'accès |
+| `/auth/password/login`, `/auth/password/mfa`, `/auth/password/enroll`, `/auth/password/forgot` | publiques (les deux premières étapes exigent leur état de connexion) | Connexion en deux étapes, enrôlement, mot de passe oublié |
+| `GET /api/me`, `POST /api/me/password`, `POST /api/me/email`, `/api/me/mfa/*` | session complète, compte à mot de passe | Profil de sécurité : mot de passe, adresse, second facteur, codes de secours |
+| `GET/POST/DELETE /api/invitations` | session complète ; comptes à mot de passe disponibles | Ses invitations (profil › Invitations), création, révocation |
+| `/api/admin/*`, `/admin` | admin | [Espace d'administration](#espace-dadministration-admin) |
+| `GET /api/map-config` | session | Fonds de carte autorisés, fond par défaut, cadrage |
 
-Invitation : une adresse cible, validité `auth.invite_ttl_hours` (7 jours par défaut), lien montré **une seule
-fois** à l'émetteur (et envoyé par e-mail si le SMTP est configuré). Un admin invite sans limite ; un
-utilisateur actif, à adresse validée, avec `invite_credits ≥ 1` (crédit non rendu en cas de révocation ou
-d'expiration). Le compte créé est actif, adresse **en attente** de validation, et n'est jamais admin. Un lien
-consommé n'ouvre jamais de session : il renvoie à la page de connexion.
+Invitation : une adresse cible, validité `auth.invite_ttl_hours` (7 jours par défaut), lien montré **une seule fois** à
+l'émetteur (et envoyé par e-mail si le SMTP est configuré). Un admin invite sans limite ; un utilisateur actif, à adresse
+**validée**, avec `invite_credits ≥ 1` (un admin règle les crédits ; crédit non rendu en cas de révocation ou
+d'expiration). Le compte créé est actif, adresse **en attente** de validation, et n'est jamais admin. Un lien consommé
+n'ouvre jamais de session : il renvoie à la page de connexion (sauf l'amorçage, qui mène d'abord à l'enrôlement).
 
-Les jetons de réinitialisation et de définition de mot de passe, la validation d'adresse par un compte
-connecté et la conversion SSO → mot de passe dépendent de la connexion et de l'API d'administration (voir
-ci-dessous).
+### Service de routage (GraphHopper)
+
+Le moteur de routage des futures traces planifiées est livré comme **service du compose**, mais l'application
+**ne l'appelle pas encore** : le constructeur de traces (TR5, TR6) n'est pas livré. Le déployer n'a d'effet visible
+qu'une fois ce constructeur livré ; il peut être préparé dès maintenant.
+
+- **Service** : `graphhopper` (profil compose `routing`), image **construite par le projet** (`routing/Dockerfile` : jar de
+  la release GraphHopper 11.0, SHA-256 vérifié, sur Temurin 21 épinglé par empreinte), conteneur durci (non-root uid 10002,
+  système de fichiers en lecture seule, capacités supprimées). **Aucun port publié** ; il n'est joignable que par `kml-viewer`
+  sur le réseau interne `kml-viewer-routing` (sans accès sortant).
+- **Variables** (dans `.env`) : `ROUTING_BASE_URL=http://graphhopper:8989` pour l'application (autorisée d'office pour le
+  service `routing` quand elle vient de l'environnement ; posée dans l'administration, elle doit figurer dans
+  `OUTBOUND_ALLOWED_HOSTS` : `routing=graphhopper:8989`), puis `ROUTING_XMX` (tas du service, défaut `1536m`),
+  `ROUTING_MEM_LIMIT` (défaut `2g`), `ROUTING_IMPORT_XMX` (défaut `6g`), `ROUTING_IMPORT_MEM_LIMIT` (défaut `8g`).
+- **Données** : le graphe n'est **jamais** produit au démarrage. Sans graphe, le conteneur s'arrête en erreur et redémarre :
+  **lancer d'abord `routing/update.sh`**, qui crée le volume `routing-data`, télécharge les extraits Geofabrik
+  (Nord-Pas-de-Calais, Picardie, Belgique ; sommes MD5 vérifiées), les fusionne (osmium), importe dans un dossier
+  horodaté, bascule le lien `current` de façon atomique, recrée le moteur et attend sa santé. En cas d'échec de santé,
+  l'ancien graphe est rétabli. Relançable sans risque (verrou : une seule exécution à la fois).
+- **Mise à jour mensuelle** : `routing/update.sh` depuis l'hôte, dans le dossier du projet, chaque mois (timer systemd ou cron
+  posé par Ansible). Il a besoin de Docker, de `flock` et d'un accès à `download.geofabrik.de` (liste `ROUTING_ALLOWED_HOSTS`).
+  Réglages : `ROUTING_EXTRACT_URLS`, `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS` (2 à 20, défaut 2, courant compris),
+  `ROUTING_HEALTH_TIMEOUT` (5 à 3600 s, défaut 300), `ROUTING_MAX_DOWNLOAD_BYTES`, `ROUTING_LOCK` ; lus dans l'environnement
+  du processus, puis dans `.env`, puis valeur par défaut, et validés avant usage.
+- **Dimensionnement** (mesures sur la machine cible « dune », Xeon E5-1650 v3, 12 cœurs, 64 Go, Hauts-de-France + Belgique,
+  6 profils ; [ADR-0007](docs/adr/0007-moteur-routage.md)) : import **154 s** (`-Xmx6g`, pic conteneur 6,2 Go), fusion 41 s,
+  graphe **320 Mo**, service prêt en **3 s**, RAM du conteneur après charge **1,2 Go** avec `-Xmx1g` (3,24 Go avec `-Xmx3g`),
+  latence d'un appel `route` à 5 points p95 **≤ 378 ms**, disque **~2,4 Go** (prévoir un graphe de plus, ~0,3 Go, pendant une
+  mise à jour). Ces mesures ont été faites avec l'image communautaire (jar `SNAPSHOT`) ; la configuration retenue
+  (`-Xmx1536m` dans 2 Go, image du projet) reste **à valider à la recette** de TR7. Prévoir ~8 Go de mémoire disponible
+  pendant l'import mensuel.
+- **Profil gravel** : il évite surtout le bitume sans viser le gravier (peu de surfaces taguées dans OSM) ; le jugement
+  terrain revient à l'utilisateur.
+
+Procédures : [docs/exploitation.md](docs/exploitation.md#service-de-routage).
 
 ### Non livré
 
 Écrit à la date du 2026-11-24 d'après le code et [docs/specs/admin-space.md](docs/specs/admin-space.md) §14.
 Ce tableau est la liste de référence ; chaque mention **non livré** ci-dessus y renvoie.
 
-| Tâche | Fonction | Conséquence aujourd'hui |
-|-------|----------|-------------------------|
-| **T10** | Connexion par mot de passe en deux étapes, mot de passe oublié | En cours (formulaire d'étape 1 dans l'arbre de travail, non revu ; l'étape 2 répond 501). **Personne ne peut se connecter par mot de passe** |
-| **T11** | TOTP, codes de secours, enrôlement obligatoire, amorçage d'un admin | `flask user-invite --admin` émet un jeton, mais le consommer répond **501** (jeton intact, aucun compte créé). Aucun admin ne peut être créé en mode `password`. Les colonnes TOTP n'existent pas encore |
-| **T12** | WebAuthn (clés FIDO2) | `WEBAUTHN_RP_ID` n'est pas lue |
-| **T13** | Validation et changement d'adresse par un compte connecté | Un compte invité garde son adresse en attente |
-| **T14** | API d'administration : utilisateurs, invitations de tous, réglages, secrets, e-mail de test, fonctions bêta, journal d'audit, conversion SSO → mot de passe | Aucun réglage ni secret ne s'écrit (donc pas de SMTP) ; le journal d'audit n'est lisible qu'en base ; `flask user-invite --reset-password` (reprise d'amorçage avec mot de passe perdu) absent |
-| **T15** | Interface d'administration et de profil | Pas d'écran pour les invitations ni les réglages ; les fonds de carte ne sont pas lus depuis `map.*` ; `/admin/users` est l'écran existant (activer, promouvoir, supprimer) |
-| Routage | Traces planifiées (moteur GraphHopper) | `routing.*` et `ROUTING_BASE_URL` existent mais aucune fonction ne les utilise |
-
-Conséquence pratique : une instance `oidc` ou `local` fonctionne comme avant ; les nouveautés utilisables
-sont les protections de démarrage, la liste blanche des destinations (et la CSP des tuiles), les réglages en
-lecture et leur retour au défaut, la rotation des secrets, la CLI et l'API d'invitation.
+| Fonction | Conséquence aujourd'hui |
+|----------|-------------------------|
+| **WebAuthn** (clés de sécurité, T12) | Seul le TOTP est proposé ; `WEBAUTHN_RP_ID` n'est pas lue |
+| **Constructeur de traces** (TR5 : routes, sondage de santé du moteur ; TR6 : interface « Créer une trace ») | Le service `graphhopper` se déploie mais rien ne l'appelle ; la fonction bêta `route_builder` s'active dans l'administration sans écran correspondant ; `routing.coverage_bbox` n'existe pas encore au registre ; la tâche de fond `routing_health` (sondage du moteur) n'existe pas |
+| `flask user-invite --reset-password` (reprise d'un amorçage dont le mot de passe est perdu) | Option absente de la CLI ; sortie : si un autre admin existe, il émet un lien de réinitialisation du mot de passe, puis `user-invite --admin --account` ; sinon, amorcer un **autre** compte (`user-invite --admin <adresse>`, autre identifiant) |
+| Mot de passe oublié de bout en bout sans SMTP | Sans SMTP aucun mail ne part : un admin génère un lien de réinitialisation et le transmet |
 
 ## 🐛 Dépannage
 

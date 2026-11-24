@@ -1,36 +1,34 @@
 # Recette manuelle — comptes à mot de passe, administration, traces planifiées (bêta)
 
-Statut : **v1, 2026-11-24** · Rôle : spec · Specs : [admin-space](admin-space.md), [gpx-route-builder](gpx-route-builder.md)
+Statut : **v2, 2026-11-24** (Doc-15 : remise à jour sur le code livré) · Rôle : spec · Specs : [admin-space](admin-space.md), [gpx-route-builder](gpx-route-builder.md)
 Demandée par l'utilisateur (via coord) pour une **version de test**. Parcours pas à pas pour un testeur, avec le résultat attendu et le critère d'acceptation (CA) correspondant.
 
-> **État de livraison au 2026-11-24 (d'après `DEV-ETAT.md`)** : le parcours **ne peut pas encore être joué de bout en bout**. Chaque étape porte sa colonne « Livré ? ». Le minimum à livrer pour le jouer est en §1 ; ce qui reste hors de cette version est en §5.
+Sources de cette version : code de l'arbre de travail (commits jusqu'à `815aa19` : T11, T13, T14, T15 minimal, TR7) et README rédigé par doc, dont le parcours d'amorçage a été **rejoué de bout en bout** (REVIEW.md, « Doc T17 — reprise »). Les étapes non rejouées par doc ou test sont à jouer pour la première fois par le testeur.
 
 ---
 
-## 1. Ce qu'il faut pour jouer la recette
+## 1. Ce qui est jouable aujourd'hui
 
-| Étape | Tâches nécessaires | État au 2026-11-24 |
+| Étape | Jouable ? | Condition |
 |---|---|---|
-| 1. Premier admin (CLI) | T8 (fait), T7b (fait), **T11** (enrôlement TOTP, fin d'amorçage) | **Bloquée** : la consommation du jeton répond 501 à l'enrôlement |
-| 2. Connexion avec TOTP | T10 (fait), **T11** | **Bloquée** |
-| 3. Validation de l'adresse de l'admin | **T13**, SMTP de test | **Bloquée** (T13 non fait) |
-| 4. Invitation d'un utilisateur par l'admin | T7b (fait, API), **T15** (UI) ou appel d'API | API seulement |
-| 5. Invitation par un utilisateur avec crédits | **T14** (crédits), **T13** (adresse validée exigée, EF-3.2), **T15** | **Bloquée** |
-| 6. Réglages et secrets | T3, T4, T18, T9 (faits), **T14**, **T15** | **Bloquée** (aucune API admin) |
-| 7. Activation de la bêta | T5 (fait), **T14**, **T15** | **Bloquée** (SQL seulement, D4) |
-| 8. Trace planifiée | TR1-TR4 (faits), **TR5**, **TR6**, moteur joignable (**TR7** ou moteur du spike) | **Bloquée** |
+| 0. Service de routage (TR7) | **Oui** | profil compose `routing`, accès à `download.geofabrik.de` |
+| 1. Premier admin par la CLI | **Oui** (rejoué par doc) | — |
+| 2. Connexion avec TOTP | **Oui** (rejoué par doc) | serveur à l'heure (NTP) |
+| 3. E-mail et validation de l'adresse de l'admin | **Oui** | **SMTP de test** |
+| 4. Invitation d'un utilisateur par l'admin | **Oui** | SMTP pour la validation d'adresse (sinon lien affiché seulement) |
+| 5. Invitation par un utilisateur avec crédits | **Oui** | **SMTP** : il faut une adresse validée pour inviter (EF-3.2) |
+| 6. Réglages et secrets | **Oui** | — ; « Tester » le moteur répond « ko » tant que TR5 n'est pas livré |
+| 7. Activation de la bêta | **En partie** | état et liste enregistrés ; **aucun effet visible** sans TR5/TR6 |
+| 8. Trace planifiée | **Non** | **TR5** (routes, `results.py`, sondage `routing_health`, réglage `routing.coverage_bbox`) et **TR6** (écran « Créer une trace ») |
 
-Chaîne minimale : **T11 → T13 → T14 → T15** côté comptes, **TR5 → TR6** + moteur côté traces. Les deux chaînes sont indépendantes jusqu'à l'étape 7 (activation de la bêta, T14).
-
-**Version réduite possible** si tout n'est pas prêt : étapes 1, 2, 4 (lien affiché, sans validation d'adresse), 7 et 8. L'étape 5 exige T13 et un SMTP de test : sans eux, un utilisateur ne peut pas inviter (adresse non validée, EF-3.2, EF-4.5). Le choix du périmètre revient à l'utilisateur.
+Défauts connus à constater pendant la recette (déjà relayés) : **Doc-12** (étape 6.9, `auth.mfa_policy = all` accepté au lieu d'être refusé) ; **Doc-3** (`user-invite --reset-password` absent, §5).
 
 ## 2. Environnement de test
 
 **Questions ouvertes (décision de l'utilisateur, avec ops)** :
-- **Où tourne l'instance de test** (poste local, « dune ») ;
-- **HTTPS** : le cookie de session est `Secure` par défaut (EF-0.2) ; sans TLS, la connexion échoue. Il faut soit un reverse proxy TLS devant `127.0.0.1:8080`, soit `SESSION_COOKIE_SECURE=0` **sur l'instance de test seulement**, jamais en production ;
-- **SMTP de test** : un capteur de mails (ex. Mailpit) dans un compose de test, ou un relais réel ; sans SMTP, les étapes 3 et 5 sont impossibles ;
-- **Moteur** : service compose de TR7, ou le conteneur GraphHopper du spike (`israelhikingmap/graphhopper:11.0`, données Hauts-de-France + Belgique) raccordé au réseau de la stack.
+- **où tourne l'instance de test** (poste local, « dune ») ;
+- **HTTPS** : le cookie de session est `Secure` par défaut (EF-0.2) ; sans TLS, la connexion échoue. Soit un reverse proxy TLS devant `127.0.0.1:8080`, soit `SESSION_COOKIE_SECURE=0` **sur l'instance de test seulement**, jamais en production ;
+- **SMTP de test** : un capteur de mails (ex. Mailpit) joignable par la stack, ou un relais réel. Sans SMTP, les étapes 3 et 5 sont impossibles et les adresses restent « en attente ».
 
 **Variables d'environnement** (`.env` généré par Ansible ou écrit à la main ; modèle : `.env.example`) :
 
@@ -40,14 +38,15 @@ SECRET_KEY=<openssl rand -hex 32>
 SECRETS_KEY=<clé Fernet>                # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 PUBLIC_URL=https://<hôte de test>
 TRUSTED_HOSTS=<hôte de test>            # doit couvrir PUBLIC_URL
-OUTBOUND_ALLOWED_HOSTS=routing=<hôte du moteur>:8989,smtp=<hôte SMTP>:<port>
+OUTBOUND_ALLOWED_HOSTS=routing=graphhopper:8989,smtp=<hôte SMTP>:<port>
+ROUTING_BASE_URL=http://graphhopper:8989   # facultatif : sinon se règle dans l'admin (étape 6)
 ```
 
-Ne **pas** poser `routing.base_url` ni les réglages SMTP dans le `.env` : ils se règlent dans l'admin à l'étape 6 (c'est ce qu'on teste).
+Il n'existe **aucune variable d'env SMTP** : le SMTP se règle dans l'admin (étape 3).
 
-**Matériel du testeur** : une application TOTP sur téléphone (Aegis, Google Authenticator, FreeOTP…) ; deux navigateurs ou fenêtres privées (admin, utilisateurs) ; trois adresses e-mail de test (admin, Alice, Bob) qui arrivent dans le SMTP de test ; un serveur à l'heure (NTP : dérive > 30 s ⇒ TOTP refusé).
+**Matériel du testeur** : une application TOTP (Aegis, Google Authenticator, FreeOTP…) ; deux navigateurs ou fenêtres privées (admin, utilisateurs) ; trois adresses e-mail de test (admin, Alice, Bob) qui arrivent dans le SMTP de test ; un serveur à l'heure (dérive > 30 s ⇒ TOTP refusé).
 
-**Démarrage** : `docker compose up -d`, puis `docker compose logs kml-viewer` (aucune erreur, avertissements attendus : réglages surchargés, SMTP absent si non configuré) et `GET /api/health` via le proxy.
+**Démarrage** : `docker compose up -d`, puis `docker compose logs kml-viewer`. **Attendu** : aucune erreur ; le `WARNING` « SMTP non configuré : les adresses e-mail ne peuvent pas être validées » est normal à ce stade. `GET /api/health` répond via le proxy.
 
 Contrôle négatif facultatif : retirer `SECRETS_KEY` ⇒ le conteneur refuse de démarrer avec un message explicite (CA-20). Remettre la variable.
 
@@ -57,148 +56,166 @@ Contrôle négatif facultatif : retirer `SECRETS_KEY` ⇒ le conteneur refuse de
 
 Notation : **Faire** = action du testeur ; **Attendu** = résultat à constater. Toute différence est un défaut à remonter avec l'heure, l'étape et une capture.
 
+### Étape 0 — Service de routage (TR7, ADR-0007) — facultative tant que TR5/TR6 ne sont pas livrés
+
+1. **Faire** : dans le dossier du projet, `routing/update.sh`.
+   **Attendu** : téléchargement des extraits Nord-Pas-de-Calais, Picardie et Belgique (MD5 vérifiés), fusion, import dans un dossier horodaté, bascule du lien `current`, moteur recréé et sain ; quelques minutes au total (154 s d'import sur dune).
+2. **Faire** : `docker compose --profile routing ps` puis `docker stats --no-stream` après quelques appels.
+   **Attendu** : `graphhopper` sain, **aucun port publié** ; RAM du conteneur **≤ ~1,8 Go** avec `-Xmx1536m` dans 2 Go, aucune mise à mort par manque de mémoire (point à valider de l'ADR-0007).
+3. **Faire** : relancer `routing/update.sh`.
+   **Attendu** : relance sans risque ; l'ancien graphe reste disponible (`ROUTING_KEEP_GRAPHS`, défaut 2). Retour arrière **manuel** : pas de commande dédiée, repointer `current` à la main (Doc-13).
+
 ### Étape 1 — Premier admin par la CLI (EF-0.3, CA-33)
 
 1. **Faire** sur le serveur, dans le dossier du projet :
    `docker compose exec kml-viewer flask user-invite --admin admin@test.example`
-   **Attendu** : la console affiche « Jeton d'amorçage créé (valable jusqu'au …) » et un lien `https://<hôte>/auth/token#t=…`, **une seule fois** ; avec SMTP, « Le lien est aussi parti par e-mail ». Une ligne d'audit `actor_type = cli` est créée.
+   **Attendu** : « Jeton d'amorçage créé (valable jusqu'au …, usage unique). Lien, montré une seule fois : » suivi de `https://<hôte>/auth/token#t=…` ; sans SMTP, « E-mail non configuré : transmets ce lien à la seule personne concernée. » Une ligne d'audit avec l'acteur « Ligne de commande ».
 2. **Faire** : ouvrir le lien dans le navigateur « admin ».
-   **Attendu** : la barre d'adresse ne montre plus le `#t=…` (effacé par la page) ; formulaire « identifiant + mot de passe ».
-3. **Faire** : saisir l'identifiant `admin`.
-   **Attendu** : refus « identifiant indisponible » (identifiant réservé, EF-1.2b). Saisir ensuite `recette-admin`.
-4. **Faire** : mot de passe `azertyuiop123` puis un mot de passe de 11 caractères.
-   **Attendu** : refus dans les deux cas (liste des mots de passe courants, longueur < 12 ; CA-8, CA-8b). Choisir un mot de passe long et propre.
+   **Attendu** : le `#t=…` disparaît de la barre d'adresse ; formulaire identifiant + mot de passe.
+3. **Faire** : identifiant `admin`.
+   **Attendu** : « Identifiant indisponible » (réservé, EF-1.2b), jeton non consommé. Saisir `recette-admin`.
+4. **Faire** : mot de passe de 11 caractères, puis `azertyuiop123`.
+   **Attendu** : refus pour la longueur (moins de 12 caractères), puis « Ce mot de passe est trop courant. » (CA-8, CA-8b). Choisir un mot de passe long et propre.
 5. **Faire** : valider.
-   **Attendu** : page d'enrôlement du second facteur, **pas** de session ouverte (aller sur `/` dans un autre onglet ⇒ page de connexion). QR code et secret en texte.
+   **Attendu** : page d'enrôlement (QR code et secret en texte), **aucune session** (un autre onglet sur `/` mène à la connexion). Fenêtre d'enrôlement : **15 min**.
 6. **Faire** : scanner le QR code, saisir le code à 6 chiffres.
-   **Attendu** : 10 codes de secours affichés **une seule fois** (format `XXXX-XXXX-XXXX-XXXX`), bouton « Copier ». Les noter. Puis redirection vers la page de connexion.
+   **Attendu** : le compte devient admin à cet instant ; **10 codes de secours** affichés une seule fois (`XXXX-XXXX-XXXX-XXXX`), à noter ; puis renvoi vers la connexion.
 7. **Faire** : rouvrir le lien d'amorçage.
-   **Attendu** : message neutre (jeton déjà utilisé), sans détail (CA-5).
+   **Attendu** : message neutre, sans détail (CA-5).
 
-Reprise si l'enrôlement est abandonné : `flask user-invite --admin --account recette-admin` (le lien redemande le mot de passe actuel, EF-0.3b).
+Enrôlement abandonné (fenêtre expirée, navigateur fermé) : le compte existe, non admin, sans facteur ; reprise par `flask user-invite --admin --account recette-admin`, dont le lien redemande le **mot de passe actuel** (EF-0.3b). Mot de passe perdu à ce stade : voir §5 (Doc-3).
 
-### Étape 2 — Connexion avec second facteur TOTP (EF-1.6, EF-2.3, CA-9, CA-10, CA-12)
+### Étape 2 — Connexion avec second facteur TOTP (EF-1.6, EF-2.3, CA-7, CA-10, CA-12)
 
-1. **Faire** : se connecter avec `recette-admin` et un **mauvais** mot de passe, puis un identifiant inexistant.
-   **Attendu** : même message générique dans les deux cas (CA-7).
+1. **Faire** : connexion avec `recette-admin` et un mauvais mot de passe, puis avec un identifiant inexistant.
+   **Attendu** : même message générique (CA-7).
 2. **Faire** : bon mot de passe.
    **Attendu** : page « code du second facteur ».
-3. **Faire** : saisir le code affiché **à l'instant où l'enrôlement a été validé**, s'il est encore affiché.
-   **Attendu** : refus « code invalide ou déjà utilisé » (anti-rejeu) ; attendre le code suivant.
-4. **Faire** : saisir le code courant.
-   **Attendu** : session ouverte ; lien « Administration » visible dans la barre de navigation.
-5. **Faire** : se déconnecter, se reconnecter, et utiliser **un code de secours** à la place du TOTP.
-   **Attendu** : connexion réussie ; le même code de secours, réutilisé à la connexion suivante, est refusé.
+3. **Faire** : saisir le code déjà utilisé à l'enrôlement, s'il est encore affiché.
+   **Attendu** : « Code invalide ou déjà utilisé » ; attendre le code suivant.
+4. **Faire** : code courant.
+   **Attendu** : session ouverte ; lien **Administration** dans la barre de navigation.
+5. **Faire** : déconnexion, reconnexion avec **un code de secours** au lieu du TOTP ; à la connexion suivante, réutiliser ce même code.
+   **Attendu** : la première fois, connexion ; la seconde, refus.
 6. **Faire** (facultatif) : 5 codes faux de suite.
-   **Attendu** : l'étape de connexion est annulée, il faut ressaisir le mot de passe (EF-2.6).
+   **Attendu** : il faut ressaisir le mot de passe (EF-2.6).
 
-### Étape 3 — Validation de l'adresse de l'admin (EF-4.3, EF-4.3b, CA-17b)
+### Étape 3 — E-mail et validation de l'adresse de l'admin (EF-4.1, EF-4.2, EF-4.3b, CA-17b)
 
-Prérequis : SMTP réglé (étape 6, sous-étape 2) ou dans l'env. Peut se jouer après l'étape 6.
-
-1. **Faire** : dans le profil, « renvoyer le mail de validation » ; ouvrir le mail dans le SMTP de test.
+1. **Faire** : Administration › **Clés API et e-mail** : hôte et port du SMTP de test (présents dans `OUTBOUND_ALLOWED_HOSTS`), sécurité adaptée au serveur (`none` pour un capteur sans TLS, **sans** identifiant ni mot de passe), expéditeur. Puis « Envoyer un e-mail de test ».
+   **Attendu** : réponse « ok » ou « ko » seulement ; le mail arrive à l'adresse **en attente** de l'admin (P-T14-9).
+2. **Faire** : hôte SMTP **absent** de `OUTBOUND_ALLOWED_HOSTS`.
+   **Attendu** : 400, rien n'est écrit (CA-36). Remettre le bon hôte.
+3. **Faire** : Administration › Utilisateurs › ligne `recette-admin` › « Renvoyer la validation » ; ouvrir le mail.
    **Attendu** : le mail nomme l'identifiant `recette-admin` et dit « si tu n'as pas créé ce compte, ignore ce message ».
-2. **Faire** : ouvrir le lien **dans une fenêtre privée** (sans session).
+4. **Faire** : ouvrir le lien **dans une fenêtre privée** (sans session).
    **Attendu** : page neutre « connecte-toi au compte concerné, puis rouvre ce lien » ; adresse toujours en attente.
-3. **Faire** : rouvrir le lien dans le navigateur « admin » connecté.
-   **Attendu** : adresse validée (profil).
+5. **Faire** : rouvrir le lien dans le navigateur « admin » connecté.
+   **Attendu** : adresse validée (onglet Utilisateurs).
+6. **Faire** : redémarrer (`docker compose up -d --force-recreate kml-viewer`) et relire les logs.
+   **Attendu** : plus de `WARNING` « SMTP non configuré ».
 
 ### Étape 4 — Invitation d'un utilisateur par l'admin (EF-3, CA-3, CA-17, CA-45)
 
-1. **Faire** : Administration › Invitations › nouvelle invitation pour `alice@test.example`, **crédits initiaux 0**, note « Bienvenue pour la recette ».
-   **Attendu** : invitation créée ; lien affiché **une fois** avec « Copier » ; mail reçu (avec SMTP) contenant « Message de recette-admin : Bienvenue pour la recette ». Les crédits de l'admin ne bougent pas (CA-3).
+1. **Faire** : Administration › Invitations : `alice@test.example`, crédits initiaux **0**, note « Bienvenue pour la recette ».
+   **Attendu** : lien affiché **une fois** avec « Copier » ; mail reçu contenant « Message de recette-admin : Bienvenue pour la recette » ; crédits de l'admin inchangés (CA-3).
 2. **Faire** : réinviter `alice@test.example`.
    **Attendu** : 409 avec un message explicite (adresse déjà invitée ; émetteur admin, EF-3.10).
 3. **Faire** : ouvrir le lien dans le navigateur « utilisateurs » ; créer `alice` avec un mot de passe conforme.
-   **Attendu** : redirection vers la connexion, aucune session (CA-45). Connexion d'`alice` **sans** second facteur (politique `admins` par défaut). Bandeau « adresse en attente de validation ».
-4. **Faire** (avec SMTP) : `alice`, connectée, ouvre le mail de validation reçu.
+   **Attendu** : renvoi vers la connexion, aucune session (CA-45) ; connexion d'`alice` **sans** second facteur (politique `admins`) ; adresse « en attente » ; mail de validation reçu.
+4. **Faire** : `alice`, **connectée**, ouvre le lien de validation.
    **Attendu** : adresse validée.
+5. **Faire** (facultatif) : `alice` › Profil › Second facteur › « Activer un code TOTP ».
+   **Attendu** : le mot de passe actuel est exigé avant le QR code ; après confirmation, 10 codes de secours ; retirer le TOTP exige mot de passe **et** code (P-T11-7).
 
 ### Étape 5 — Invitation par un utilisateur avec crédits (EF-3.2, EF-3.5, EF-3.7, CA-2, CA-6)
 
-Prérequis : adresse d'`alice` validée (étape 4.4).
+Prérequis : adresse d'`alice` validée (4.4).
 
-1. **Faire** (Alice) : profil › Invitations.
-   **Attendu** : aucune invitation possible, crédits 0.
+1. **Faire** (Alice) : Profil › Invitations.
+   **Attendu** : aucune invitation possible, 0 crédit.
 2. **Faire** (admin) : Administration › Utilisateurs › `alice` › crédits = **1**.
-   **Attendu** : valeur enregistrée, ligne d'audit.
+   **Attendu** : enregistré, ligne d'audit.
 3. **Faire** (Alice, après rechargement) : inviter `bob@test.example`.
-   **Attendu** : avertissement « le crédit n'est pas rendu en cas de révocation ou d'expiration » **avant** la création ; invitation créée, lien affiché une fois ; crédits 0. Pas de champ « note » (réservé aux admins).
-4. **Faire** (Alice) : tenter une seconde invitation.
-   **Attendu** : refus (409), crédits 0.
+   **Attendu** : avertissement « crédit non rendu en cas de révocation ou d'expiration » **avant** la création ; lien affiché une fois ; 0 crédit ; pas de champ « note » (réservé aux admins).
+4. **Faire** (Alice) : seconde invitation.
+   **Attendu** : refusée (409), toujours 0 crédit.
 5. **Faire** (Alice) : révoquer l'invitation de Bob.
-   **Attendu** : invitation révoquée, crédits **toujours 0** (CA-6) ; le lien de Bob ne fonctionne plus (message neutre).
-6. **Faire** (admin) : recréditer 1 ; Alice réinvite Bob ; Bob crée son compte `bob`.
-   **Attendu** : compte `bob` créé, crédits de Bob 0 (invitation d'un non-admin, EF-3.9).
+   **Attendu** : révoquée, crédit **non rendu** (CA-6) ; le lien de Bob donne un message neutre.
+6. **Faire** (admin) : recréditer 1 ; Alice réinvite Bob ; Bob crée `bob` et valide son adresse.
+   **Attendu** : `bob` créé avec 0 crédit (invitation d'un non-admin, EF-3.9).
 
-### Étape 6 — Réglages et secrets dans l'espace admin (EF-5, EF-6, CA-19, CA-21, CA-34, CA-36, CA-37)
+### Étape 6 — Réglages et secrets (EF-2.2, EF-5, EF-6, CA-13, CA-19, CA-21, CA-34)
 
-1. **Faire** : Administration › Réglages › validité des invitations = 3 jours.
-   **Attendu** : source « base » ; `docker compose exec kml-viewer flask settings-list` affiche la même valeur et la même source. « Revenir au défaut » ⇒ source « défaut » (ou « env »).
-2. **Faire** : Administration › E-mail : hôte et port du SMTP de test (présents dans `OUTBOUND_ALLOWED_HOSTS`), sécurité selon le serveur, expéditeur ; « Envoyer un e-mail de test ».
-   **Attendu** : réponse « ok » ou « ko » seulement, sans détail ; mail reçu si « ok ».
-3. **Faire** : saisir un hôte SMTP **absent** de `OUTBOUND_ALLOWED_HOSTS`.
-   **Attendu** : 400 « destination non autorisée », rien n'est écrit (CA-36).
-4. **Faire** (si le SMTP de test a une authentification) : saisir le mot de passe SMTP, enregistrer, recharger la page.
-   **Attendu** : « configuré », date et auteur ; le mot de passe n'est **jamais** réaffiché, pas même ses 4 derniers caractères (CA-19).
-5. **Faire** : changer l'hôte SMTP pour un autre hôte autorisé.
-   **Attendu** : avertissement préalable « le secret associé sera effacé » ; après enregistrement, mot de passe « non configuré » ; ligne d'audit (CA-34).
-6. **Faire** : Réglages › Traces planifiées › `routing.base_url` = `http://<hôte du moteur>:8989` ; puis « Tester ».
-   **Attendu** : enregistré ; « Tester » répond « ok ». Une URL hors liste blanche ⇒ 400.
-7. **Faire** : `routing.coverage_bbox` = `[1.35, 48.80, 6.45, 51.55]` (défaut) ; essayer `[6, 48, 1, 51]`.
-   **Attendu** : la seconde valeur est refusée en 400 (min ≥ max, CA-R20b).
-8. **Faire** : Journal.
-   **Attendu** : une ligne par action ci-dessus, valeurs de secret masquées, acteur « recette-admin » ; la ligne de l'étape 1 a l'acteur « Ligne de commande ».
+1. **Faire** : Administration › Réglages › validité des invitations = 72 h.
+   **Attendu** : source « base » ; `docker compose exec kml-viewer flask settings-list` affiche la même valeur et la même source. « Revenir au défaut » ⇒ source « défaut ».
+2. **Faire** : une valeur hors bornes (validité 0 h ou 1 000 h).
+   **Attendu** : 400 avec le champ, lot non écrit (CA-21c).
+3. **Faire** (si le SMTP de test a une authentification, sécurité `starttls` ou `tls`) : saisir le mot de passe SMTP, enregistrer, recharger.
+   **Attendu** : « configuré », date, auteur et destination liée ; mot de passe **jamais** réaffiché, pas même ses 4 derniers caractères (CA-19).
+4. **Faire** : changer l'hôte SMTP pour un autre hôte autorisé.
+   **Attendu** : mot de passe SMTP effacé (« non configuré »), ligne d'audit (CA-34).
+5. **Faire** : `routing.base_url` hors liste blanche (ex. `http://exemple.org:8989`).
+   **Attendu** : 400, rien n'est écrit.
+6. **Faire** : « Tester » le moteur de routage.
+   **Attendu aujourd'hui** : « ko » quel que soit l'état du moteur (aucune sonde avant TR5) ; **attendu après TR5** : « ok » avec le moteur de l'étape 0.
+7. **Faire** : `docker compose exec kml-viewer flask settings-reset auth.invite_ttl_hours`, puis recharger l'onglet.
+   **Attendu** : nouvelle valeur visible sans redémarrage (CA-21d).
+8. **Faire** : Journal ; filtrer sur l'acteur « cli ».
+   **Attendu** : une ligne par action, secrets masqués ; l'amorçage et le `settings-reset` apparaissent avec l'acteur « Ligne de commande ».
+9. **Faire** : `bob` n'ayant pas de second facteur, passer `auth.mfa_policy` à `all`.
+   **Attendu (spec, EF-2.2, CA-13b)** : **409** indiquant le nombre de comptes sans facteur, rien n'est écrit. **Constaté aujourd'hui (Doc-12)** : la valeur est acceptée et `bob` est conduit à l'enrôlement à sa prochaine connexion : défaut connu, à remonter s'il est encore présent. Remettre `admins`.
 
-### Étape 7 — Activation de la bêta pour une liste d'utilisateurs (EF-7, RB-1.1, CA-22, CA-R1)
+### Étape 7 — Activation de la bêta pour une liste d'utilisateurs (EF-7, CA-22)
 
-1. **Faire** (admin) : Administration › Fonctions bêta › `route_builder` : état **Liste d'utilisateurs**, cocher `alice`.
-   **Attendu** : enregistré, audit ; diagnostic du moteur « configuré, joignable », date du dernier sondage, aucun avertissement de couverture.
-2. **Faire** : recharger le visualiseur en `alice`, puis en `bob`.
-   **Attendu** : `alice` voit « Créer une trace » ; `bob` ne la voit pas, et `GET /api/route-builder/options` lui répond 404.
-3. **Faire** (admin) : état **Tous**.
-   **Attendu** : `bob` voit l'entrée. Remettre **Liste d'utilisateurs** : la liste (`alice`) est conservée.
+1. **Faire** (admin) : Administration › Fonctions bêta › « Traces planifiées » : « Pour une liste de comptes », cocher `alice`, Enregistrer.
+   **Attendu** : enregistré ; ligne d'audit.
+2. **Faire** : passer à « Pour tous », puis revenir à « Pour une liste de comptes ».
+   **Attendu** : la liste (`alice`) est conservée (EF-7.2).
+3. **Attendu après TR5/TR6** (non jouable aujourd'hui) : `alice` voit « Créer une trace », `bob` ne la voit pas et `GET /api/route-builder/options` lui répond 404 ; diagnostic du moteur (état, dernier sondage, couverture) affiché sous la fonction.
 
-### Étape 8 — Création d'une trace planifiée (RB-2 à RB-5, CA-R2, CA-R13, CA-R20)
+### Étape 8 — Création d'une trace planifiée (RB-2 à RB-5, CA-R2, CA-R13, CA-R20) — **bloquée : TR5, TR6**
 
-Prérequis : `alice` a importé **au moins une activité réalisée** (upload d'un GPX horodaté) pour que les statistiques aient des valeurs.
+Prérequis : étape 0 faite ; `routing.base_url` réglée ; `alice` dans la liste de la bêta ; `alice` a importé **au moins une activité réalisée** (GPX horodaté).
 
 1. **Faire** (Alice) : noter le tableau de bord (nombre d'activités, distance de la période, records).
 2. **Faire** : visualiseur › « Créer une trace » ; cliquer à Londres ou Amsterdam.
-   **Attendu** : point refusé, « hors de la zone couverte » ; contour du rectangle couvert visible.
-3. **Faire** : poser **1 point** à Lille sans distance, « Terminer ».
-   **Attendu** : refus « distance requise » (RB-3.2), aucune génération.
-4. **Faire** : poser 3 points autour de Lille (ex. Citadelle, Vieux-Lille, Wazemmes), activité **Course à pied**, distance **15 km**, « Terminer ».
-   **Attendu** : indicateur de progression puis boucle fermée sur le point 1, passant par les 3 points **dans l'ordre**, sur des voies réelles ; distance entre 12,75 et 17,25 km (± 15 %) **ou** avertissement d'écart ; points numérotés, aucun point technique affiché comme point de l'utilisateur.
+   **Attendu** : point refusé, « hors de la zone couverte » ; contour du rectangle `routing.coverage_bbox` visible.
+3. **Faire** : 1 point à Lille sans distance, « Terminer ».
+   **Attendu** : « distance requise » (RB-3.2), aucune génération.
+4. **Faire** : 3 points autour de Lille (Citadelle, Vieux-Lille, Wazemmes), **Course à pied**, **15 km**, « Terminer ».
+   **Attendu** : progression puis boucle fermée sur le point 1, passant par les 3 points **dans l'ordre**, sur des voies réelles ; distance entre 12,75 et 17,25 km **ou** avertissement d'écart ; aucun point technique affiché comme point de l'utilisateur.
 5. **Faire** : « Autre proposition ».
    **Attendu** : une trace différente, mêmes points.
-6. **Faire** : refaire avec 2 points en Ardennes belges (ex. Durbuy) et 40 km en **Gravel**.
-   **Attendu** : trace générée ; si elle reste hors tolérance, avertissement « ajoute un point de passage… » (RB-4.14).
-7. **Faire** : « Enregistrer dans la bibliothèque », nom « Recette Lille 15 km ».
-   **Attendu** : trace enregistrée, lien vers la bibliothèque ; un second « Enregistrer » du même résultat ⇒ « déjà enregistrée ».
+6. **Faire** : 2 points à Durbuy (Ardennes belges), **Gravel**, 40 km.
+   **Attendu** : trace générée ; hors tolérance ⇒ avertissement « ajoute un point de passage… » (RB-4.14).
+7. **Faire** : « Enregistrer dans la bibliothèque », nom « Recette Lille 15 km » ; puis réenregistrer le même résultat.
+   **Attendu** : trace enregistrée, lien vers la bibliothèque ; second essai ⇒ « déjà enregistrée ».
 8. **Faire** : bibliothèque.
-   **Attendu** : la trace porte le badge **Planifiée** ; filtre « Planifiées » ⇒ elle seule ; « Réalisées » ⇒ elle n'y est pas ; « Toutes » (défaut) ⇒ elle y est. Le mot « itinéraire » n'apparaît nulle part (CA-R19).
+   **Attendu** : badge **Planifiée** ; filtres « Planifiées » (elle seule), « Réalisées » (absente), « Toutes » par défaut (présente) ; le mot « itinéraire » n'apparaît nulle part (CA-R19).
 9. **Faire** : tableau de bord.
-   **Attendu** : **identique** au relevé de 8.1 : nombre d'activités, distances, records inchangés (CA-R13).
+   **Attendu** : **identique** au relevé de 8.1 (CA-R13).
 10. **Faire** : ouvrir la trace enregistrée.
-    **Attendu** : profil d'altitude (MNT si `DEM_URL` est configuré, sinon altitude du moteur ou aucune) ; export GPX possible.
-11. **Faire** : se déconnecter avec des points en cours, se reconnecter en `bob` sur le même navigateur, ouvrir le mode.
+    **Attendu** : profil d'altitude (MNT si `DEM_URL` est configuré, appliqué à l'enregistrement ; sinon altitude du moteur ou aucune, RB-4.8) ; export GPX possible.
+11. **Faire** : se déconnecter avec des points en cours, se reconnecter en `bob` (bêta « Pour tous ») sur le même navigateur, ouvrir le mode.
     **Attendu** : aucun point d'Alice (RB-2.6, CA-R28).
 
 ---
 
-## 4. Contrôles transverses (à faire en fin de parcours)
+## 4. Contrôles transverses (fin de parcours)
 
-- Journaux du conteneur : aucun jeton (`#t=…`), mot de passe, code ni coordonnée de point (`docker compose logs kml-viewer | grep -i "t="` ne renvoie aucun jeton) (CA-5, CA-R17).
-- En-têtes de réponse : `Cache-Control: no-store` sur `/admin` et `/auth/*` ; CSP sans `unsafe-inline`.
-- Rechargement à chaud : modifier un réglage en CLI (`flask settings-reset <clé>`) ⇒ la page suivante voit la nouvelle valeur sans redémarrage (CA-21d).
+- Journaux du conteneur : aucun jeton (`#t=…`), mot de passe, code ni coordonnée de point (CA-5, CA-R17).
+- En-têtes : `Cache-Control: no-store` sur `/admin` et `/auth/*` ; CSP sans `unsafe-inline`.
+- Perte de facteur (facultatif) : `docker compose exec kml-viewer flask user-mfa-reset alice` ⇒ facteurs retirés, sessions fermées, notification ; sur le dernier admin, la commande annonce « dernier administrateur » **avant** d'agir.
 
-## 5. Pas livré dans cette version (même une fois §1 terminé)
+## 5. Pas livré (ne pas tester)
 
-- **WebAuthn** (clés de sécurité, T12) : seul le TOTP est proposé.
-- **Conversion d'un compte SSO en compte à mot de passe** (EF-0.5) : sans objet en mode `password` pur à l'installation.
-- **Mot de passe oublié** : livré (T10), hors parcours ; à essayer en option avec le SMTP de test.
-- **Service moteur de production et mise à jour mensuelle OSM** (TR7 : image du projet, `routing/update.sh`) : la recette utilise des données fixes. Les mesures sur « dune » sont faites (ADR-0007).
-- **Appréciation visuelle des traces gravel** : à faire par l'utilisateur sur l'échantillon du spike (`spike/detours/out/echantillon/`) ; la recette ne juge pas la qualité terrain.
-- **Doc d'exploitation à jour** (T17, TR8) : les procédures de `docs/exploitation.md` marquent encore le mode `password` « non utilisable ».
-- Points de doc restants de dev (Doc-2 à Doc-6 de `DEV-ETAT.md`) : avertissement « dernier admin » de `user-mfa-reset`, avertissement SMTP absent au démarrage, etc.
+| Élément | Tâche | Conséquence pour la recette |
+|---|---|---|
+| Constructeur de traces : routes, sondage du moteur, `routing.coverage_bbox` | **TR5** | étape 8 bloquée ; « Tester » le moteur répond « ko » ; pas de diagnostic du moteur dans « Fonctions bêta » |
+| Écran « Créer une trace », badge et filtre de la bibliothèque | **TR6** | étape 8 bloquée |
+| WebAuthn (clés de sécurité) | **T12** | seul le TOTP est proposé ; `WEBAUTHN_RP_ID` n'est pas lue |
+| `flask user-invite --reset-password` | **Doc-3** | amorçage avec mot de passe perdu : si un autre admin existe, il émet un lien de réinitialisation, puis `user-invite --admin --account` ; sinon, amorcer un **autre** compte (autre identifiant) |
+| Refus de `auth.mfa_policy = all` avec des comptes sans facteur | **Doc-12** (défaut relayé à dev) | étape 6.9 : constater le comportement actuel |
+| Retour arrière manuel de `routing/update.sh` | Doc-13 | repointer `current` à la main |
+| Appréciation visuelle des traces gravel | utilisateur | sur l'échantillon du spike (`spike/detours/out/echantillon/`), hors recette |
