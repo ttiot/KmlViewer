@@ -1,6 +1,6 @@
 # Spec — Générateur de traces planifiées (bêta)
 
-Statut : **v6, validée par l'utilisateur, en développement** (re-review v5 intégrée) ; arbitrée sauf résultats du spike TR0 (§13) · Mise à jour : 2026-11-24 · Rôle : spec
+Statut : **v6, validée par l'utilisateur, en développement** (re-review v5 intégrée) ; spike TR0 et mesures cible faits, reste l'appréciation visuelle (§13) · Mise à jour : 2026-11-24 · Rôle : spec
 Arbitrages utilisateur relayés par coord le 2026-11-24 (cf. §12). Corrections de [REVIEW.md](../../REVIEW.md) intégrées (review v3 et « Re-review v4 » : R3, n7, n8 et découpage pour cette spec), références sur les exigences touchées. Depuis la v3 : toujours une boucle fermée, détours ajoutés pour atteindre la distance.
 Dépend de : [admin-space.md](admin-space.md) — **bloquant** pour les fonctions bêta (EF-7), les réglages (EF-6), les secrets et destinations sortantes (EF-5, EF-6.8) et le limiteur de débit.
 ADR : [0007 moteur de routage](../adr/0007-moteur-routage.md) · [0009 traces planifiées](../adr/0009-itineraires-planifies.md) · [0010 stratégie de détours](../adr/0010-strategie-detours.md).
@@ -110,14 +110,14 @@ Le module `routing` ne lit ni `os.environ` ni la base : sa configuration vient d
 | VTT | `mtb` | `mtb` |
 
   Gravel = profil de routage seul ; `activity_types` inchangé. Noms de profils confirmés au spike TR0 (`foot`, `hike`, `racingbike`, `gravel`, `mtb` ; `bike` disponible mais non proposé). Défaut : `default_activity_type` du profil s'il correspond, sinon course à pied.
-- **RB-3.2** **Distance approximative** : km, 1 à 300 (réglage), pas de 0,5. **Obligatoire avec 1 point** ; facultative avec ≥ 2 points (sans elle, boucle de base sans détour ; arbitré).
+- **RB-3.2** **Distance approximative** : km, de 1 à `routing.max_distance_km` (défaut 300). Le pas de 0,5 km est celui du **champ de saisie du front** seulement : le serveur accepte tout nombre fini dans les bornes, sans arrondi (interprétation de dev confirmée, 2026-11-24). **Obligatoire avec 1 point** ; facultative avec ≥ 2 points (sans elle, boucle de base sans détour ; arbitré).
 - **RB-3.3** Validation serveur (liste blanche, bornes).
 
 ### 5.4 Génération — arbitrage Q-R1 v3 : boucle fermée, points dans l'ordre, détours
 
 Notations : P1…Pn les points de l'utilisateur, T la distance cible, τ la tolérance (réglage, défaut 15 %).
 
-- **RB-4.1 — 1 point.** Boucle native du moteur au départ de P1, longueur ≈ T (`round_trip`). Hors tolérance ⇒ nouvelles graines dans la limite du budget (RB-4.6), puis meilleure proposition.
+- **RB-4.1 — 1 point.** Boucle native du moteur au départ de P1, longueur ≈ T (`round_trip`). Hors tolérance ⇒ essais de graine selon RB-4.12 : au plus **`1 + routing.seed_retries`** graines au total, sous la même condition de budget restant ; puis meilleure proposition (interprétation de dev confirmée, 2026-11-24).
 - **RB-4.2 — ≥ 2 points, boucle de base.** L0 = trajet routé P1 → P2 → … → Pn → P1, longueur D0.
 - **RB-4.3 — Comparaison à la cible.**
   - pas de T, ou |D0 − T| ≤ τ·T ⇒ L0 retournée ;
@@ -136,7 +136,7 @@ Notations : P1…Pn les points de l'utilisateur, T la distance cible, τ la tol�
   - passage ordonné : chaque Pi est à moins de 50 m (réglage) d'un point de la trace, à des positions croissantes le long de la trace ; un Pi non approchable (hors réseau) ⇒ 422 avec son numéro (**numéro d'origine**, tel qu'envoyé par le client, avant dédoublonnage, m12) ;
   - **taux de recouvrement** : part de la distance parcourue deux fois (aller-retour, tronçon repris) ; > 25 % ⇒ avertissement « la trace emprunte plusieurs fois les mêmes voies » ;
   - écart à la cible (km et %).
-- **RB-4.8 — Sortie.** GPX 1.1, un `<trk>` / un `<trkseg>`, `<name>` « Trace planifiée du JJ/MM/AAAA » (modifiable à l'enregistrement), `<type>` = type stocké, **aucun horodatage**, P1…Pn en `<wpt>`. Altitude : DEM local si configuré, sinon celle du moteur, sinon absente. Le GPX passe par `parse_gpx_cached` et revient sous la même forme qu'un upload.
+- **RB-4.8 — Sortie.** GPX 1.1, un `<trk>` / un `<trkseg>`, `<name>` « Trace planifiée du JJ/MM/AAAA » (modifiable à l'enregistrement), `<type>` = type stocké, **aucun horodatage**, P1…Pn en `<wpt>`. Altitude (interprétation de dev confirmée, 2026-11-24) : le GPX généré porte l'altitude du moteur **seulement si chaque point en a une** (sinon aucun `<ele>`) ; l'altitude MNT n'est **pas** calculée à la génération mais **à l'enregistrement**, par l'ingestion, comme pour un upload (RB-5.3). Conséquence assumée : D+/D− de la prévisualisation (`route_meta`) viennent du moteur, ou valent `null` ; ceux de la trace enregistrée viennent du MNT quand il est configuré. Le GPX passe par `parse_gpx_cached` et revient sous la même forme qu'un upload.
 - **RB-4.9 — `route_meta`** : distance obtenue, D+/D−, cible, écart, D0, nombre de détours, taux de recouvrement, appels consommés, graine, profil, avertissements du moteur, `result_id`.
 - **RB-4.10 — Attente.** Une génération peut durer plusieurs secondes : indicateur de progression et bouton « Annuler » (le front abandonne la requête ; le serveur respecte son budget de temps quoi qu'il arrive).
 
@@ -303,16 +303,17 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 - Points posés aux abords immédiats de la frontière, sur une voie coupée entre les deux extraits (jointure de fusion défaillante) ⇒ 422 : cas à tester explicitement au spike.
 - Redémarrage entre génération et enregistrement ⇒ `result_id` perdu (404, « régénère la trace »).
 
-**Risques (à mesurer au spike TR0)**
+**Risques (mesurés au spike TR0 et sur la machine cible « dune », ADR-0007 et 0010)**
 
 | Risque | Effet | Atténuation |
 |---|---|---|
 | Détours peu naturels (zigzags, éperons, aller-retour) | Trace inexploitable en vrai | Taux de recouvrement + avertissement ; choix de stratégie au spike ; « Autre proposition » |
 | Non-convergence vers T | Écart à la cible | Itérations bornées, meilleure proposition + avertissement |
-| Charge moteur ×15 par génération | Latence, saturation | Budget d'appels, 2 générations simultanées max, limite par utilisateur |
+| Charge moteur ×15 par génération | Latence, saturation | Budget d'appels, 2 générations simultanées max, limite par utilisateur. Mesuré sur dune : `route` à 5 points p95 ≤ 378 ms par profil, donc 15 appels ≈ 6 s au pire, sous le budget de 30 s |
 | Latence de plusieurs secondes | Expérience dégradée | Progression + Annuler ; budget de temps |
 | Points techniques sur voies privées / interdites au profil | Trace non praticable | Le moteur ne route que les voies permises au profil ; avertissements moteur remontés |
-| Qualité du profil gravel | Trace hors sujet | Modèle personnalisé évalué au spike |
+| Qualité du profil gravel | Trace hors sujet | Modèle personnalisé évalué au spike : évite surtout le bitume sans viser le gravier (limite connue, ADR-0007) ; jugement terrain par l'utilisateur |
+| Mémoire du moteur | Arrêt du service (OOM) | Mesuré sur dune : 1,2 Go après charge à `-Xmx1g`, 0 OOM ; retenu `-Xmx1536m` dans une limite de 2 Go, à vérifier à la recette de TR7 |
 
 ---
 
@@ -328,14 +329,14 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 | admin-space T6 (`ratelimit.py`) | RB-S5 | **Oui** |
 | admin-space T19 (R3) | Ordonnanceur de fond qui porte le sondage `routing_health` | **Oui**, avant TR5 |
 | admin-space T0 (r2) | Migrations par nom, pour `activities.kind` | **Oui**, avant TR4 |
-| **ops** | Service compose GraphHopper, données OSM **Hauts-de-France + Belgique** (extraits fusionnés), mise à jour **mensuelle**, ressources chiffrées au spike | **Oui** |
+| **ops** | Service compose GraphHopper (image du projet : jar de release 11.0 épinglé sur Temurin 21), données OSM **Hauts-de-France + Belgique** (extraits fusionnés), mise à jour **mensuelle** avec retour arrière, ressources chiffrées sur dune (service 2 Go, import 6 Go de tas, ~2,4 Go de disque ; ADR-0007) | **Oui** |
 | **ops** (existant DEM) | `DEM_BBOX` à élargir pour couvrir la même emprise, sans quoi les traces belges n'ont pas d'altitude MNT : proposition `DEM_BBOX=48,1,52,7` (24 dalles d'1° au plus ; ~45 Mo par dalle terrestre selon `.env.example`, soit ~1 Go au plus, les dalles marines étant absentes) | Non (altitude du moteur ou absente sinon) |
 | Spike TR0 | Validation ADR-0007 et choix ADR-0010 | **Oui** avant TR2/TR3 |
 | Migration `activities.kind` | ADR-0009 | Oui, pour l'enregistrement |
 
 ## 11. Décisions
 
-- [ADR-0007](../adr/0007-moteur-routage.md) — **GraphHopper accepté**, sous réserve du spike TR0.
+- [ADR-0007](../adr/0007-moteur-routage.md) — **GraphHopper 11.0 accepté** (spike TR0, mesures sur dune) ; chiffrage d'exploitation.
 - [ADR-0009](../adr/0009-itineraires-planifies.md) — `activities.kind`, valeur `planned`.
 - [ADR-0010](../adr/0010-strategie-detours.md) — stratégie de détours : proposé, choix final au spike.
 - [ADR-0011](../adr/0011-destinations-sortantes.md) — destinations sortantes en liste blanche, secrets liés à leur destination (B3).
@@ -358,6 +359,7 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 | Seuils | Distance facultative avec ≥ 2 points ; tolérance 15 % ; accroche 50 m ; recouvrement 25 % ; budget 15 appels / 30 s | 3 |
 | Filtre | « Toutes · Réalisées · Planifiées », défaut « Toutes » | 3 |
 | D1 | GraphHopper 11.0 validé sous condition des mesures cible ; image communautaire ou jar à trancher en TR7 | spike |
+| — | Condition levée (mesures dune) ; TR7 : jar de release épinglé sur `eclipse-temurin:21-jre-noble`, pas l'image communautaire ; service `-Xmx1536m` / 2 Go, import `-Xmx6g` ; `routing/update.sh` avec retour arrière (décision journalisée par coord) | dune |
 | D2 | Stratégie hybride S1 puis pétale S2, jusqu'à 2 essais de graine supplémentaires | spike |
 | D3 | Recouvrement : avertissement à 25 % à partir de 3 points, 40 % à 2 points | spike |
 | D4 | 2 points hors tolérance : avertir et suggérer d'ajouter un point | spike |
@@ -368,12 +370,12 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 
 ## 13. Reste ouvert
 
-1. **Mesures sur la machine cible (« dune »)**, prévues par l'utilisateur : condition restante de l'ADR-0007 (ressources du service, limite mémoire du conteneur). Bloque TR7, pas TR2 ni TR3.
+1. ~~Mesures sur la machine cible (« dune »)~~ : **faites** le 2026-11-24 (ops), consignées dans l'ADR-0007, qui passe « Accepté » ; TR7 débloquée.
 2. **Appréciation visuelle** des traces par l'utilisateur, en particulier gravel : échantillon prêt dans `spike/detours/out/echantillon/` (`echantillon.md` et GPX S1/S2 par zone). Une remarque défavorable rouvrirait la stratégie ou le profil concerné, sans bloquer TR3.
 
 Décisions D1 à D4 prises le 2026-11-24 (§12).
 
-**Ordre pour dev** : **TR3** (adaptateur GraphHopper, profils, `health()`), **puis TR2** (`detours.py` hybride S1 → S2 + essais de graine, `builder.py`, RB-4.11 à RB-4.14, CA-R30 à CA-R33) ; TR7 (ops) après les mesures cible ; CA-R34 (hybride réel sur le jeu du spike) à mesurer une fois TR2 et TR3 livrés.
+**Ordre pour dev** : **TR3** (adaptateur GraphHopper, profils, `health()`), **puis TR2** (`detours.py` hybride S1 → S2 + essais de graine, `builder.py`, RB-4.11 à RB-4.14, CA-R30 à CA-R33) ; TR7 (ops) débloquée (mesures cible faites) ; CA-R34 (hybride réel sur le jeu du spike) à mesurer une fois TR2 et TR3 livrés.
 
 La région n'est plus un point ouvert (arbitrée, vague 4). Le **périmètre belge** retenu par la spec est le **pays entier** (recommandation argumentée dans l'ADR-0007) ; s'il ne convient pas, c'est une simple variante de l'étape d'extraction de TR7, sans impact sur le code.
 
@@ -385,9 +387,10 @@ La région n'est plus un point ouvert (arbitrée, vague 4). Le **périmètre bel
 - m11 : dédoublonnage sur le `result_id` (un second enregistrement du même résultat est refusé, même renommé).
 - m12 : Pn confondu avec P1 retiré ; numérotation d'origine dans les messages.
 - n5 : points en cours effacés à la déconnexion.
+- Interprétations de dev (DEV-ETAT.md) **confirmées par spec** le 2026-11-24 et reportées : RB-4.1 (`1 + routing.seed_retries` graines à 1 point), RB-4.8 (altitude du moteur si complète, MNT à l'enregistrement), RB-3.2 (pas de 0,5 km côté front seulement), TR5 (`routing.coverage_bbox` au registre). Seule RB-4.8 change un comportement écrit (MNT à l'enregistrement au lieu de la génération) : signalée à l'utilisateur.
 - RB-1.3 : valeur par défaut de `routing.coverage_bbox` `[1.35, 48.80, 6.45, 51.55]` (choix de spec, demande d'ops relayée par coord) ; elle englobe aussi des bords des Pays-Bas, du Luxembourg, d'Allemagne, du Grand Est et de Normandie, qui répondent 422 (hors données).
 
-**Point de reprise (pause du 2026-11-24)** : aucune modification en cours. Dernière livraison : RB-1.3 et CA-R20b (couverture configurée), limites connues dans l'ADR-0007. En attente : retours de dev et coord, confirmation de la liste ci-dessus, points 1 et 2.
+**Point de reprise (2026-11-24, soir)** : aucune modification en cours. Dernières livraisons : interprétations de dev confirmées, §15 (précisions TR5/TR6), mesures dune et TR7 alignées sur l'ADR-0007 « Accepté ». En attente : confirmation de la liste ci-dessus et des défauts de §15, appréciation visuelle (point 2).
 
 ## 14. Découpage en tâches
 
@@ -398,13 +401,39 @@ Pré-requis : spec admin **T0, T3, T4, T5, T6, T14, T18, T19** (M15, D4, R3, r2)
 2. **TR3** Adaptateur GraphHopper + profils + `health()` ; tests sur réponses enregistrées, aucun appel réseau en CI. Débloquée par D1 ; **avant TR2**.
 3. **TR2** `routing/detours.py` (**hybride S1 → pétale S2 + essais de graine**, RB-4.11 à RB-4.14, CA-R30 à CA-R33) + `routing/builder.py` (boucle de base, ajustement, budget, contrôles qualité, dédoublonnage m12, GPX par l'API XML) ; tests CA-R2 à R11, R26. **Après TR3.**
 4. **TR4** Migration `activities.kind` + filtres (`dashboard_service`, `segment_service`, `activity_store`, `/api/users`, **`recompute_summaries`**) ; tests CA-R13, R14, R22.
-5. **TR5** `results.py` (plafond global, dédoublonnage, n7) + routes (CA-R16 sur le modèle à deux compteurs, v5-2) + sémaphore de génération + limitations + **tâche `routing_health` enregistrée dans l'ordonnanceur (T19)** ; tests CA-R1, R12, R15, R16, R17, R23, R24, R25, R25b, R27, R29. Dépend de T19.
+5. **TR5** `results.py` (plafond global, dédoublonnage, n7) + routes (CA-R16 sur le modèle à deux compteurs, v5-2) + sémaphore de génération + limitations + **tâche `routing_health` enregistrée dans l'ordonnanceur (T19)** + **réglage `routing.coverage_bbox`** au registre (type rectangle, RB-1.3, §15 P-TR5-1) ; tests CA-R1, R12, R15, R16, R17, R23, R24, R25, R25b, R27, R29. Dépend de T19.
 6. **TR6** Front `route-builder.js` (édition, progression, Annuler, effacement à la déconnexion) + badge « Planifiée » et filtre de la bibliothèque ; CA-R19, R28.
 7. **TR7 (ops)** Service compose `graphhopper` (profil `routing`), durcissement, doc, et chaîne de données :
    - **Téléchargement** des extraits Geofabrik couvrant les Hauts-de-France (Geofabrik découpe la France par régions : vérifier si l'extrait porte le nom « Hauts-de-France » ou les anciennes régions Nord-Pas-de-Calais et Picardie) et de la **Belgique** (extrait pays), le même jour, avec contrôle des sommes publiées.
    - **Fusion** en un seul `.osm.pbf` (`osmium merge` ou équivalent, outil dans un conteneur d'outillage, pas dans l'image de l'appli) ; contrôle de la jointure à la frontière (objets en double ou en versions différentes entre extraits).
-   - **Import** GraphHopper dans un dossier neuf, puis **bascule** atomique sur le nouveau graphe ; l'ancien reste disponible jusqu'au succès (pas d'interruption si l'import échoue).
-   - **Mise à jour mensuelle** (tâche planifiée côté hôte, modèle `dem-tiles` : relançable sans risque).
+   - **Image du moteur** construite par le projet : jar `graphhopper-web` de la **release GitHub 11.0**, épinglé, **SHA-256 vérifié** au build ; base **`eclipse-temurin:21-jre-noble`** épinglée par empreinte ; **pas** l'image communautaire du spike (jar `11.0-SNAPSHOT`). Configuration des 6 profils (dont le modèle gravel du spike) versionnée dans `routing/`.
+   - **Import** GraphHopper (`-Xmx6g`, dans un conteneur d'import lancé pour la seule mise à jour) dans un dossier neuf, puis **bascule** atomique sur le nouveau graphe ; l'ancien reste disponible jusqu'au succès (pas d'interruption si l'import échoue) **et pour un retour arrière**.
+   - **Mise à jour mensuelle** par **`routing/update.sh`** (tâche planifiée côté hôte, modèle `dem-tiles` : relançable sans risque), avec **retour arrière** vers le graphe précédent.
    - **`DEM_BBOX`** élargie à la même emprise (cf. §10).
-   - Ressources (RAM d'import, RAM de service, disque, durée) : valeurs mesurées au spike TR0, reportées dans la doc et dans `mem_limit`.
+   - **Ressources** (mesures dune, ADR-0007) : service `-Xmx1536m` (`ROUTING_XMX`) et `mem_limit` **2 Go** (`ROUTING_MEM_LIMIT`) ; import `-Xmx6g`, ~4 min de calcul ; disque ~2,4 Go plus un graphe (~0,3 Go) pendant la bascule ; valeurs reportées dans la doc d'exploitation.
+   - **Recette de TR7** : RAM du conteneur après charge ≤ ~1,8 Go sans OOM avec `-Xmx1536m` ; banc court rejoué sur l'image du projet (latence `route` par profil, `round_trip`, 6 profils dans `/info`) ; mise à jour mensuelle de bout en bout, retour arrière compris.
 8. **TR8** Doc : README (traces planifiées bêta), aide admin.
+
+## 15. Précisions pour TR5 et TR6 (2026-11-24)
+
+Points que la spec laissait implicites, relevés avant le développement de TR5 et TR6. Chacun porte un **défaut proposé** : dev l'applique pour ne pas s'arrêter ; l'utilisateur peut le corriger (liste à confirmer, relayée par coord). Aucun ne change un arbitrage.
+
+**TR5 (routes, `results.py`)**
+- **P-TR5-1 Type du réglage `routing.coverage_bbox`** : nouveau type de registre « rectangle » ; en base, tableau JSON de 4 nombres ; **pas de variable d'env**, comme les autres réglages `routing.*` hormis `routing.base_url` (valeur par défaut du registre, modifiable dans l'admin). « Côté » (borne 2 000 km) = largeur mesurée le long du parallèle le plus proche de l'équateur, et hauteur le long d'un méridien, chacune en haversine. Écriture invalide ⇒ 400 (CA-R20b).
+- **P-TR5-2 Rabattement des points techniques** : dans l'intersection du rectangle RB-S7 (points de l'utilisateur élargis de T/4) et de `routing.coverage_bbox` ; jamais vide, puisque les points de l'utilisateur sont dans les deux.
+- **P-TR5-3 Réponse de `options`** : `{available, state: "ok"|"starting"|"unavailable", activities: [{key, label}], default_activity, min_km: 1, max_km, step_km: 0.5, max_waypoints, tolerance_pct, coverage_bbox}`. `starting` = cache vide (RB-1.2). Fonction indisponible ou moteur non configuré ⇒ 404 (RB-1.1, RB-1.2).
+- **P-TR5-4 Contrat de `route`** : `seed` entier de 0 à 2³¹ − 1, facultatif (absent ⇒ tiré par le serveur). Réponse : payload du visualiseur + `route_meta` (RB-4.9) avec en plus `seed` (graine de la trace retenue), **`next_seed`** (graine qui suit la dernière essayée : le front la renvoie pour « Autre proposition », RB-4.5, RB-4.12), `attempts`, `ascent_m` / `descent_m` (`null` sans altitude, RB-4.8) et `warnings: [{code, message}]` à codes stables (`min_distance`, `target_gap`, `overlap`, `add_waypoint`, `closing_point_removed`, `engine`).
+- **P-TR5-5 `routing.profiles`** : **gardé en code** (table RB-3.1) pour la bêta, pas dans le registre : sa validation dépend de la liste annoncée par le moteur, donc de l'état du cache de santé. Il entrera au registre si le besoin apparaît. *Retire une ligne de §5.6 : à confirmer.*
+- **P-TR5-6 Génération en cours après « Annuler »** : la place « une génération simultanée par utilisateur » reste prise jusqu'à la fin côté serveur (budget de temps) ; une nouvelle demande pendant ce temps ⇒ 429 « une génération est encore en cours, réessaie dans quelques secondes ». Le limiteur horaire compte chaque génération **acceptée** (après validation, avant le premier appel au moteur) ; une requête refusée en 400 ne compte pas.
+- **P-TR5-7 Enregistrement** : `ingest_bytes(kind='planned', source='route_builder', defer_elevation=True)` puis `wake('dem_backfill')`, comme un upload (RB-4.8) ; nom par défaut daté dans `APP_TIMEZONE`.
+- **P-TR5-8 Taille comptée pour le plafond de 256 Mo** (RB-5.2) : octets du GPX + octets du payload sérialisé en JSON, par résultat.
+- **P-TR5-9 Diagnostic pour l'onglet admin** (RB-1.2, RB-1.3) : exposé à l'API admin des fonctions bêta (admin-space §15 P-T14-5) : `configured`, `available`, `checked_at`, `info_bbox`, `coverage_contained` (rectangle configuré contenu dans celui de `/info`), profils annoncés.
+
+**TR6 (front)**
+- **P-TR6-1 Présence du bouton** : rendue côté serveur. Le gabarit reçoit un drapeau « `route_builder` disponible pour cet utilisateur **et** moteur configuré » ; faux ⇒ aucun élément dans le HTML (EF-7.3). Vrai mais `available: false` ⇒ le mode s'ouvre, message « service en cours de démarrage » ou « momentanément indisponible », bouton « Terminer » désactivé.
+- **P-TR6-2 Marqueurs numérotés** : `L.divIcon` dont le contenu n'est que le numéro ; aucune donnée utilisateur injectée en HTML ; aucun style ni script en ligne (CSP).
+- **P-TR6-3 Champ distance** : `type=number`, `min` 1, `max` = `options.max_km`, `step` 0,5 ; obligatoire avec 1 point ; vide avec ≥ 2 points ⇒ pas de cible (RB-3.2).
+- **P-TR6-4 Couverture** : rectangle `coverage_bbox` tracé en pointillés en mode édition ; clic hors rectangle ⇒ point refusé, message in-page « hors de la zone couverte ».
+- **P-TR6-5 Après génération** : trace injectée comme un upload ; panneau avec distance, D+ (si présent), écart à la cible, avertissements (`message`), boutons **Enregistrer** (nom prérempli, modifiable), **Autre proposition** (envoie `next_seed`), **Modifier les points** (retour à l'édition, points conservés). Enregistrement réussi ⇒ lien vers la trace dans la bibliothèque ; 409 ⇒ « déjà enregistrée » avec le lien.
+- **P-TR6-6 Stockage local** : clé `kmlviewer.routeBuilder.v1.<id du compte>` ; à l'envoi du formulaire de déconnexion, suppression de toutes les clés de préfixe `kmlviewer.routeBuilder.` ; à l'ouverture du mode, suppression des clés d'un autre compte (RB-2.6). Piles annuler/rétablir en mémoire seulement, 100 états au plus.
+- **P-TR6-7 Bibliothèque** : badge « Planifiée » et filtre « Toutes · Réalisées · Planifiées » sur la liste servie par `activity_store.list_for_user` (RB-5.5), défaut « Toutes ».
