@@ -100,7 +100,7 @@ Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 | `inbox-scan` | Passe une fois sur le dossier surveillé. Refuse de tourner (« Un autre processus… ») tant que l'application servie détient le verrou du dossier, c'est-à-dire en temps normal : le dossier est déjà scruté toutes les `INBOX_SCAN_INTERVAL` secondes |
 | `recompute-stats` | Recalcule distance, durées et records des activités déjà stockées (à lancer après une mise à jour qui corrige ces calculs) |
 | `user-admin <login>` | Donne le rôle admin et active le compte (c'est ainsi que se désigne le premier admin) ; `--revoke` retire le rôle. Sur un compte à mot de passe sans second facteur : refusé |
-| `user-invite --admin <e-mail>` | Amorçage du premier admin d'une instance à comptes à mot de passe : émet un jeton de 24 h à usage unique et affiche son lien une seule fois ([pas à pas](#amorçage-du-premier-administrateur)). `--account <login>` reprend l'amorçage d'un compte existant sans facteur. L'option `--reset-password` (mot de passe perdu) **n'existe pas** : voir [Non livré](#non-livré) |
+| `user-invite --admin <e-mail>` | Amorçage du premier admin d'une instance à comptes à mot de passe : émet un jeton de 24 h à usage unique et affiche son lien une seule fois ([pas à pas](#amorçage-du-premier-administrateur)). `--account <login>` reprend l'amorçage d'un compte existant sans facteur ; avec `--reset-password` (qui exige `--account`), le lien fait **choisir un nouveau mot de passe** (mot de passe oublié) avant l'enrôlement |
 | `user-mfa-reset <login>` | Perte de tous les seconds facteurs d'un compte à mot de passe : retire ses facteurs (TOTP, codes de secours), ferme ses sessions, le rétrograde s'il est admin. Annonce « dernier administrateur » **avant** d'agir si c'est le cas |
 | `secrets-rotate` | Rechiffre les secrets avec la première clé de `SECRETS_KEY` (rotation) |
 | `secrets-reset [--yes]` | Clé `SECRETS_KEY` perdue : efface tous les secrets chiffrés (à ressaisir) et les secrets TOTP ; rétrograde les admins qui n'ont plus aucun facteur |
@@ -185,8 +185,8 @@ motif dans les logs (`./logs.sh`).
 > **Statut** : tout ce qui est décrit ici est livré, sauf ce qui porte la mention **non livré**
 > (liste récapitulative : [Non livré](#non-livré)). Les trois modes d'authentification sont utilisables ;
 > le mode `password` (comptes sur invitation, second facteur TOTP) se met en route avec
-> [l'amorçage du premier administrateur](#amorçage-du-premier-administrateur). Reste non livré : WebAuthn,
-> le constructeur de traces (le moteur de routage, lui, se déploie) et `user-invite --reset-password`.
+> [l'amorçage du premier administrateur](#amorçage-du-premier-administrateur). Le constructeur de traces
+> ([bêta](#constructeur-de-traces-bêta)) est livré. Reste non livré : WebAuthn.
 
 ### Déploiement géré par Ansible
 
@@ -277,8 +277,19 @@ Mode `password`, instance neuve (aucun compte). Vérifié de bout en bout sur le
 
 Enrôlement abandonné (fenêtre expirée, navigateur fermé) : le compte existe, **non admin et sans facteur**, et le lien est
 consommé. Reprise : `flask user-invite --admin --account <identifiant>` ; le nouveau lien demande le **mot de passe actuel**
-du compte (conservé tel quel), puis mène au même enrôlement. Relancer sans `--account` créerait un second compte. Mot de
-passe perdu : `--reset-password` **n'existe pas** (non livré).
+du compte (conservé tel quel), puis mène au même enrôlement. Relancer sans `--account` créerait un second compte.
+
+**Mot de passe perdu** (compte créé, enrôlement jamais terminé) : ajouter `--reset-password` :
+
+```bash
+docker compose exec kml-viewer flask user-invite --admin --account recette-admin --reset-password
+```
+
+Le lien affiché (24 h, usage unique) ne demande plus le mot de passe actuel mais en fait **choisir un nouveau** (mêmes règles
+de politique), qui **remplace** l'ancien (les sessions du compte sont fermées, action tracée), puis mène à l'enrôlement du TOTP
+et à l'octroi du rôle admin comme à l'amorçage. Refusé si le compte est inconnu, désactivé, SSO, ou s'il a déjà un second
+facteur (utiliser alors `flask user-mfa-reset` ou `flask user-admin`) ; `--reset-password` sans `--account` est une erreur
+d'usage.
 
 ### Second facteur (TOTP) et codes de secours
 
@@ -287,7 +298,9 @@ passe perdu : `--reset-password` **n'existe pas** (non livré).
   n'est accepté qu'**une fois** (le même code rejoué est refusé : « Code invalide ou déjà utilisé »). 5 essais par connexion
   puis il faut ressaisir le mot de passe, et un limiteur par compte (`ratelimit.mfa_per_account`).
 - **Obligatoire pour les admins** (un admin à mot de passe a toujours un facteur actif, à tout instant) ; pour tous si
-  `auth.mfa_policy` vaut `all` : un compte sans facteur est alors conduit à l'enrôlement à sa prochaine connexion.
+  `auth.mfa_policy` vaut `all`. Passer le réglage à `all` est **refusé** (erreur 409 indiquant le nombre de comptes) tant qu'un
+  compte à mot de passe actif n'a pas de facteur ; un compte créé ensuite sans facteur est conduit à l'enrôlement à sa première
+  connexion.
 - **Codes de secours** : 10 codes de 16 caractères, générés avec le **premier** facteur, montrés une seule fois, à usage
   unique ; leur utilisation envoie une notification par e-mail. Ils servent à se connecter quand le TOTP est perdu mais ne
   comptent **pas** comme un facteur. Régénérables depuis le profil (les anciens sont invalidés).
@@ -311,7 +324,7 @@ Réservé aux admins (un admin à mot de passe doit avoir un second facteur acti
 |--------|---------|
 | Utilisateurs | liste (méthode d'authentification, adresse validée ou en attente, facteurs, crédits d'invitation) ; activer, promouvoir (refusé sans facteur pour un compte à mot de passe), crédits, lien de réinitialisation du mot de passe, réinitialisation du second facteur, fermeture des sessions, renvoi de la validation d'adresse, conversion SSO → mot de passe (mode `password` seulement), suppression ; le dernier admin actif ne peut être ni désactivé, ni rétrogradé, ni supprimé |
 | Invitations | toutes les invitations ; créer (note libre réservée aux admins), révoquer ; lien affiché une seule fois |
-| Fonctions bêta | état de chaque fonction : désactivée, liste d'utilisateurs, ou tous (aujourd'hui `route_builder`, dont l'écran n'est **pas livré**) |
+| Fonctions bêta | état de chaque fonction : désactivée, liste d'utilisateurs, ou tous (aujourd'hui `route_builder`, le [constructeur de traces](#constructeur-de-traces-bêta)), avec le diagnostic du moteur |
 | Réglages | valeur, source (base / env / défaut), surcharge, retour au défaut ; bornes validées, lot tout ou rien |
 | Clés API et e-mail | SMTP (hôte, port, sécurité, identifiant, expéditeur), secrets en écriture seule, e-mail de test (réponse « ok » ou « ko » sans détail) |
 | Journal | journal d'audit paginé et filtrable ; l'origine se lit sur le type d'acteur (compte, ligne de commande, système) |
@@ -369,7 +382,7 @@ OUTBOUND_ALLOWED_HOSTS=routing=graphhopper:8989,dem=opentopodata:5000,smtp=relay
 
 | Service | Ce qu'il autorise | Destination attendue |
 |---------|-------------------|----------------------|
-| `routing` | `routing.base_url` (moteur de routage ; service du compose livré, **constructeur de traces non livré**) | `hôte:port` |
+| `routing` | `routing.base_url` (moteur de routage, utilisé par le [constructeur de traces](#constructeur-de-traces-bêta)) | `hôte:port` |
 | `dem` | `DEM_URL` (service d'altitude) | `hôte:port` |
 | `smtp` | `smtp.host` + `smtp.port` (envoi d'e-mails) | `hôte:port` |
 | `tiles` | hôtes des fonds de carte (navigateur des utilisateurs) | `hôte` seul (https, 443) |
@@ -453,7 +466,8 @@ facultative qui donne sa valeur initiale.
 | `ratelimit.forgot_per_ip` (/ h / IP) | — | 10 | 10 – 100 |
 | `ratelimit.token_per_ip` (essais de jeton, / 15 min / IP) | — | 10 | 5 – 30 |
 | `map.basemaps`, `map.default_basemap`, `map.center_lat`, `map.center_lon`, `map.zoom` | — | 5 fonds embarqués, `osm`, 46,603354 / 1,888334, zoom 6 | ≤ 10 fonds ; lat −85 – 85, lon −180 – 180, zoom 1 – 22 |
-| `routing.*` (traces planifiées : délais, budgets, appels, points, distance, tolérances, recouvrement, stratégie de détours `s1` / `s2` / `hybrid` (défaut `hybrid`), essais de graine 0 – 2, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | voir le registre | bornées dans le registre ; **la fonction qui les lit (constructeur de traces) n'est pas livrée** |
+| `routing.*` (traces planifiées : délais, budgets, appels, points, distance, tolérances, recouvrement, stratégie de détours `s1` / `s2` / `hybrid` (défaut `hybrid`), essais de graine 0 – 2, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | voir [Constructeur de traces](#constructeur-de-traces-bêta) | bornées dans le registre |
+| `routing.coverage_bbox` (zone couverte : `[lon min, lat min, lon max, lat max]`) | — | `[1.35, 48.80, 6.45, 51.55]` | 4 nombres, lon −180 – 180, lat −90 – 90, min < max, côtés ≤ 2 000 km |
 
 Les seuils du limiteur s'appliquent à chaud, sans remettre les compteurs à zéro. Ne sont **pas**
 administrables (environnement ou code seulement) : tout ce qui figure dans « Variables d'amorçage et de
@@ -549,6 +563,7 @@ pas chargée.
 | `GET/POST/DELETE /api/invitations` | session complète ; comptes à mot de passe disponibles | Ses invitations (profil › Invitations), création, révocation |
 | `/api/admin/*`, `/admin` | admin | [Espace d'administration](#espace-dadministration-admin) |
 | `GET /api/map-config` | session | Fonds de carte autorisés, fond par défaut, cadrage |
+| `GET /api/route-builder/options`, `POST /api/route-builder/route`, `POST /api/route-builder/save` | session ; fonction bêta ouverte à l'utilisateur **et** moteur configuré (sinon 404) | [Constructeur de traces](#constructeur-de-traces-bêta) |
 
 Invitation : une adresse cible, validité `auth.invite_ttl_hours` (7 jours par défaut), lien montré **une seule fois** à
 l'émetteur (et envoyé par e-mail si le SMTP est configuré). Un admin invite sans limite ; un utilisateur actif, à adresse
@@ -558,9 +573,8 @@ n'ouvre jamais de session : il renvoie à la page de connexion (sauf l'amorçage
 
 ### Service de routage (GraphHopper)
 
-Le moteur de routage des futures traces planifiées est livré comme **service du compose**, mais l'application
-**ne l'appelle pas encore** : le constructeur de traces (TR5, TR6) n'est pas livré. Le déployer n'a d'effet visible
-qu'une fois ce constructeur livré ; il peut être préparé dès maintenant.
+Le moteur de routage du [constructeur de traces](#constructeur-de-traces-bêta) est livré comme **service du compose**. Sans lui
+(ou tant que `routing.base_url` est vide), le constructeur n'apparaît pas dans l'application.
 
 - **Service** : `graphhopper` (profil compose `routing`), image **construite par le projet** (`routing/Dockerfile` : jar de
   la release GraphHopper 11.0, SHA-256 vérifié, sur Temurin 21 épinglé par empreinte), conteneur durci (non-root uid 10002,
@@ -596,16 +610,87 @@ Activer le service avec Ansible : `COMPOSE_PROFILES=routing` (testé) plutôt qu
 `docker_compose_v2` (non confirmée), et seulement **après** le premier `update.sh`. Retour arrière manuel, suppression d'un
 graphe rejeté, cron : [docs/exploitation.md](docs/exploitation.md#service-de-routage).
 
+### Constructeur de traces (bêta)
+
+Créer sur la carte une **boucle planifiée** à partir de points de passage, une activité et une distance voulue, puis
+l'enregistrer dans la bibliothèque. Fonction **bêta**, fermée par défaut.
+
+**Activer** (admin) :
+
+1. Le moteur tourne ([Service de routage](#service-de-routage-graphhopper)) et son adresse est connue de l'appli :
+   `ROUTING_BASE_URL=http://graphhopper:8989` dans `.env`, ou le réglage `routing.base_url` (onglet Réglages) ; saisie dans
+   l'administration, l'adresse doit figurer dans `OUTBOUND_ALLOWED_HOSTS` (`routing=graphhopper:8989`).
+2. Onglet **Fonctions bêta** › « Créer une trace » : **Désactivée** (défaut), **Pour une liste de comptes** (cocher les
+   comptes) ou **Pour tous**. La liste est conservée quand on passe à « Pour tous » puis qu'on revient. Le diagnostic affiché
+   dit si le moteur est configuré et joignable, la date du dernier sondage et si le rectangle de couverture tient dans la zone
+   annoncée par le moteur.
+3. Le bouton n'existe **que si la fonction est ouverte à l'utilisateur ET le moteur configuré** (adresse autorisée) :
+   sinon il n'y a aucun élément dans la page et `/api/route-builder/*` répond 404. Le moteur est sondé au démarrage puis toutes
+   les `routing.health_interval_s` secondes (60 par défaut, 15 à 600) ; tant que le premier sondage n'a pas réussi, la
+   génération répond « Service de routage en cours de démarrage » (503).
+
+**Utiliser** (visualiseur › « Créer une trace ») :
+
+1. **Poser des points** : cliquer sur la carte (points numérotés, 1 à `routing.max_waypoints` = 50) ; glisser un point pour le
+   déplacer, clic droit pour le retirer ; « Annuler le dernier », « Rétablir » (100 états), « Effacer ». Le contour en
+   pointillé est la **zone couverte** ; un point hors de la zone est refusé (« Hors de la zone couverte »).
+2. **Choisir l'activité** : Course à pied (profil `foot`), Trail et Randonnée (`hike`), Vélo de route (`racingbike`), Gravel
+   (`gravel`, stocké comme vélo de route), VTT (`mtb`) ; la valeur par défaut suit l'activité par défaut du profil.
+3. **Distance voulue** (km, 1 à `routing.max_distance_km` = 300, pas de 0,5 dans le formulaire). **Obligatoire avec un seul
+   point** (boucle à distance cible autour de ce point) ; facultative avec plusieurs : sans distance, c'est la boucle la plus
+   directe qui passe par les points.
+4. **Terminer** : le serveur calcule une **boucle fermée sur le point 1**, qui passe par les points **dans l'ordre**, avec des
+   détours pour s'approcher de la distance voulue (tolérance `routing.distance_tolerance_pct` = ±15 %, stratégie
+   `routing.detour_strategy`, essais de graine `routing.seed_retries`). Le résultat s'affiche sur la carte avec sa distance, le
+   D+ quand il est connu et l'écart à la distance voulue. « Annuler » abandonne l'attente (le serveur termine dans son budget).
+5. **Autre proposition** (même points, nouvelle graine), **Modifier les points** (revenir aux points), ou donner un **nom**
+   puis **Enregistrer**. Un second « Enregistrer » du même résultat répond « Déjà enregistrée ». Un résultat non enregistré est
+   gardé 30 minutes côté serveur (20 par utilisateur au plus) : au-delà, « Résultat introuvable ou expiré » (404).
+6. **Bibliothèque** : la trace enregistrée porte le badge **Planifiée** ; le filtre « Nature des traces » propose **Toutes**
+   (défaut), **Réalisées**, **Planifiées**. Elle est **exclue des statistiques** : le tableau de bord (distances, durées,
+   records, compteurs) ne compte que les traces réalisées, et aucun effort sur tronçon ni meilleur temps n'est calculé pour une
+   trace planifiée. Ses points ne quittent pas le navigateur avant « Terminer » (conservés localement par compte, effacés à la
+   déconnexion).
+
+**Avertissements** (liste sous le résultat ; la trace est tout de même proposée) :
+
+| Message | Cause |
+|---------|-------|
+| « Le point N est confondu avec le point 1 : retiré. » | le dernier point est à côté du premier (la boucle se ferme déjà) |
+| « Distance minimale passant par tes points : X km. » | les points imposent déjà plus que la distance voulue (+ tolérance) |
+| « Distance obtenue : X km pour Y km voulus (±Z %). » | hors tolérance après les essais ; avec **2 points** s'ajoute « Ajoute un point de passage pour une boucle plus proche de la distance voulue. » |
+| « La trace emprunte plusieurs fois les mêmes voies. » | recouvrement au-dessus de `routing.overlap_warning_pct` (25 %), de `routing.overlap_warning_pct_2pts` (40 %) avec 2 points |
+| avertissements du moteur | repris tels quels |
+
+**Erreurs** (message fixe, jamais de coordonnée ni d'adresse du moteur) : 400 entrée invalide (points, activité, distance,
+« Un point est hors de la zone couverte », « Distance requise avec un seul point », « Points trop éloignés les uns des
+autres ») sans appel au moteur ; 422 « Le point N ne peut pas être approché » (numéro d'origine) ou « Aucun itinéraire trouvé » ;
+429 « Une génération est encore en cours » (une par utilisateur), « Service occupé » (`routing.max_concurrent` = 2 pour l'instance),
+« Trop de générations » (`routing.rate_limit_per_user` = 30 par heure et par utilisateur) ; 502 réponse invalide, 503 moteur
+indisponible, 504 délai dépassé (`routing.timeout_s`, budget `routing.total_budget_s`, appels `routing.max_calls`).
+
+**Zone couverte (`routing.coverage_bbox`)** : rectangle `[lon min, lat min, lon max, lat max]`, défaut
+`[1.35, 48.80, 6.45, 51.55]` (Hauts-de-France et Belgique). Le serveur refuse (400) toute demande dont un point en sort, avant
+tout appel au moteur ; le rectangle annoncé par le moteur (`/info`) est trop large pour servir de zone. Valeur refusée à
+l'écriture si les bornes sont incohérentes (min ≥ max, hors limites, côté > 2 000 km). **Limite actuelle** : le formulaire
+« Réglages » de l'administration ne sait pas saisir ce rectangle (il envoie du texte au lieu d'une liste) : l'écrire par
+l'API, par exemple
+`PATCH /api/admin/settings` avec `{"routing.coverage_bbox": [1.35, 48.8, 6.45, 51.55]}` ; `flask settings-reset
+routing.coverage_bbox` revient au défaut.
+
+**Altitude** : le moteur n'est **pas** interrogé pour l'altitude (aucun fournisseur d'altitude dans `routing/config.yml`) ; la
+trace générée n'a donc **ni profil d'altitude ni D+ avant l'enregistrement**. À l'enregistrement, la correction d'altitude par
+MNT est confiée à la tâche de fond (réveillée aussitôt) : elle ne s'applique que si `DEM_URL` est configurée et si les dalles
+couvrent la zone (`DEM_BBOX` à élargir aux Hauts-de-France et à la Belgique) ; sinon la trace reste sans altitude.
+
 ### Non livré
 
-Écrit à la date du 2026-11-24 d'après le code et [docs/specs/admin-space.md](docs/specs/admin-space.md) §14.
+Mis à jour le 2026-11-25 d'après le code et [docs/specs/admin-space.md](docs/specs/admin-space.md) §14.
 Ce tableau est la liste de référence ; chaque mention **non livré** ci-dessus y renvoie.
 
 | Fonction | Conséquence aujourd'hui |
 |----------|-------------------------|
 | **WebAuthn** (clés de sécurité, T12) | Seul le TOTP est proposé ; `WEBAUTHN_RP_ID` n'est pas lue |
-| **Constructeur de traces** (TR5 : routes, sondage de santé du moteur ; TR6 : interface « Créer une trace ») | Le service `graphhopper` se déploie mais rien ne l'appelle ; la fonction bêta `route_builder` s'active dans l'administration sans écran correspondant ; `routing.coverage_bbox` n'existe pas encore au registre ; la tâche de fond `routing_health` (sondage du moteur) n'existe pas |
-| `flask user-invite --reset-password` (reprise d'un amorçage dont le mot de passe est perdu) | Option absente de la CLI ; sortie : si un autre admin existe, il émet un lien de réinitialisation du mot de passe, puis `user-invite --admin --account` ; sinon, amorcer un **autre** compte (`user-invite --admin <adresse>`, autre identifiant) |
 | Mot de passe oublié de bout en bout sans SMTP | Sans SMTP aucun mail ne part : un admin génère un lien de réinitialisation et le transmet |
 
 ## 🐛 Dépannage
