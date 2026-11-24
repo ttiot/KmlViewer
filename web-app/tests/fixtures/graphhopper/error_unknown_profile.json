@@ -1,0 +1,1 @@
+{"message":"The requested profile 'nope' does not exist.\nAvailable profiles: [foot, hike, bike, racingbike, mtb, gravel]","hints":[{"message":"The requested profile 'nope' does not exist.\nAvailable profiles: [foot, hike, bike, racingbike, mtb, gravel]","details":"java.lang.IllegalArgumentException"}]}

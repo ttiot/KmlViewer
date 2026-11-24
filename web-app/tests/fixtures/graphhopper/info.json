@@ -1,0 +1,39 @@
+{
+ "bbox": [
+  -8.323083,
+  48.82898,
+  6.423934,
+  54.598956
+ ],
+ "profiles": [
+  {
+   "name": "foot"
+  },
+  {
+   "name": "hike"
+  },
+  {
+   "name": "bike"
+  },
+  {
+   "name": "racingbike"
+  },
+  {
+   "name": "mtb"
+  },
+  {
+   "name": "gravel"
+  }
+ ],
+ "version": "11.0",
+ "elevation": false,
+ "encoded_values": {
+  "country": [
+   "MISSING",
+   "AFG",
+   "AGO"
+  ]
+ },
+ "import_date": "2026-11-24T17:50:12Z",
+ "data_date": "1970-01-01T00:00:00Z"
+}
