@@ -17,6 +17,8 @@ import threading
 import traceback
 
 import pytest
+
+from tests.conftest import ensure_column
 from cryptography.fernet import Fernet, InvalidToken
 
 from app import create_app
@@ -357,7 +359,7 @@ def _three_secrets(conn):
     old = SecretsStore(KEY1)
     old.set(conn, 'routing.api_key', API_KEY, DEST, actor=ALICE)
     old.set(conn, 'smtp.password', PASSWORD, SMTP, actor=ALICE)
-    conn.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
+    ensure_column(conn, 'users', 'totp_secret', 'BLOB')
     conn.execute("INSERT INTO users (sub, username, totp_secret) VALUES ('a', 'a', ?)", (Fernet(KEY1.encode()).encrypt(b'JBSWY3DPEHPK3PXP'),))
     conn.commit()
     return 3
@@ -453,7 +455,7 @@ def test_a_secret_saved_during_the_rotation_is_not_overwritten_by_its_old_value(
 
 
 def test_a_totp_secret_enrolled_during_the_rotation_is_not_overwritten(conn, path):
-    conn.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
+    ensure_column(conn, 'users', 'totp_secret', 'BLOB')
     conn.execute("INSERT INTO users (sub, username, totp_secret) VALUES ('a', 'a', ?)", (Fernet(KEY1.encode()).encrypt(b'ANCIENSECRET234'),))
     conn.commit()
     new = SecretsStore(f'{KEY2},{KEY1}')

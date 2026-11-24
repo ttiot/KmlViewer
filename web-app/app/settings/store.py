@@ -59,6 +59,11 @@ class SettingsStore:
         self.secrets = None
 
     # -- lecture ---------------------------------------------------------------------------------
+    @property
+    def version(self) -> Optional[int]:
+        """Version des réglages en cache (EF-6.4, M10) : change à chaque écriture."""
+        return self._state.version
+
     def setting(self, key: str) -> Setting:
         try:
             return self._registry[key]

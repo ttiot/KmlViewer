@@ -138,6 +138,20 @@ class SecretsStore:
             raise SecretsUnavailable("SECRETS_KEY n'est pas renseignée")
         return self._fernet
 
+    # -- valeurs chiffrées hors table `secrets` (secrets TOTP, T11) ----------------------------------------------
+    def encrypt_value(self, plaintext: bytes) -> bytes:
+        """Chiffre avec la PREMIÈRE clé. Lève SecretsUnavailable sans clé."""
+        self._healthy()
+        return self._require().encrypt(plaintext)
+
+    def decrypt_value(self, token) -> bytes:
+        """Déchiffre avec n'importe quelle clé. Lève SecretUnavailable si la valeur est illisible (jamais le détail)."""
+        self._healthy()
+        try:
+            return self._require().decrypt(_as_bytes(token))
+        except InvalidToken:
+            raise SecretUnavailable() from None
+
     # -- écriture ------------------------------------------------------------------------------
     def set(self, conn, name: str, plaintext, bound_to: str, *, actor: audit.Actor, ip: Optional[str] = None) -> None:
         """Enregistre (ou remplace) un secret, lié à sa destination effective normalisée `bound_to`."""
@@ -302,10 +316,11 @@ class SecretsStore:
 
     def reset(self, conn, *, actor: audit.Actor) -> dict:
         """
-        Perte de toutes les clés (`flask secrets-reset`) : efface les secrets et les secrets TOTP. Les clés
-        WebAuthn, non chiffrées, restent. Le retrait du rôle aux admins `password` sans plus aucun facteur
-        (EF-5.7) dépend des facteurs (T11) : à brancher là.
+        Perte de toutes les clés (`flask secrets-reset`) : efface les secrets et les secrets TOTP. Les clés WebAuthn, non
+        chiffrées, restent. Les admins `password` qui n'ont PLUS aucun facteur sont rétrogradés (sessions fermées) et leurs codes
+        de secours invalidés (EF-5.7, CA-27) ; un admin qui garde une clé WebAuthn le reste. Peut laisser l'instance sans admin.
         """
+        from app.auth import factors, users
         with write_transaction(conn):
             counts = {'secrets': conn.execute("DELETE FROM secrets").rowcount, 'totp': 0}
             if _has_totp_column(conn):
@@ -313,8 +328,30 @@ class SecretsStore:
                     "UPDATE users SET totp_secret = NULL WHERE totp_secret IS NOT NULL").rowcount
                 if _has_columns(conn, 'totp_last_step', 'totp_enabled_at'):
                     conn.execute("UPDATE users SET totp_last_step = NULL, totp_enabled_at = NULL")
-            audit.record(conn, 'secret.reset', actor=actor, details={'values': counts['secrets'], 'accounts': counts['totp']})
+            demoted = []
+            for row in conn.execute("SELECT id FROM users WHERE is_admin = 1 AND auth_method = 'password'").fetchall():
+                if not factors.has_second_factor(conn, row['id']):
+                    demoted.append(row['id'])
+            for user_id in demoted:
+                conn.execute("UPDATE users SET is_admin = 0, session_token = ? WHERE id = ?",
+                             (users._new_session_token(), user_id))
+            if _has_table(conn, 'recovery_codes'):
+                # Les codes de secours ne valent que tant qu'un facteur reste (r6) : plus aucun facteur => codes invalidés
+                conn.execute("DELETE FROM recovery_codes WHERE user_id IN (SELECT id FROM users WHERE auth_method = 'password') "
+                             "AND user_id NOT IN (SELECT user_id FROM webauthn_credentials)"
+                             if _has_table(conn, 'webauthn_credentials') else
+                             "DELETE FROM recovery_codes")
+            if demoted:
+                counts['demoted'] = len(demoted)
+            details = {'values': counts['secrets'], 'accounts': counts['totp']}
+            if demoted:
+                details['demoted'] = len(demoted)
+            audit.record(conn, 'secret.reset', actor=actor, details=details)
         return counts
+
+
+def _has_table(conn, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
 
 
 def _has_columns(conn, *names) -> bool:

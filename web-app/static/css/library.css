@@ -432,3 +432,10 @@
         height: 380px;
     }
 }
+
+/* Administration (T15) */
+.admin-tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: 1rem; }
+.admin-tabs a { padding: .35rem .8rem; border-radius: .4rem; text-decoration: none; border: 1px solid var(--border, #ccc); }
+.admin-tabs a[aria-current="page"] { font-weight: 600; background: var(--accent-soft, rgba(0, 0, 0, .06)); }
+.credits-input { width: 6rem; }
+.auth-card .qr svg { max-width: 14rem; height: auto; }

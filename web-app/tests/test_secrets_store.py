@@ -4,6 +4,8 @@ import json
 import logging
 
 import pytest
+
+from tests.conftest import ensure_column
 from cryptography.fernet import Fernet
 
 from app import create_app, db as database
@@ -289,9 +291,9 @@ def test_rotation_stops_on_an_undecryptable_value_and_touches_nothing_more(conn)
 
 
 def _add_totp_columns(conn, key):
-    conn.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
-    conn.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER")
-    conn.execute("ALTER TABLE users ADD COLUMN totp_enabled_at TEXT")
+    ensure_column(conn, 'users', 'totp_secret', 'BLOB')
+    ensure_column(conn, 'users', 'totp_last_step', 'INTEGER')
+    ensure_column(conn, 'users', 'totp_enabled_at', 'TEXT')
     conn.execute("INSERT INTO users (sub, username, totp_secret, totp_last_step, totp_enabled_at) VALUES "
                  "('a', 'a', ?, 5, 'x'), ('b', 'b', NULL, NULL, NULL)", (Fernet(key.encode()).encrypt(b'JBSWY3DPEHPK3PXP'),))
     conn.commit()

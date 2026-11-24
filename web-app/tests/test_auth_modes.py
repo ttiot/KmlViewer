@@ -11,7 +11,7 @@ from app import create_app, db as database
 from app.auth import modes, passwords
 from app.auth.checks import normalize_public_url
 from app.config import TestingConfig
-from tests.conftest import OIDC_OVERRIDES
+from tests.conftest import OIDC_OVERRIDES, ensure_column
 
 KEY = Fernet.generate_key().decode()
 HOST = 'traces.example.com'
@@ -270,7 +270,7 @@ def test_navbar_shows_logout_and_admin_entries_outside_local_mode(tmp_path):
     client, kw = client_of(app)
     sign_in(client, uid)
     html = client.get('/dashboard', **kw).get_data(as_text=True)
-    assert 'action="/auth/logout"' in html and 'Utilisateurs' in html
+    assert 'action="/auth/logout"' in html and 'Administration' in html
 
 
 # --- Méthode d'authentification permise (M4, CA-29) -----------------------------------------------
@@ -298,7 +298,7 @@ def test_switching_from_oidc_to_password_invalidates_sso_sessions(tmp_path):
 
 
 def test_password_accounts_may_use_the_oidc_mode_but_a_local_account_may_not(tmp_path):
-    app = make(tmp_path, **OIDC_OVERRIDES, TRUSTED_HOSTS=[HOST])
+    app = make(tmp_path, **OIDC_OVERRIDES, TRUSTED_HOSTS=[HOST], SECRETS_KEY=KEY, PUBLIC_URL=f'https://{HOST}')   # EF-0.4 (Doc-6)
     client, kw = client_of(app)
     sign_in(client, add_user(app, 'pwd:2', 'password'))
     assert client.get('/api/activities', **kw).status_code == 200
@@ -373,8 +373,8 @@ def cli_app(tmp_path):
 
 def _add_totp(app, uid):
     conn = database.connect(app.config['DB_PATH'])
-    conn.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
-    conn.execute("ALTER TABLE users ADD COLUMN totp_enabled_at TEXT")
+    ensure_column(conn, 'users', 'totp_secret', 'BLOB')
+    ensure_column(conn, 'users', 'totp_enabled_at', 'TEXT')
     conn.execute("UPDATE users SET totp_secret = x'01', totp_enabled_at = '2026-01-01T00:00:00Z' WHERE id = ?", (uid,))
     conn.commit()
     conn.close()
@@ -459,7 +459,12 @@ def test_user_mfa_reset_does_not_warn_while_another_admin_remains(cli_app):
 def test_secrets_reset_announces_an_instance_left_without_admin(cli_app):
     result = cli_app.test_cli_runner().invoke(args=['secrets-reset', '--yes'])
     assert result.exit_code == 0 and 'aucun administrateur' in result.output
-    add_user(cli_app, 'pwd:13', 'password', admin=True)
+    uid = add_user(cli_app, 'pwd:13', 'password', admin=True)
+    conn = database.connect(cli_app.config['DB_PATH'])
+    conn.execute("CREATE TABLE IF NOT EXISTS webauthn_credentials (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)")
+    conn.execute("INSERT INTO webauthn_credentials (user_id) VALUES (?)", (uid,))        # une clé WebAuthn survit à la remise à zéro
+    conn.commit()
+    conn.close()
     assert 'aucun administrateur' not in cli_app.test_cli_runner().invoke(args=['secrets-reset', '--yes']).output
 
 
@@ -529,11 +534,11 @@ def test_has_second_factor_requires_a_confirmed_totp_or_a_webauthn_key(tmp_path)
     uid = add_user(app, 'pwd:f', 'password')
     conn = database.connect(app.config['DB_PATH'])
     assert not factors.has_second_factor(conn, uid)
-    conn.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
+    ensure_column(conn, 'users', 'totp_secret', 'BLOB')
     conn.execute("UPDATE users SET totp_secret = x'01' WHERE id = ?", (uid,))
     conn.commit()
     assert not factors.has_second_factor(conn, uid)                       # colonne de confirmation absente
-    conn.execute("ALTER TABLE users ADD COLUMN totp_enabled_at TEXT")
+    ensure_column(conn, 'users', 'totp_enabled_at', 'TEXT')
     conn.commit()
     assert not factors.has_second_factor(conn, uid)                       # secret enregistré, jamais validé
     conn.execute("UPDATE users SET totp_enabled_at = '2026-01-01T00:00:00Z' WHERE id = ?", (uid,))

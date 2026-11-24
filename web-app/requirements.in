@@ -10,6 +10,10 @@ argon2-cffi
 # Chiffrement des secrets au repos, Fernet (ADR-0003)
 cryptography
 
+# Second facteur : TOTP (RFC 6238) et QR code SVG (ADR-0004)
+pyotp
+segno
+
 # Authentification OIDC
 Authlib
 joserfc

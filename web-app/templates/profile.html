@@ -92,7 +92,77 @@
         <button type="reset" class="btn btn-outline-secondary">Annuler</button>
     </div>
 </form>
+
+{% if current_user['auth_method'] == 'password' %}
+<div id="securityRoot" class="profile-form">
+    <div id="secOneShot" class="panel d-none" role="status" aria-live="polite">
+        <p class="mb-1" id="secOneShotText"></p>
+        <pre id="secOneShotValue" class="mb-2"></pre>
+        <button type="button" class="btn btn-secondary" id="secOneShotCopy">Copier</button>
+        <button type="button" class="btn btn-link" id="secOneShotClose">J'ai noté</button>
+    </div>
+    <section class="panel" aria-labelledby="p-mdp">
+        <h2 class="eyebrow" id="p-mdp">Mot de passe</h2>
+        <form id="passwordForm" class="field-grid" novalidate>
+            <div class="field"><label for="pwCurrent">Mot de passe actuel</label>
+                <input id="pwCurrent" type="password" class="form-control" autocomplete="current-password" maxlength="128"></div>
+            <div class="field"><label for="pwNew">Nouveau mot de passe</label>
+                <input id="pwNew" type="password" class="form-control" autocomplete="new-password" minlength="12" maxlength="128"></div>
+            <div class="field"><label for="pwCode">Code du second facteur (si activé)</label>
+                <input id="pwCode" class="form-control" autocomplete="one-time-code" maxlength="32"></div>
+            <button type="submit" class="btn btn-primary">Changer</button>
+        </form>
+    </section>
+    <section class="panel" aria-labelledby="p-adresse">
+        <h2 class="eyebrow" id="p-adresse">Adresse e-mail</h2>
+        <p class="hint">Actuelle : {{ current_user['email'] or '—' }}{% if current_user['pending_email'] %} · en attente de validation : {{ current_user['pending_email'] }}{% endif %}</p>
+        <form id="emailForm" class="field-grid" novalidate>
+            <div class="field"><label for="emNew">Nouvelle adresse</label><input id="emNew" type="email" class="form-control" maxlength="254"></div>
+            <div class="field"><label for="emPassword">Mot de passe actuel</label>
+                <input id="emPassword" type="password" class="form-control" autocomplete="current-password" maxlength="128"></div>
+            <div class="field"><label for="emCode">Code du second facteur (si activé)</label>
+                <input id="emCode" class="form-control" autocomplete="one-time-code" maxlength="32"></div>
+            <button type="submit" class="btn btn-primary">Demander le changement</button>
+        </form>
+    </section>
+    <section class="panel" aria-labelledby="p-mfa">
+        <h2 class="eyebrow" id="p-mfa">Second facteur</h2>
+        <p id="mfaState" class="hint" aria-live="polite"></p>
+        <form id="mfaForm" class="field-grid" novalidate>
+            <div class="field"><label for="mfaPassword">Mot de passe actuel</label>
+                <input id="mfaPassword" type="password" class="form-control" autocomplete="current-password" maxlength="128"></div>
+            <div class="field"><label for="mfaCode">Code TOTP (pour retirer ou régénérer)</label>
+                <input id="mfaCode" class="form-control" autocomplete="one-time-code" maxlength="32"></div>
+            <div class="button-row">
+                <button type="button" class="btn btn-primary" id="mfaSetup">Activer un code TOTP</button>
+                <button type="button" class="btn btn-outline-secondary" id="mfaRegen">Nouveaux codes de secours</button>
+                <button type="button" class="btn btn-outline-danger" id="mfaRemove">Retirer le TOTP</button>
+            </div>
+        </form>
+        <div id="mfaEnroll" hidden>
+            <div id="mfaQr" class="qr" aria-label="QR code d'enrôlement"></div>
+            <p>Clé : <code id="mfaSecret"></code></p>
+            <form id="mfaConfirmForm" class="field-grid" novalidate>
+                <div class="field"><label for="mfaConfirmCode">Code à 6 chiffres</label>
+                    <input id="mfaConfirmCode" class="form-control" inputmode="numeric" autocomplete="one-time-code" maxlength="8"></div>
+                <button type="submit" class="btn btn-primary">Confirmer</button>
+            </form>
+        </div>
+    </section>
+    <section class="panel" aria-labelledby="p-inv">
+        <h2 class="eyebrow" id="p-inv">Invitations</h2>
+        <p class="hint" id="invCredits"></p>
+        <form id="invForm" class="field-grid" novalidate hidden>
+            <div class="field"><label for="invEmail">Adresse de la personne invitée</label><input id="invEmail" type="email" class="form-control" maxlength="254"></div>
+            <p class="hint" id="invWarning">Une invitation consomme un crédit, non rendu si elle expire ou est révoquée.</p>
+            <button type="submit" class="btn btn-primary">Inviter</button>
+        </form>
+        <ul id="invList" class="list-unstyled mb-0"></ul>
+    </section>
+</div>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/profile.js') }}"></script>
+{% if current_user['auth_method'] == 'password' %}<script src="{{ url_for('static', filename='js/profile-security.js') }}"></script>{% endif %}
 {% endblock %}

@@ -60,7 +60,9 @@ def create_app(config_class=Config, overrides=None):
     from app.settings import init_settings
     store = init_settings(app)
     from app.mailer import init_mailer
-    init_mailer(app)
+    mailer = init_mailer(app)
+    if app.config.get('AUTH_MODE') == 'password' and not mailer.has_settings:
+        app.logger.warning("SMTP non configuré : les adresses e-mail ne peuvent pas être validées (EF-0.2)")
     from app.auth.pending import PendingStore
     app.extensions['pending'] = PendingStore()
     from app.ratelimit import Limiters

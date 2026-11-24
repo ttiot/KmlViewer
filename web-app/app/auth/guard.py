@@ -76,7 +76,7 @@ def _session_user():
             user = None
         # M4 : un compte dont la méthode n'est pas permise par le mode courant n'a pas de session (bascule de
         # mode : un cookie émis avant ne vaut plus rien)
-        if user is not None and not modes.method_permitted(modes.auth_mode(), user['auth_method']):
+        if user is not None and not modes.method_permitted(modes.auth_mode(), user['auth_method'], current_app.config):
             user = None
     if user is None:
         session.clear()

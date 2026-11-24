@@ -1,0 +1,65 @@
+{% extends 'layout.html' %}
+{% block title %}Administration · KmlViewer{% endblock %}
+{% block content %}
+<div class="page-header is-baseline">
+    <h1>Administration</h1>
+    <p class="page-count" id="adminCount" aria-live="polite"></p>
+    {% if admin_role %}<span class="badge-soft is-info">Rôle admin piloté par l'IdP : {{ admin_role }}</span>{% endif %}
+</div>
+<div id="collisionBanner" class="alert alert-warning d-none" role="alert"></div>
+<nav class="admin-tabs" aria-label="Sections d'administration" id="adminTabs">
+    <a href="#utilisateurs" data-tab="utilisateurs">Utilisateurs</a>
+    <a href="#invitations" data-tab="invitations">Invitations</a>
+    <a href="#fonctions" data-tab="fonctions">Fonctions bêta</a>
+    <a href="#reglages" data-tab="reglages">Réglages</a>
+    <a href="#secrets" data-tab="secrets">Clés API et e-mail</a>
+    <a href="#journal" data-tab="journal">Journal</a>
+</nav>
+<div id="oneShot" class="panel d-none" role="status" aria-live="polite">
+    <p class="mb-1" id="oneShotText"></p>
+    <input class="form-control mono" id="oneShotValue" readonly aria-label="Valeur à copier">
+    <button type="button" class="btn btn-secondary mt-2" id="oneShotCopy">Copier</button>
+    <button type="button" class="btn btn-link mt-2" id="oneShotClose">Fermer</button>
+</div>
+<section class="panel" id="tab-utilisateurs" data-panel="utilisateurs" aria-label="Utilisateurs">
+    <div class="table-responsive"><table class="table align-middle mb-0 users-table">
+        <thead><tr><th>Compte</th><th>Méthode</th><th>Adresse</th><th>Facteurs</th><th class="text-end">Crédits</th>
+            <th class="text-center">Actif</th><th class="text-center">Admin</th><th>Actions</th></tr></thead>
+        <tbody id="usersBody"></tbody></table></div>
+</section>
+<section class="panel" id="tab-invitations" data-panel="invitations" aria-label="Invitations" hidden>
+    <form id="inviteForm" class="field-grid" novalidate>
+        <div class="field"><label for="inviteEmail">Adresse</label><input id="inviteEmail" class="form-control" type="email" maxlength="254"></div>
+        <div class="field"><label for="inviteNote">Note</label><input id="inviteNote" class="form-control" maxlength="200"></div>
+        <div class="field"><label for="inviteCredits">Crédits offerts</label>
+            <input id="inviteCredits" class="form-control" type="number" min="0" max="1000" value="0"></div>
+        <button type="submit" class="btn btn-primary">Inviter</button>
+    </form>
+    <div class="table-responsive"><table class="table mb-0"><thead><tr><th>Adresse</th><th>Statut</th><th>Créée</th><th>Expire</th><th></th></tr></thead>
+        <tbody id="invitesBody"></tbody></table></div>
+</section>
+<section class="panel" id="tab-fonctions" data-panel="fonctions" aria-label="Fonctions bêta" hidden><div id="featuresBox"></div></section>
+<section class="panel" id="tab-reglages" data-panel="reglages" aria-label="Réglages" hidden>
+    <p class="hint" id="settingsVersion"></p><form id="settingsForm" novalidate><div id="settingsBox"></div>
+        <button type="submit" class="btn btn-primary">Enregistrer</button></form>
+</section>
+<section class="panel" id="tab-secrets" data-panel="secrets" aria-label="Clés API et e-mail" hidden>
+    <div id="secretsBox"></div>
+    <button type="button" class="btn btn-secondary" id="mailTest">Envoyer un e-mail de test</button>
+    <span id="mailTestResult" role="status"></span>
+</section>
+<section class="panel" id="tab-journal" data-panel="journal" aria-label="Journal" hidden>
+    <form id="auditForm" class="field-grid" novalidate>
+        <div class="field"><label for="auditAction">Action</label><input id="auditAction" class="form-control" placeholder="user.create ou secret."></div>
+        <div class="field"><label for="auditActor">Acteur</label>
+            <select id="auditActor" class="form-select"><option value="">Tous</option><option>user</option><option>cli</option><option>system</option></select></div>
+        <button type="submit" class="btn btn-secondary">Filtrer</button>
+    </form>
+    <div class="table-responsive"><table class="table mb-0"><thead><tr><th>Date</th><th>Acteur</th><th>Action</th><th>Cible</th><th>Détails</th></tr></thead>
+        <tbody id="auditBody"></tbody></table></div>
+    <button type="button" class="btn btn-link" id="auditMore" hidden>Plus ancien</button>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

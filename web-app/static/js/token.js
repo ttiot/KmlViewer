@@ -48,10 +48,15 @@
             return;
         }
         const needsUsername = data.form === 'choose_credentials';
+        const confirming = data.form === 'confirm_password';
         usernameRow.classList.toggle('d-none', !needsUsername);
         passwordRow.classList.remove('d-none');
-        show(needsUsername ? 'Crée ton compte' : 'Nouveau mot de passe',
-             needsUsername ? 'Choisis un identifiant et un mot de passe.' : 'Choisis un nouveau mot de passe.');
+        document.getElementById('tokenPassword').autocomplete = confirming ? 'current-password' : 'new-password';
+        if (confirming) { show('Reprise de l’amorçage', 'Saisis le mot de passe actuel de ton compte.'); }
+        else {
+            show(needsUsername ? 'Crée ton compte' : 'Nouveau mot de passe',
+                 needsUsername ? 'Choisis un identifiant et un mot de passe.' : 'Choisis un nouveau mot de passe.');
+        }
         form.classList.remove('d-none');
         form.dataset.kind = data.form;
     }
@@ -61,9 +66,10 @@
         const { status, data } = await post('/auth/token/consume', { token, ...fields });
         submit.disabled = false;
         if (status === 200 && data.success) {
-            show('C’est fait', 'Tu peux maintenant te connecter.');
+            const next = typeof data.next === 'string' && data.next.startsWith('/') ? data.next : '/auth/password/login';
+            show('C’est fait', next.includes('enroll') ? 'Il reste à configurer ton second facteur.' : 'Tu peux maintenant te connecter.');
             form.classList.add('d-none');
-            window.setTimeout(() => window.location.assign(data.next || '/auth/login'), 1200);
+            window.setTimeout(() => window.location.assign(next), 1200);
             return;
         }
         if (data.login_required) { show('Connexion nécessaire', data.error); form.classList.add('d-none'); return; }

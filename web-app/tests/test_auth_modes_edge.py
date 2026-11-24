@@ -348,7 +348,9 @@ def test_session_validity_follows_the_target_mode_for_every_account_kind(tmp_pat
     for method, uid in accounts.items():
         client = client_of(second)
         sign_in(client, uid)
-        expected = {'password': {'password'}, 'oidc': {'oidc', 'password'}}[target]
+        # Doc-6 : en mode oidc, les comptes password n'ont de session que si les comptes à mot de passe sont disponibles (EF-0.4)
+        oidc_methods = {'oidc', 'password'} if second.config['PASSWORD_ACCOUNTS'] else {'oidc'}
+        expected = {'password': {'password'}, 'oidc': oidc_methods}[target]
         status = get(client, '/api/activities').status_code
         assert (status == 200) == (method in expected), (source, target, method, status)
 

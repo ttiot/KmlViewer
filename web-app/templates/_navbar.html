@@ -15,7 +15,7 @@
         {{ nav_link('dashboard', 'main.dashboard', 'Tableau de bord') }}
         {{ nav_link('segments', 'main.segments', 'Tronçons') }}
         {% if current_user and current_user['is_admin'] and auth_mode != 'local' %}
-        {{ nav_link('users', 'main.users', 'Utilisateurs') }}
+        {{ nav_link('admin', 'main.admin', 'Administration') }}
         {% endif %}
     </nav>
     <div class="app-navbar-tools">

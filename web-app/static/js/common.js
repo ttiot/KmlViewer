@@ -122,7 +122,28 @@ const App = (() => {
         return labels;
     }
 
-    return { request, api, el, icon, notify, number, duration, chrono, distance, speed, date, dateTime,
+    // Configuration de la carte (fonds AUTORISÉS, fond par défaut, cadrage : admin-space R1, T16). Lue une fois par page ; en cas
+    // d'échec le visualiseur garde ses fonds intégrés.
+    let mapConfigPromise = null;
+    function mapConfig() {
+        if (!mapConfigPromise) {
+            mapConfigPromise = api('/api/map-config').catch(() => null);
+        }
+        return mapConfigPromise;
+    }
+
+    // Texte seulement : Leaflet insère l'attribution en HTML, on neutralise donc tout caractère de balisage (T16-1, défense en
+    // profondeur : le serveur refuse déjà < > & " ' à l'écriture).
+    function plainText(text) {
+        return String(text ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    }
+
+    function basemapLayer(basemap) {
+        return L.tileLayer(basemap.url, { maxZoom: basemap.max_zoom, subdomains: basemap.subdomains || 'abc',
+            attribution: plainText(basemap.attribution) });
+    }
+
+    return { request, api, el, icon, notify, mapConfig, basemapLayer, plainText, number, duration, chrono, distance, speed, date, dateTime,
              setFigure, durationParts, typeLabels };
 })();
 

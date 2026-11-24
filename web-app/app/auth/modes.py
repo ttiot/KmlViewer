@@ -5,7 +5,7 @@ présence d'`OIDC_ISSUER` ne le décide jamais (B1 : le mode `password` n'a pas 
 déduirait de là donnerait l'admin à tout visiteur).
 """
 
-from flask import current_app
+from flask import current_app, has_app_context
 
 MODES = ('oidc', 'local', 'password')
 
@@ -25,8 +25,13 @@ def auth_mode(config=None) -> str:
     return mode
 
 
-def method_permitted(mode: str, auth_method) -> bool:
-    """Vrai si un compte de cette méthode peut avoir une session dans ce mode."""
+def method_permitted(mode: str, auth_method, config=None) -> bool:
+    """
+    Vrai si un compte de cette méthode peut avoir une session dans ce mode. En mode `oidc`, les comptes `password` n'en ont une
+    que si les comptes à mot de passe sont disponibles (EF-0.4, Doc-6) : désactivés, leurs sessions existantes sont refusées.
+    """
+    if mode == 'oidc' and auth_method == 'password' and (config is not None or has_app_context()):
+        return password_accounts_available(config)
     return auth_method in PERMITTED_METHODS.get(mode, frozenset())
 
 

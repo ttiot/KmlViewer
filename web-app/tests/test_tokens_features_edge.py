@@ -14,6 +14,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from tests.conftest import ensure_column
 from cryptography.fernet import Fernet
 from flask import jsonify, render_template_string
 
@@ -220,7 +222,7 @@ def test_a_well_formed_but_unknown_token_costs_one_read_exactly_like_an_expired_
 
 
 def test_inspect_never_exposes_anything_but_a_form_name_for_every_kind(conn):
-    allowed = {'choose_credentials', 'set_password', 'verify_email'}
+    allowed = {'choose_credentials', 'confirm_password', 'set_password', 'verify_email'}
     for kind in tokens.KINDS:
         new = tokens.create(conn, kind, actor=CLI, email='cible@example.org', note='note secrète', initial_credits=7,
                             created_by=1, target_user_id=1, is_admin_grant=(kind == 'bootstrap'))
@@ -444,8 +446,8 @@ def test_user_invite_refuses_account_and_a_pending_unconfirmed_totp_is_not_a_fac
     """CA-52 + T8-2 : un TOTP enrôlé mais non confirmé n'empêche pas de reprendre l'amorçage."""
     uid = add_account(app, 'pending')
     c = database.connect(app.config['DB_PATH'])
-    c.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
-    c.execute("ALTER TABLE users ADD COLUMN totp_enabled_at TEXT")
+    ensure_column(c, 'users', 'totp_secret', 'BLOB')
+    ensure_column(c, 'users', 'totp_enabled_at', 'TEXT')
     c.execute("UPDATE users SET totp_secret = x'01', totp_enabled_at = NULL WHERE id = ?", (uid,))
     c.commit()
     c.close()
@@ -690,7 +692,7 @@ def test_t8_1_every_admin_route_refuses_non_admins_and_factorless_password_admin
     pending = add_account(app, 'pwd:pending', admin=True, token='pending')
     c = database.connect(app.config['DB_PATH'])
     for column in ('totp_secret BLOB', 'totp_enabled_at TEXT'):
-        c.execute(f"ALTER TABLE users ADD COLUMN {column}")
+        c.execute(f"ALTER TABLE users ADD COLUMN {column}") if column.split()[0] not in {r[1] for r in c.execute('PRAGMA table_info(users)')} else None
     c.execute("UPDATE users SET totp_secret = x'01', totp_enabled_at = NULL WHERE id = ?", (pending,))        # enrôlé, non confirmé
     c.commit()
     c.close()

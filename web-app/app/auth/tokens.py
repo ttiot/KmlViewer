@@ -38,7 +38,8 @@ DEFAULT_TTL = {
 MIN_TTL, MAX_TTL = timedelta(hours=1), timedelta(days=30)          # EF-6.5 : validité des invitations 1 h – 30 j
 # Type de formulaire révélé par `inspect` (jamais l'adresse, l'émetteur, la note ni l'échéance)
 FORM_FOR_KIND = {'invite': 'choose_credentials', 'bootstrap': 'choose_credentials', 'reset': 'set_password',
-                 'set_password': 'set_password', 'verify_email': 'verify_email'}
+                 'set_password': 'choose_credentials',      # conversion SSO : l'identifiant est choisi (EF-0.5)
+                 'verify_email': 'verify_email'}
 MAX_NOTE = 200
 MAX_CREDITS = 1000
 _TOKEN_SHAPE = re.compile(r'[A-Za-z0-9_-]{43}')                  # token_urlsafe(32) : 43 caractères
@@ -141,15 +142,19 @@ def create(conn, kind: str, *, actor: audit.Actor, created_by: Optional[int] = N
 
 def inspect(conn, token, now: Optional[datetime] = None) -> Optional[str]:
     """
-    Type de formulaire à afficher (`choose_credentials`, `set_password`, `verify_email`), ou None. None est LA
+    Type de formulaire à afficher (`choose_credentials`, `confirm_password`, `set_password`, `verify_email`), ou None. None est LA
     réponse pour tout jeton inconnu, mal formé, expiré, utilisé ou révoqué : rien ne les distingue. Ne consomme rien
     et ne révèle ni adresse, ni émetteur, ni note, ni échéance.
     """
     digest = hash_token(token)
     row = None if digest is None else conn.execute(
-        "SELECT kind FROM auth_tokens WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
-        (digest, _stamp(now))).fetchone()
-    return FORM_FOR_KIND[row['kind']] if row else None
+        "SELECT kind, target_user_id FROM auth_tokens WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL "
+        "AND expires_at > ?", (digest, _stamp(now))).fetchone()
+    if row is None:
+        return None
+    if row['kind'] == 'bootstrap' and row['target_user_id'] is not None:
+        return 'confirm_password'                   # reprise d'amorçage d'un compte existant (EF-0.3b)
+    return FORM_FOR_KIND[row['kind']]
 
 
 def peek(conn, token, now: Optional[datetime] = None):

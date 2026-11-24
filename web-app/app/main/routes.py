@@ -45,9 +45,9 @@ def profile():
                            nb_activities=activity_store.count_for_user(db, user_id))
 
 
+@bp.route('/admin')
 @bp.route('/admin/users')
 @admin_required
-def users():
-    """Administration des comptes."""
-    return render_template('users.html', active_page='users',
-                           admin_role=current_app.config.get('OIDC_ADMIN_ROLE'))
+def admin():
+    """Administration (onglets repérés par l'ancre : utilisateurs, invitations, fonctions bêta, réglages, secrets, journal)."""
+    return render_template('admin.html', active_page='admin', admin_role=current_app.config.get('OIDC_ADMIN_ROLE'))

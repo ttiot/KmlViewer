@@ -14,14 +14,17 @@ import secrets
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 STEPS = ('mfa', 'enroll')
+COOKIE_KEY = 'pending_id'      # seule clé de session de l'état intermédiaire : un identifiant opaque, jamais le compte
 TTL_S = 300
+ENROLL_TTL_S = 900          # P-T11-2 : installer une application et scanner prend plus que l'étape `mfa`
 MAX_TRIES = 5
 MAX_ENTRIES = 10_000
 CHALLENGE_TTL_S = 120
+PROFILE_ENROLL_TTL_S = 600      # P-T11-1 : enrôlement depuis le profil
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,7 @@ class Pending:
     next_url: str = '/'
     binding: tuple = ()             # (session_token, password_changed_at) à la création : tout changement invalide
     admin_grant: bool = False       # octroi d'admin porté par un amorçage (EF-0.3) : appliqué par l'enrôlement (T11)
+    extra: dict = field(default_factory=dict, compare=False)     # données en MÉMOIRE (secret TOTP en cours d'enrôlement, P-T11-1)
 
 
 class PendingStore:
@@ -42,16 +46,19 @@ class PendingStore:
         self.ttl_s, self.max_tries, self.max_entries, self._clock = ttl_s, max_tries, max_entries, clock
         self._states: OrderedDict = OrderedDict()
         self._challenges: OrderedDict = OrderedDict()
+        self._enrollments: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
 
     # -- connexions en cours -----------------------------------------------------------------------------------
-    def create(self, user_id: int, step: str, *, next_url: str = '/', admin_grant: bool = False, binding: tuple = ()) -> str:
+    def create(self, user_id: int, step: str, *, next_url: str = '/', admin_grant: bool = False, binding: tuple = (),
+               ttl_s: Optional[float] = None) -> str:
         """Nouvel état ; retourne son identifiant opaque (à poser seul dans le cookie)."""
         if step not in STEPS:
             raise ValueError("Étape inconnue")
         pid = secrets.token_urlsafe(32)
         with self._lock:
-            self._states[pid] = Pending(pid, int(user_id), step, self._clock() + self.ttl_s, 0, next_url, tuple(binding),
+            lifetime = ttl_s if ttl_s is not None else (ENROLL_TTL_S if step == 'enroll' else self.ttl_s)
+            self._states[pid] = Pending(pid, int(user_id), step, self._clock() + lifetime, 0, next_url, tuple(binding),
                                          bool(admin_grant))
             self._evict(self._states)
         return pid
@@ -123,6 +130,26 @@ class PendingStore:
             if entry is None or entry[1] <= self._clock():
                 return None
             return entry[0]
+
+    # -- enrôlement depuis le profil (P-T11-1) ------------------------------------------------------------------------
+    def put_enrollment(self, owner: str, secret: str) -> None:
+        """Secret TOTP en cours d'enrôlement depuis le profil, lié à `owner` (compte + jeton de session), 10 min, en mémoire."""
+        with self._lock:
+            self._enrollments[owner] = (secret, self._clock() + PROFILE_ENROLL_TTL_S)
+            self._enrollments.move_to_end(owner)
+            self._evict(self._enrollments)
+
+    def get_enrollment(self, owner: str) -> Optional[str]:
+        with self._lock:
+            entry = self._enrollments.get(owner)
+            if entry is None or entry[1] <= self._clock():
+                self._enrollments.pop(owner, None)
+                return None
+            return entry[0]
+
+    def drop_enrollment(self, owner: str) -> None:
+        with self._lock:
+            self._enrollments.pop(owner, None)
 
     def _evict(self, table: OrderedDict) -> None:
         while len(table) > self.max_entries:

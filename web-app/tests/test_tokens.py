@@ -7,6 +7,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from tests.conftest import ensure_column
 from cryptography.fernet import Fernet
 
 from app import create_app, db as database
@@ -121,7 +123,7 @@ def test_creation_is_audited_without_the_token_and_with_the_actor(conn):
 
 def test_inspect_gives_only_the_form_type(conn):
     expected = {'invite': 'choose_credentials', 'bootstrap': 'choose_credentials', 'reset': 'set_password',
-                'set_password': 'set_password', 'verify_email': 'verify_email'}
+                'set_password': 'choose_credentials', 'verify_email': 'verify_email'}
     for kind, form in expected.items():
         new = tokens.create(conn, kind, actor=CLI, email='secret-address@example.org', note='note privée')
         assert tokens.inspect(conn, new.token) == form
@@ -334,8 +336,8 @@ def test_user_invite_account_refuses_sso_accounts_accounts_with_a_factor_and_amb
     add_account(app, 'idp-1', method='oidc')
     with_factor = add_account(app, 'pwd:3')
     c = database.connect(app.config['DB_PATH'])
-    c.execute("ALTER TABLE users ADD COLUMN totp_secret BLOB")
-    c.execute("ALTER TABLE users ADD COLUMN totp_enabled_at TEXT")
+    ensure_column(c, 'users', 'totp_secret', 'BLOB')
+    ensure_column(c, 'users', 'totp_enabled_at', 'TEXT')
     c.execute("UPDATE users SET totp_secret = x'01', totp_enabled_at = '2026-01-01T00:00:00Z' WHERE id = ?", (with_factor,))
     c.commit()
     c.close()

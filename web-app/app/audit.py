@@ -240,7 +240,8 @@ def _utc_stamp(value: Optional[str], ceil: bool = False) -> Optional[str]:
 
 def list_entries(conn, *, action: Optional[str] = None, actor_type: Optional[str] = None,
                  actor_id: Optional[int] = None, since: Optional[str] = None, until: Optional[str] = None,
-                 before_id: Optional[int] = None, limit: int = 50) -> list:
+                 before_id: Optional[int] = None, limit: int = 50, target_type: Optional[str] = None,
+                 target_id=None) -> list:
     """
     Consultation (lecture seule), de la plus récente à la plus ancienne. Pagination par curseur :
     passer le plus petit `id` reçu comme `before_id`. `action` : égalité, ou préfixe si elle finit
@@ -256,7 +257,8 @@ def list_entries(conn, *, action: Optional[str] = None, actor_type: Optional[str
             params.append(action)
     if actor_type is not None and actor_type not in ACTOR_TYPES:
         raise ValueError(f"Type d'acteur inconnu : {actor_type!r}")
-    filters = (('actor_type', '=', actor_type), ('actor_id', '=', actor_id), ('at', '>=', _utc_stamp(since)),
+    filters = (('actor_type', '=', actor_type), ('actor_id', '=', actor_id), ('target_type', '=', target_type),
+               ('target_id', '=', None if target_id is None else str(target_id)), ('at', '>=', _utc_stamp(since)),
                ('at', '<', _utc_stamp(until, ceil=True)), ('id', '<', before_id))
     for column, op, value in filters:
         if value is not None:

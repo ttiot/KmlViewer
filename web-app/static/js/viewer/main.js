@@ -3,8 +3,9 @@
 // écouteurs sont posés ici, aucun dans le HTML.
 'use strict';
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initMap();
+    await applyMapConfig();
     setupMapSettings();
     setupPanel();
     setupOpening();

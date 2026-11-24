@@ -17,3 +17,6 @@ from . import users_routes  # noqa: E402,F401
 from . import profile_routes  # noqa: E402,F401
 from . import invitations_routes  # noqa: E402,F401
 from . import map_routes  # noqa: E402,F401
+from . import mfa_routes  # noqa: E402,F401
+from . import admin_routes  # noqa: E402,F401
+from . import account_routes  # noqa: E402,F401

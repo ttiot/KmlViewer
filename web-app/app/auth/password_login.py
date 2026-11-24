@@ -8,7 +8,7 @@ Connexion par mot de passe en deux étapes et mot de passe oublié (admin-space 
     est absent : même code, même corps, durée homogène ;
   - succès : `session.clear()` (pas de fixation), puis soit la session complète (compte sans second facteur que la politique
     n'impose pas), soit un état `mfa_pending` côté SERVEUR (étape `mfa` ou `enroll`) dont le cookie ne porte que l'identifiant.
-Étape 2 (`/auth/password/mfa*`, `/enroll/*`) : avec un état `mfa_pending` valide seulement ; les facteurs arrivent avec T11, T12.
+Étape 2 (`/auth/password/mfa`, `/enroll`) : voir `mfa_login.py` (état `mfa_pending` valide seulement).
 Mot de passe oublié, `POST /auth/password/forgot` : TOUJOURS la même réponse, rendue sans attendre ; tout le travail (recherche,
 jeton, message) part dans la file d'envoi, jamais dans le thread de la requête (CA-15).
 """
@@ -17,11 +17,12 @@ import logging
 import time
 from datetime import timedelta
 
-from flask import current_app, jsonify, redirect, render_template, request, session, url_for
+from flask import current_app, jsonify, render_template, request, session, url_for
 
 from app import audit
-from app.auth import bp, csrf, emails, factors, modes, passwords, tokens, users
+from app.auth import bodies, bp, csrf, emails, factors, modes, passwords, tokens, users
 from app.auth.guard import safe_next
+from app.auth.pending import COOKIE_KEY
 from app.db import get_db
 
 from app.outbound import RefusalLog
@@ -30,12 +31,11 @@ from app.settings import effective
 
 logger = logging.getLogger(__name__)
 
-PENDING_COOKIE_KEY = 'pending_id'
+PENDING_COOKIE_KEY = COOKIE_KEY
 GENERIC_FAILURE = {'success': False, 'error': 'Identifiant ou mot de passe incorrect.'}
 LIMITED = {'success': False, 'error': 'Trop de tentatives, réessaie plus tard.'}
 FORGOT_RESPONSE = {'success': True, 'message': "Si un compte correspond, un e-mail vient de lui être envoyé."}
 RESET_TTL_HOURS = 1
-MAX_FIELD = 1024
 
 
 def _guard():
@@ -45,15 +45,11 @@ def _guard():
 
 
 def _text(data, name):
-    value = data.get(name) if isinstance(data, dict) else None
-    return value if isinstance(value, str) and 0 < len(value) <= MAX_FIELD else None
+    return bodies.clean_text(data.get(name) if isinstance(data, dict) else None)
 
 
 def _json():
-    if (request.content_length or 0) > 8192:
-        return None
-    data = request.get_json(silent=True)
-    return data if isinstance(data, dict) else None
+    return bodies.small_json()
 
 
 def _csrf_ok() -> bool:
@@ -94,7 +90,7 @@ def _hit(ip_limiter, identifier_limiter, ip: str, identifier: str) -> tuple:
     return allowed, retry, False
 
 
-def _log_throttle(identifier: str, ip: str, scope: str, by_ip: bool = False) -> None:
+def _log_throttle(identifier: str, ip: str, scope: str, by_ip: bool = False, attempts: int = 0) -> None:
     """
     EF-9.2 : une ligne d'audit par couple (identifiant normalisé, IP) quand un seuil est atteint ; pas une par échec. Si c'est la
     limite d'IP qui refuse, UNE ligne par IP (T10-2) : 200 identifiants inventés depuis une IP n'écrivent pas 200 lignes.
@@ -104,7 +100,7 @@ def _log_throttle(identifier: str, ip: str, scope: str, by_ip: bool = False) -> 
     throttle = current_app.extensions.setdefault('login_throttle_audit', RefusalLog(window_s=900, max_entries=2048))
     if throttle.due(scope, key):
         audit.record(get_db(), 'auth.rate_limited', actor=audit.Actor.system(), target_type='login', ip=ip,
-                     details={'scope': scope, 'identifier': identifier[:64]})
+                     details={'scope': scope, 'identifier': identifier[:64], 'attempts': attempts})
         throttle.mark(scope, key)
 
 
@@ -151,7 +147,8 @@ def password_login():
     identifier = normalize_key(username)
     allowed, retry, by_ip = _hit(limiters.password_ip, limiters.password_identifier, ip, identifier)
     if not allowed:
-        _log_throttle(identifier, ip, 'password', by_ip)
+        _log_throttle(identifier, ip, 'password', by_ip,
+                      (limiters.password_ip if by_ip else limiters.password_identifier).limit)
         response = jsonify(LIMITED)
         response.status_code = 429
         response.headers['Retry-After'] = str(retry)
@@ -182,39 +179,6 @@ def password_login():
     session[PENDING_COOKIE_KEY] = pending_store().create(row['id'], step, next_url=next_url, binding=_binding(row))
     target = url_for('auth.password_mfa') if step == 'mfa' else url_for('auth.password_enroll')
     return jsonify({'success': True, 'next': target, 'step': step})
-
-
-# -- Étape 2 : seconds facteurs (T11, T12) ------------------------------------------------------------------------------------
-
-@bp.route('/auth/password/mfa', methods=['GET', 'POST'])
-def password_mfa():
-    refused = _guard()
-    if refused:
-        return refused
-    state = current_pending('mfa')
-    if state is None:
-        return redirect(url_for('auth.password_login'))
-    if request.method == 'GET':
-        return render_template('auth_message.html', title='Second facteur',
-                               message="La vérification du second facteur n'est pas encore disponible."), 501
-    if not _csrf_ok():
-        return jsonify({'success': False, 'error': 'Formulaire expiré'}), 400
-    remaining = pending_store().hit(session.get(PENDING_COOKIE_KEY))     # essai compté côté SERVEUR
-    if remaining is None or remaining == 0:
-        session.pop(PENDING_COOKIE_KEY, None)
-        return jsonify({'success': False, 'error': 'Connexion expirée : reconnecte-toi.', 'restart': True}), 401
-    return jsonify({'success': False, 'error': "La vérification du second facteur n'est pas encore disponible."}), 501
-
-
-@bp.route('/auth/password/enroll', methods=['GET', 'POST'])
-def password_enroll():
-    refused = _guard()
-    if refused:
-        return refused
-    if current_pending('enroll') is None:
-        return redirect(url_for('auth.password_login'))
-    return render_template('auth_message.html', title='Second facteur requis',
-                           message="L'enrôlement d'un second facteur n'est pas encore disponible."), 501
 
 
 # -- Mot de passe oublié -------------------------------------------------------------------------------------------------------
@@ -272,7 +236,8 @@ def password_forgot():
     identifier = normalize_key(raw)
     allowed, retry, by_ip = _hit(limiters.forgot_ip, limiters.forgot_identifier, ip, identifier)
     if not allowed:
-        _log_throttle(identifier, ip, 'forgot', by_ip)
+        _log_throttle(identifier, ip, 'forgot', by_ip,
+                      (limiters.forgot_ip if by_ip else limiters.forgot_identifier).limit)
         response = jsonify(LIMITED)
         response.status_code = 429
         response.headers['Retry-After'] = str(retry)

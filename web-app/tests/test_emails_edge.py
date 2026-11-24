@@ -277,37 +277,36 @@ def _post(client, path, payload):
 
 
 @pytest.mark.parametrize('with_target', [False, True])
-def test_a_bootstrap_token_never_creates_an_account_before_the_enrolment_exists(app, conn, with_target):
+def test_a_bootstrap_token_never_grants_admin_by_itself(app, conn, with_target):
+    """EF-0.3 : la consommation d'un jeton d'amorçage ne donne JAMAIS l'admin ; seul l'enrôlement d'un facteur le fait (T11)."""
     target = None
     if with_target:
         conn.execute("INSERT INTO users (sub, username, auth_method, session_token) VALUES ('pwd:t', 'target', 'password', 't')")
         conn.commit()
         target = conn.execute("SELECT id FROM users WHERE username = 'target'").fetchone()[0]
     new = tokens.create(conn, 'bootstrap', actor=audit.Actor.cli(), email='boot@example.org', is_admin_grant=True, target_user_id=target)
-    users_before = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    with pytest.raises(invitations.AccountError) as exc:
-        invitations.accept(conn, new.token, 'founder', GOOD)
-    assert exc.value.status == 501 and exc.value.code == 'enroll_unavailable'
     client = app.test_client()
-    for payload in ({'token': new.token, 'username': 'founder', 'password': GOOD}, {'token': new.token, 'username': 'a', 'password': 'x'},
-                    {'token': new.token}, {'token': new.token, 'username': 'admin', 'password': GOOD}):
+    for payload in ({'token': new.token, 'username': 'a', 'password': 'x'}, {'token': new.token}):
         response = _post(client, '/auth/token/consume', payload)
-        assert response.status_code in (400, 501), (payload, response.status_code)
-        assert response.status_code != 200 and 'next' not in response.get_json()
-    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == users_before and conn.execute("SELECT is_admin FROM users WHERE is_admin = 1").fetchone() is None
-    assert tokens.inspect(conn, new.token) == 'choose_credentials'                               # jeton intact, réutilisable le jour où l'enrôlement existe
-    assert conn.execute("SELECT used_at FROM auth_tokens WHERE id = ?", (new.id,)).fetchone()[0] is None
+        assert response.status_code in (400, 404), (payload, response.status_code)       # mot de passe faible / champ manquant : refus
+        assert 'next' not in response.get_json()
+    response = _post(client, '/auth/token/consume', {'token': new.token, 'username': 'founder', 'password': GOOD})
+    if not with_target:
+        assert response.status_code == 200 and response.get_json()['next'] == '/auth/password/enroll'
+    else:
+        assert response.status_code == 400                                               # reprise : mot de passe ACTUEL du compte
+    assert conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0] == 0
 
 
-def test_the_501_answer_is_the_same_whatever_the_bootstrap_token_targets_and_leaks_nothing(app, conn):
+def test_the_bootstrap_answer_leaks_neither_the_token_nor_the_address_nor_the_password(app, conn):
     plain = tokens.create(conn, 'bootstrap', actor=audit.Actor.cli(), email='secret.boot@example.org', is_admin_grant=True)
     client = app.test_client()
     response = _post(client, '/auth/token/consume', {'token': plain.token, 'username': 'founder', 'password': GOOD})
     text = response.get_data(as_text=True) + json.dumps(dict(response.headers.items()))
-    assert response.status_code == 501 and plain.token not in text and 'secret.boot' not in text and GOOD not in text
+    assert response.status_code == 200 and plain.token not in text and 'secret.boot' not in text and GOOD not in text
 
 
-def test_an_unknown_or_used_bootstrap_like_token_still_gets_the_neutral_404_not_the_501(app, conn):
+def test_an_unknown_or_used_bootstrap_like_token_still_gets_the_neutral_404(app, conn):
     client = app.test_client()
     assert _post(client, '/auth/token/consume', {'token': 'A' * 43, 'username': 'founder', 'password': GOOD}).status_code == 404
 

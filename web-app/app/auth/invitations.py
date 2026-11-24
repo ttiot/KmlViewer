@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app import audit
-from app.auth import emails, identifiers, passwords, tokens
+from app.auth import emails, factors, identifiers, passwords, tokens
 from app.auth.users import _new_session_token
 from app.db import write_transaction
 
@@ -131,11 +131,9 @@ def accept(conn, token, username, password, *, ip: Optional[str] = None, now: Op
     if found is None or found[0] not in ('invite', 'bootstrap'):
         return None
     kind, target = found
-    if kind == 'bootstrap' or target is not None:
-        # AMORÇAGE (nouveau compte ou reprise) : il crée un compte puis lui fait enrôler un second facteur AVANT l'octroi
-        # d'admin (EF-0.3, M11, B5). Sans enrôlement (T10/T11) l'octroi serait perdu : le jeton reste donc INTACT et aucun
-        # compte n'est créé tant que cette chaîne n'existe pas.
-        raise AccountError('enroll_unavailable', "L'enrôlement du second facteur n'est pas encore disponible.", 501)
+    if target is not None:
+        # Reprise d'amorçage d'un compte EXISTANT : autre formulaire (`confirm_password`), autre fonction (confirm_bootstrap)
+        raise AccountError('wrong_form', "Ce lien demande le mot de passe actuel du compte.", 400)
     try:
         identifier = identifiers.check_identifier(username)
     except identifiers.IdentifierError as exc:
@@ -166,7 +164,90 @@ def accept(conn, token, username, password, *, ip: Optional[str] = None, now: Op
     except sqlite3.IntegrityError:
         # Course sur l'identifiant (index unique partiel) : même réponse qu'un identifiant pris, jeton intact
         raise AccountError('unavailable', identifiers.UNAVAILABLE_MESSAGE, 409) from None
-    return {'id': user_id, 'username': identifier}
+    account = {'id': user_id, 'username': identifier}
+    if info.is_admin_grant:
+        account['grant'] = True                 # amorçage : l'octroi d'admin part avec l'état d'enrôlement (EF-0.3)
+    return account
+
+
+def confirm_bootstrap(conn, token, password, *, verify, ip: Optional[str] = None,
+                      now: Optional[datetime] = None) -> Optional[dict]:
+    """
+    Reprise d'amorçage d'un compte existant (EF-0.3b) : consomme le jeton si `verify(user)` confirme le mot de passe actuel
+    (le limiteur et le sémaphore de hachage sont appliqués par l'appelant, avant). Le mot de passe déjà posé est CONSERVÉ.
+    Retourne `{'id', 'username', 'grant': True}`, ou None : jeton non valable, compte désactivé / converti / devenu doté d'un
+    facteur depuis l'émission (même réponse neutre que partout), ou mot de passe refusé (jeton non consommé).
+    """
+    found = tokens.peek(conn, token, now)
+    if found is None or found[0] != 'bootstrap' or found[1] is None:
+        return None
+    target = found[1]
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (target,)).fetchone()
+    if (user is None or not user['is_active'] or user['auth_method'] != 'password'
+            or factors.has_second_factor(conn, target) or not verify(user)):
+        return None
+    with write_transaction(conn):
+        info = tokens.consume(conn, token, kind='bootstrap', target_user_id=target, used_by=target, now=now)
+        if info is None:
+            return None
+        # REVÉRIFICATION sous le verrou d'écriture (TOCTOU) : ni état, ni mot de passe changés, ni facteur gagné
+        fresh = conn.execute("SELECT * FROM users WHERE id = ?", (target,)).fetchone()
+        if (fresh is None or not fresh['is_active'] or fresh['auth_method'] != 'password'
+                or fresh['password_hash'] != user['password_hash'] or factors.has_second_factor(conn, target)):
+            conn.rollback()
+            return None
+        audit.record(conn, 'user.bootstrap_resumed', actor=audit.Actor.from_user(user), target_type='user', target_id=target,
+                     ip=ip)
+    return {'id': target, 'username': user['username'], 'grant': bool(info.is_admin_grant)}
+
+
+def convert_account(conn, token, username, password, *, ip: Optional[str] = None,
+                    now: Optional[datetime] = None) -> Optional[dict]:
+    """
+    Conversion SSO -> mot de passe (EF-0.5, M5), mode `password` : consomme un jeton `set_password`. UNE transaction : `sub`
+    réécrit (l'IdP ne retrouve plus le compte), méthode `password`, identifiant CHOISI (EF-1.2, EF-1.2b), mot de passe, jeton
+    de session renouvelé, `is_admin` remis à 0 (B5 : repromu après enrôlement d'un facteur). L'adresse du compte reste
+    validée, sauf si un compte `password` la porte déjà : elle passe en attente (`email_pending`, tracé). Retourne le compte
+    converti, ou None (jeton non valable, compte plus SSO ou désactivé : réponse neutre).
+    """
+    found = tokens.peek(conn, token, now)
+    if found is None or found[0] != 'set_password' or found[1] is None:
+        return None
+    target = found[1]
+    try:
+        identifier = identifiers.check_identifier(username)
+    except identifiers.IdentifierError as exc:
+        raise AccountError('unavailable' if exc.unavailable else 'invalid_identifier', exc.message,
+                           409 if exc.unavailable else 400) from None
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (target,)).fetchone()
+    if row is None:
+        return None
+    passwords.check_policy(password, identities=[identifier, row['email']])
+    hashed = passwords.hash_password(password)
+    moment = tokens._stamp(now)
+    try:
+        with write_transaction(conn):
+            info = tokens.consume(conn, token, kind='set_password', target_user_id=target, used_by=target, now=now)
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (target,)).fetchone()
+            if info is None or row is None or row['auth_method'] != 'oidc' or not row['is_active']:
+                return None
+            if conn.execute("SELECT 1 FROM users WHERE lower(username) = ? AND id != ?", (identifier, target)).fetchone():
+                raise AccountError('unavailable', identifiers.UNAVAILABLE_MESSAGE, 409)
+            email, pending = row['email'], row['pending_email']
+            moved = bool(email) and conn.execute(
+                "SELECT 1 FROM users WHERE email = ? AND auth_method = 'password' AND id != ?",
+                (email, target)).fetchone() is not None
+            if moved:
+                email, pending = None, row['email']
+            conn.execute(
+                "UPDATE users SET sub = ?, username = ?, auth_method = 'password', password_hash = ?, password_changed_at = ?, "
+                "session_token = ?, is_admin = 0, email = ?, pending_email = ? WHERE id = ?",
+                (f"pwd:{uuid.uuid4()}", identifier, hashed, moment, _new_session_token(), email, pending, target))
+            audit.record(conn, 'user.convert', actor=audit.Actor.from_user(row), target_type='user', target_id=target, ip=ip,
+                         details={'from': 'oidc', 'to': 'password', 'was_admin': bool(row['is_admin']), 'email_pending': moved})
+    except sqlite3.IntegrityError:
+        raise AccountError('unavailable', identifiers.UNAVAILABLE_MESSAGE, 409) from None
+    return {'id': target, 'username': identifier, 'email_pending': moved}
 
 
 def verify_email(conn, user, token, *, ip: Optional[str] = None, now: Optional[datetime] = None) -> str:

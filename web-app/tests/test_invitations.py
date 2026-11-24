@@ -336,28 +336,30 @@ def test_a_concurrent_identifier_race_creates_one_account_and_leaves_the_loser_s
     check.close()
 
 
-def test_a_bootstrap_token_is_not_consumed_and_creates_no_account_until_the_enrolment_exists(conn):
-    """T7b-1 (EF-0.3) : l'octroi d'admin ne peut pas être perdu ; tant que l'enrôlement n'existe pas, 501 et jeton intact."""
-    before = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+def test_a_bootstrap_token_creates_a_NON_admin_account_and_carries_the_grant_to_the_enrolment(conn):
+    """EF-0.3, T7b-1 (T11) : le compte est créé sans droits ; l'octroi passe par l'état d'enrôlement, jamais ici."""
     fresh_token = tokens.create(conn, 'bootstrap', actor=CLI, email='first@example.org', is_admin_grant=True)
     existing = add_user(conn, 'resume')
     resume = tokens.create(conn, 'bootstrap', actor=CLI, target_user_id=existing['id'], is_admin_grant=True)
-    for new in (fresh_token, resume):
-        with pytest.raises(AccountError) as exc:
-            invitations.accept(conn, new.token, 'first', GOOD)
-        assert exc.value.status == 501 and exc.value.code == 'enroll_unavailable'
-        assert tokens.inspect(conn, new.token) == 'choose_credentials'
-    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == before + 1            # seulement `resume`, ajouté par le test
-    assert [r[0] for r in conn.execute("SELECT used_at FROM auth_tokens WHERE kind = 'bootstrap'")] == [None, None]
+    assert tokens.inspect(conn, resume.token) == 'confirm_password'                 # reprise : mot de passe actuel demandé
+    with pytest.raises(AccountError) as exc:
+        invitations.accept(conn, resume.token, 'x', GOOD)
+    assert exc.value.code == 'wrong_form' and tokens.inspect(conn, resume.token) == 'confirm_password'
+    created = invitations.accept(conn, fresh_token.token, 'first', GOOD)
+    assert created['grant'] is True
+    row = conn.execute("SELECT is_admin, is_active, auth_method FROM users WHERE username = 'first'").fetchone()
+    assert (row['is_admin'], row['is_active'], row['auth_method']) == (0, 1, 'password')
 
 
-def test_over_http_a_bootstrap_link_answers_501_and_stays_usable(app, conn):
+def test_over_http_a_bootstrap_link_starts_the_enrolment_without_opening_a_session(app, conn):
     new = tokens.create(conn, 'bootstrap', actor=CLI, email='first@example.org', is_admin_grant=True)
     client, kw = web(app)
     response = post(client, kw, '/auth/token/consume', {'token': new.token, 'username': 'first', 'password': GOOD})
-    assert response.status_code == 501 and response.get_json()['code'] == 'enroll_unavailable'
-    assert tokens.inspect(conn, new.token) == 'choose_credentials'
-    assert conn.execute("SELECT COUNT(*) FROM users WHERE username = 'first'").fetchone()[0] == 0
+    assert response.status_code == 200 and response.get_json() == {'success': True, 'next': '/auth/password/enroll'}
+    with client.session_transaction(**kw) as session:
+        assert set(session) == {'pending_id'}                                        # jamais user_id dans le cookie
+    assert conn.execute("SELECT is_admin FROM users WHERE username = 'first'").fetchone()[0] == 0
+    assert client.get('/auth/password/enroll', **kw).status_code == 200
 
 
 # --- Validation d'adresse (EF-4.3, EF-4.3b, CA-17b) ------------------------------------------------------------------------

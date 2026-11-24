@@ -8,13 +8,20 @@ from flask import current_app, g, jsonify, request
 
 from app.api import bp
 from app.api.payload import json_body
+from app import audit
 from app.audit import Actor
-from app.auth import admin_required, tokens, users
+from app.auth import admin_required, second_factor, tokens, users
 from app.auth.guard import oidc_enabled
 from app.db import get_db, write_transaction
 from app.errors import ApiError
 
 logger = logging.getLogger(__name__)
+
+
+def _last_active_admin(db, user_id) -> bool:
+    """EF-8.2 : `user_id` est l'unique admin actif (jamais désactivé, rétrogradé ni supprimé par l'API)."""
+    others = db.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_active = 1 AND id != ?", (user_id,)).fetchone()[0]
+    return others == 0
 
 
 def _unknown_user() -> ApiError:
@@ -26,19 +33,51 @@ def me():
     return jsonify({'user': users.to_dict(g.user), 'oidc': oidc_enabled(), 'auth_mode': current_app.config['AUTH_MODE']})
 
 
+def _enriched(db, row) -> dict:
+    """Ligne d'administration (EF-8.1) : méthode, adresse validée / en attente, facteurs, crédits, émetteur, invitations."""
+    return users.to_dict(row) | {
+        'pending_email': row['pending_email'], 'email_verified_at': row['email_verified_at'],
+        'invite_credits': row['invite_credits'], 'invited_by': row['invited_by'],
+        'factors': {'totp': bool(row['totp_enabled_at']), 'keys': _keys(db, row['id']),
+                    'recovery_codes': second_factor.remaining_recovery(db, row['id'])},
+        'pending_invitations': db.execute(
+            "SELECT COUNT(*) FROM auth_tokens WHERE kind = 'invite' AND created_by = ? AND used_at IS NULL "
+            "AND revoked_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", (row['id'],)).fetchone()[0]}
+
+
+def _keys(db, user_id) -> int:
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'webauthn_credentials'").fetchone():
+        return 0
+    return db.execute("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?", (user_id,)).fetchone()[0]
+
+
 @bp.route('/users')
+@bp.route('/admin/users')
 @admin_required
 def list_users():
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         "SELECT u.*, (SELECT COUNT(*) FROM activities a WHERE a.user_id = u.id AND a.kind = 'activity') AS nb_activities, "
         "(SELECT COUNT(*) FROM activities a WHERE a.user_id = u.id AND a.kind = 'planned') AS nb_planned "
         "FROM users u ORDER BY u.created_at").fetchall()
     counts = ('nb_activities', 'nb_planned')
-    return jsonify({'users': [users.to_dict(r) | {c: r[c] for c in counts} for r in rows],
-                    'admin_managed_by_idp': bool(current_app.config.get('OIDC_ADMIN_ROLE'))})
+    return jsonify({'users': [_enriched(db, r) | {c: r[c] for c in counts} for r in rows],
+                    'admin_managed_by_idp': bool(current_app.config.get('OIDC_ADMIN_ROLE')),
+                    'collisions': identity_collisions(db)})
+
+
+def identity_collisions(db) -> list:
+    """EF-8.5 : comptes qui partagent (casse ignorée) un identifiant ou une adresse validée."""
+    found = []
+    for column in ('username', 'email'):
+        for row in db.execute(f"SELECT lower({column}) AS value, group_concat(id) AS ids FROM users WHERE {column} IS NOT NULL "
+                              f"GROUP BY lower({column}) HAVING COUNT(*) > 1"):
+            found.append({'field': column, 'user_ids': sorted(int(i) for i in row['ids'].split(','))})
+    return found
 
 
 @bp.route('/users/<int:user_id>', methods=['PATCH'])
+@bp.route('/admin/users/<int:user_id>', methods=['PATCH'])
 @admin_required
 def update_user(user_id):
     db = get_db()
@@ -53,7 +92,12 @@ def update_user(user_id):
             if not isinstance(data[field], bool):
                 raise ApiError(f'{field} doit être un booléen')
             updates[field] = int(data[field])
-    if not updates:
+    credits = None
+    if 'invite_credits' in data:
+        credits = data['invite_credits']
+        if isinstance(credits, bool) or not isinstance(credits, int) or not 0 <= credits <= 1000:
+            raise ApiError('invite_credits : entier de 0 à 1000')
+    if not updates and credits is None:
         raise ApiError('Rien à modifier')
     if user_id == g.user['id'] and 0 in updates.values():
         raise ApiError('Impossible de retirer tes propres droits (risque de verrouillage)', 409)
@@ -64,12 +108,20 @@ def update_user(user_id):
     # (`user.admin_refused`) soit validée avec elle ; rien d'autre n'est alors appliqué, et l'erreur 409 part après.
     refused = None
     with write_transaction(db):
+        if updates.get('is_active') == 0 and target['is_admin'] and _last_active_admin(db, user_id):
+            raise ApiError('Dernier administrateur actif : impossible de le désactiver.', 409)
         if 'is_admin' in updates:
             try:
                 users.set_admin(db, user_id, bool(updates.pop('is_admin')), actor=Actor.from_user(g.user),
                                 ip=request.remote_addr)
             except users.AdminPromotionRefused as exc:
                 refused = exc
+        if refused is None and credits is not None:
+            # Valeur ABSOLUE, un seul UPDATE ; la valeur de l'admin l'emporte sur une invitation créée au même instant (P-T14-3)
+            old = db.execute("SELECT invite_credits FROM users WHERE id = ?", (user_id,)).fetchone()[0]
+            db.execute("UPDATE users SET invite_credits = ? WHERE id = ?", (credits, user_id))
+            audit.record(db, 'user.credits_set', actor=Actor.from_user(g.user), target_type='user', target_id=user_id,
+                         ip=request.remote_addr, details={'from': old, 'to': credits})
         if refused is None and updates:
             assignments = ', '.join(f"{field} = ?" for field in updates)
             db.execute(f"UPDATE users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
@@ -87,6 +139,7 @@ def update_user(user_id):
 
 
 @bp.route('/users/<int:user_id>', methods=['DELETE'])
+@bp.route('/admin/users/<int:user_id>', methods=['DELETE'])
 @admin_required
 def delete_user(user_id):
     if user_id == g.user['id']:
@@ -95,6 +148,8 @@ def delete_user(user_id):
     target = users.get_by_id(db, user_id)
     if target is None:
         raise _unknown_user()
+    if target['is_admin'] and target['is_active'] and _last_active_admin(db, user_id):
+        raise ApiError('Dernier administrateur actif : impossible de le supprimer.', 409)
     with write_transaction(db):
         # Avant la suppression : la clé étrangère de l'émetteur passerait à NULL et ses invitations ne seraient plus retrouvables
         tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))

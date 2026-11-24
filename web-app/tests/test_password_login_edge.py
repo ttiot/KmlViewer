@@ -423,9 +423,9 @@ def test_the_pending_state_expires_server_side_whatever_the_cookie_says(app, con
     clock = [1000.0]
     app.extensions['pending']._clock = lambda: clock[0]
     client, _ = start_pending(app, conn)
-    assert client.get('/auth/password/mfa', **KW).status_code == 501                    # facteurs : T11
+    assert client.get('/auth/password/mfa', **KW).status_code == 200                    # page du second facteur (T11)
     clock[0] += 299
-    assert client.get('/auth/password/mfa', **KW).status_code == 501
+    assert client.get('/auth/password/mfa', **KW).status_code == 200
     clock[0] += 2
     response = client.get('/auth/password/mfa', **KW)
     assert response.status_code == 302 and '/auth/password/login' in response.headers['Location']
@@ -492,7 +492,7 @@ def test_an_enrollment_state_does_not_open_the_mfa_route_and_conversely(app, con
     client, body = start_pending(app, conn, 'noenroll', factor=False)
     assert body['step'] == 'enroll'
     assert client.get('/auth/password/mfa', **KW).status_code == 302
-    assert client.get('/auth/password/enroll', **KW).status_code == 501
+    assert client.get('/auth/password/enroll', **KW).status_code == 200
     c2, b2 = start_pending(app, conn, 'withmfa')
     assert b2['step'] == 'mfa' and c2.get('/auth/password/enroll', **KW).status_code == 302
 
@@ -929,8 +929,6 @@ def test_forgot_and_login_pages_exist_only_when_the_feature_is_on(app, mail_app)
 ENDPOINTS = ['/auth/password/login', '/auth/password/forgot']
 
 
-@pytest.mark.xfail(strict=True, reason="T10-A (défaut) : request.get_json(silent=True) ne rattrape pas RecursionError : un corps JSON de quelques "
-                                       "milliers de niveaux (< 8 Ko) donne un 500 sur les routes publiques ; api/payload.json_body sait le faire")
 @pytest.mark.parametrize('path', ENDPOINTS + ['/auth/token/inspect', '/auth/token/consume'])
 def test_a_deeply_nested_json_body_is_a_400_never_a_500(mail_app, path):
     for depth in (500, 2000, 8000):
@@ -941,9 +939,6 @@ def test_a_deeply_nested_json_body_is_a_400_never_a_500(mail_app, path):
         assert r.status_code == 400, (path, depth, r.status_code)
 
 
-@pytest.mark.xfail(strict=True, reason="T10-C (défaut) : sans Content-Length (transfert fragmenté), la limite de 8 Ko n'est pas appliquée : un "
-                                       "corps de plusieurs Mo est lu et analysé AVANT toute authentification (jusqu'à MAX_CONTENT_LENGTH = 16 Mo) ; "
-                                       "api/payload.json_body fixe request.max_content_length pour ce cas")
 @pytest.mark.parametrize('path', ENDPOINTS)
 def test_a_body_without_content_length_is_bounded_too(mail_app, path):
     """Corps en transfert fragmenté (pas de Content-Length) : la lecture doit s'arrêter, pas parser des mégaoctets avant authentification."""
@@ -961,9 +956,7 @@ SURROGATES = ['\ud800', 'a\ud800b', '\udfff' * 5]
 
 
 @pytest.mark.parametrize('path,field', [('/auth/password/login', 'username'), ('/auth/password/forgot', 'identifier')])
-@pytest.mark.parametrize('value', [pytest.param(v, marks=pytest.mark.xfail(
-    strict=True, reason="T10-B (défaut) : un surrogat isolé (JSON \"\\ud800\") dans l'identifiant donne un 500 (HMAC/SQLite ne l'encodent pas) ; "
-                        "déjà traité pour le mot de passe (verify_password), pas pour l'identifiant")) for v in SURROGATES] + ['alice\x00', '\x00' * 10, '\u202e', 'a' * 1024, 'a' * 1025, 'é' * 1024, '\U0001F600' * 300,
+@pytest.mark.parametrize('value', SURROGATES + ['alice\x00', '\x00' * 10, '\u202e', 'a' * 1024, 'a' * 1025, 'é' * 1024, '\U0001F600' * 300,
                                    '%s', '%(x)s', '{0}', '${jndi:ldap://x}', '\r\n', '\t', 'ǅ', 'İ' * 100, 'ﬁ' * 100, 'İı'])
 def test_hostile_text_values_never_cause_a_server_error(mail_app, path, field, value):
     seed_forgot(mail_app)
@@ -1037,8 +1030,6 @@ def test_the_throttle_audit_has_one_line_per_identifier_and_ip(app, conn):
     assert details['identifier'] == 'alice' and WRONG not in rows[0]['details']
 
 
-@pytest.mark.xfail(strict=True, reason="EF-9.2 : « avec le nombre d'échecs de la fenêtre » ; la ligne d'audit auth.rate_limited ne porte que "
-                                       "{scope, identifier} (le test ci-dessus l'exige ; à arbitrer : amender la spec ou ajouter le compte)")
 def test_the_throttle_audit_count_is_present(app, conn):
     add(conn, 'alice')
     for _ in range(12):

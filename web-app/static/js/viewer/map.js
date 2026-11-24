@@ -21,7 +21,7 @@ function initMap() {
         toner: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             maxZoom: 20, attribution: '© OpenStreetMap contributors © CARTO' }),
     };
-    setBaseLayer('osm');
+    setBaseLayer('osm');            // fonds intégrés en attendant /api/map-config (applyMapConfig)
 
     // Toute action de l'utilisateur sur la carte (glisser, molette, zoom, clavier) rend son
     // cadrage : la carte ne sera plus recadrée d'office.
@@ -34,6 +34,29 @@ function initMap() {
     if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(() => Viewer.map.invalidateSize()).observe(Viewer.map.getContainer());
     }
+}
+
+// Applique la configuration serveur (T16) : fonds autorisés, fond par défaut, cadrage. Sans réponse, les fonds intégrés restent ;
+// une liste VIDE (aucun hôte autorisé) retire tout fond : aucun navigateur ne contacte un hôte non autorisé.
+async function applyMapConfig() {
+    const config = await App.mapConfig();
+    if (!config || !Array.isArray(config.basemaps)) return;
+    Object.values(Viewer.baseLayers).forEach((layer) => Viewer.map.removeLayer(layer));
+    Viewer.baseLayers = {};
+    config.basemaps.forEach((basemap) => { Viewer.baseLayers[basemap.name] = App.basemapLayer(basemap); });
+    const fieldset = document.querySelector('#mapSettingsPanel fieldset');
+    if (fieldset) {
+        const legend = fieldset.querySelector('legend');
+        fieldset.replaceChildren(legend, ...config.basemaps.map((basemap, index) => {
+            const id = `baseLayer-${index}`;
+            return App.el('div', { class: 'form-check' },
+                App.el('input', { class: 'form-check-input', type: 'radio', name: 'baseLayer', id, value: basemap.name,
+                    checked: basemap.name === config.default }),
+                App.el('label', { class: 'form-check-label', for: id }, basemap.name));
+        }));
+    }
+    if (config.default && Viewer.baseLayers[config.default]) setBaseLayer(config.default);
+    if (Array.isArray(config.center) && Number.isFinite(config.zoom)) Viewer.map.setView(config.center, config.zoom);
 }
 
 // Affiche le fond de carte demandé (nom inconnu : sans effet). Retourne true s'il est affiché.

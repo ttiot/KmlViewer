@@ -16,6 +16,7 @@ bp = Blueprint('auth', __name__)
 from . import oidc  # noqa: E402,F401 - enregistre les routes
 from . import token_routes  # noqa: E402,F401 - jetons à usage unique
 from . import password_login  # noqa: E402,F401 - connexion par mot de passe
+from . import mfa_login  # noqa: E402,F401 - second facteur et enrôlement
 from .guard import admin_required, current_user_id, init_guard  # noqa: E402,F401
 from .oidc import init_oidc  # noqa: E402
 

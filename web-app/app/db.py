@@ -370,6 +370,25 @@ def _users_password_accounts(conn: sqlite3.Connection) -> None:
                  "WHERE auth_method = 'password' AND email IS NOT NULL")
 
 
+def _second_factors(conn: sqlite3.Connection) -> None:
+    """
+    0015 - second facteur TOTP et codes de secours (admin-space ADR-0004, T11) : `totp_secret` (Fernet, jamais en clair),
+    `totp_last_step` (anti-rejeu atomique), `totp_enabled_at` (un secret non confirmé n'est PAS un facteur) ; codes de secours
+    stockés par empreinte SHA-256, usage unique. Les clés WebAuthn arrivent avec T12 (migration propre).
+    """
+    for column, definition in (('totp_secret', 'BLOB'), ('totp_last_step', 'INTEGER'), ('totp_enabled_at', 'TEXT')):
+        _add_column(conn, 'users', column, definition)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recovery_codes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            code_hash  TEXT NOT NULL,
+            used_at    TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            UNIQUE (user_id, code_hash)
+        )""")
+
+
 def _emails_canonical(conn: sqlite3.Connection) -> None:
     """
     0014 - adresses sous forme canonique (EF-4.10, §13 n°32) : `email` et `pending_email` de TOUS les comptes (SSO compris)
@@ -447,6 +466,7 @@ NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ('0012_auth_tokens', _auth_tokens),
     ('0013_users_password_accounts', _users_password_accounts),
     ('0014_emails_canonical', _emails_canonical),
+    ('0015_second_factors', _second_factors),
 ]
 
 _MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')

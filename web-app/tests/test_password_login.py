@@ -194,7 +194,7 @@ def pending_cookie(app, conn, name='root'):
 
 def still_valid(client):
     r = client.get('/auth/password/enroll', **KW)
-    return r.status_code == 501                    # étape connue mais non disponible (T11) : l'état est valide
+    return r.status_code == 200                    # la page d'enrôlement s'affiche : l'état est valide
 
 
 @pytest.mark.parametrize('change', [

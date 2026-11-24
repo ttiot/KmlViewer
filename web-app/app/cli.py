@@ -204,6 +204,10 @@ def register_cli(app) -> None:
                 raise click.ClickException("Seuls les comptes à mot de passe ont des facteurs à réinitialiser.")
             demoted = bool(target['is_admin'])
             holder_email = target['email']
+            if demoted and target['is_active'] and factors.active_admin_count(db) <= 1:
+                # EF-2.7, r6 : l'annonce précède l'action
+                click.echo("ATTENTION : « %s » est le DERNIER administrateur actif ; il va être rétrogradé et l'instance restera "
+                           "sans administrateur. Sortie : `flask user-invite --admin`." % target['username'], err=True)
             with write_transaction(db):
                 removed = factors.clear_factors(db, target['id'])
                 db.execute("UPDATE users SET session_token = ?, is_admin = 0 WHERE id = ?",
@@ -322,6 +326,9 @@ def register_cli(app) -> None:
         finally:
             db.close()
         click.echo(f"Effacé : {counts['secrets']} secret(s), {counts['totp']} secret(s) TOTP.")
+        if counts.get('demoted'):
+            click.echo(f"{counts['demoted']} administrateur(s) sans plus aucun facteur rétrogradé(s) ; ils se réenrôlent à leur "
+                       "prochaine connexion (codes de secours invalidés).")
         _report_notification(app, failed, "effacement des secrets, aux administrateurs")
         from app.auth import factors
         db = connect(app.config['DB_PATH'])

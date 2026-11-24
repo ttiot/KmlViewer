@@ -14,12 +14,13 @@ Routes publiques des jetons (EF-S8, B4, r5, r8) : `GET /auth/token` (page statiq
 
 import logging
 
-from flask import current_app, g, jsonify, render_template, request, url_for
+from flask import current_app, g, jsonify, render_template, request, session, url_for
 
 from app.audit import Actor
-from app.auth import bp, csrf, invitations, modes, passwords, tokens
+from app.auth import bodies, bp, csrf, invitations, modes, passwords, tokens
+from app.auth.pending import COOKIE_KEY as PENDING_COOKIE_KEY
 from app.db import get_db
-from app.ratelimit import ip_key
+from app.ratelimit import hit_all, ip_key, normalize_key
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,8 @@ def _limited():
 
 def _body():
     """Corps JSON borné : un objet dont les champs sont des chaînes courtes, sinon None."""
-    if (request.content_length or 0) > 8192:
-        return None
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
+    data = bodies.small_json()
+    if data is None:
         return None
     return {k: v for k, v in data.items() if isinstance(k, str)}
 
@@ -69,7 +68,7 @@ def _checked():
 
 def _text(data, name):
     value = data.get(name)
-    return value if isinstance(value, str) and len(value) <= MAX_FIELD else None
+    return value if isinstance(value, str) and len(value) <= MAX_FIELD and bodies.clean_text(value or ' ') else None
 
 
 def _queue_verification(db, account) -> None:
@@ -90,6 +89,15 @@ def _queue_verification(db, account) -> None:
         mailer.enqueue(row['pending_email'], subject, body)
     except Exception:  # noqa: BLE001 - le compte est créé : un échec de mise en file n'est pas une erreur pour l'invité
         logger.exception("Mail de validation non mis en file")
+
+
+def _start_enrollment(db, account):
+    """État `mfa_pending` à l'étape `enroll` portant l'octroi d'admin ; le cookie ne porte que son identifiant (EF-0.3, M11)."""
+    row = db.execute("SELECT session_token, password_changed_at FROM users WHERE id = ?", (account['id'],)).fetchone()
+    session.clear()
+    session[PENDING_COOKIE_KEY] = current_app.extensions['pending'].create(
+        account['id'], 'enroll', admin_grant=True, binding=(row['session_token'], row['password_changed_at']))
+    return jsonify({'success': True, 'next': url_for('auth.password_enroll')})
 
 
 @bp.route('/auth/token')
@@ -124,7 +132,23 @@ def token_consume():
     login = url_for('auth.password_login')       # jetons de comptes password : jamais chez l'IdP (T10-3)
     ip = request.remote_addr
     try:
-        if kind in ('invite', 'bootstrap'):
+        if kind == 'bootstrap' and found[1] is not None:
+            password = _text(data, 'password')
+            if password is None:
+                return jsonify({'success': False, 'error': 'Mot de passe actuel requis.'}), 400
+            target = db.execute("SELECT username FROM users WHERE id = ?", (found[1],)).fetchone()
+            limiters = current_app.extensions['limiters']
+            identifier = normalize_key(target['username'] if target else '')
+            allowed, retry = hit_all((limiters.password_ip, ip_key(ip)), (limiters.password_identifier, identifier))
+            if not allowed:                                   # AVANT tout hachage (r9)
+                response = jsonify({'success': False, 'error': 'Trop de tentatives, réessaie plus tard.'})
+                response.status_code, response.headers['Retry-After'] = 429, str(retry)
+                return response
+            result = invitations.confirm_bootstrap(
+                db, token, password, ip=ip, verify=lambda user: passwords.verify_password(user['password_hash'], password)[0])
+            if result is None:
+                return jsonify({'success': False, 'error': 'Vérification impossible : mot de passe ou lien non valable.'}), 400
+        elif kind in ('invite', 'bootstrap'):
             username, password = _text(data, 'username'), _text(data, 'password')
             if username is None or password is None:
                 return jsonify({'success': False, 'error': 'Identifiant et mot de passe requis.'}), 400
@@ -146,8 +170,13 @@ def token_consume():
             if outcome == 'refused':
                 return jsonify({'success': False, 'error': 'Impossible de valider cette adresse.'}), 409
             return jsonify({'success': True, 'next': url_for('main.index')})
+        elif kind == 'set_password':
+            username, password = _text(data, 'username'), _text(data, 'password')
+            if username is None or password is None:
+                return jsonify({'success': False, 'error': 'Identifiant et mot de passe requis.'}), 400
+            result = invitations.convert_account(db, token, username, password, ip=ip)
         else:
-            return jsonify(INVALID), 404            # set_password (conversion SSO) : arrive avec T14
+            return jsonify(INVALID), 404
     except passwords.PolicyError as exc:
         return jsonify({'success': False, 'code': exc.code, 'error': str(exc)}), 400
     except passwords.HashBusy:
@@ -156,8 +185,12 @@ def token_consume():
         return jsonify({'success': False, 'code': exc.code, 'error': exc.message}), exc.status
     if result is None:
         return jsonify(INVALID), 404
-    if kind in ('invite', 'bootstrap'):
+    if kind in ('invite', 'bootstrap') and found[1] is None:
         _queue_verification(db, result)
+    if kind == 'bootstrap' and result.get('grant'):
+        return _start_enrollment(db, result)                 # amorçage : enrôle son facteur AVANT la redirection (EF-0.3)
+    if kind == 'set_password':
+        current_app.extensions['pending'].destroy_for_user(result['id'])
     if kind == 'reset':
         current_app.extensions['pending'].destroy_for_user(result)    # un état mfa_pending ne survit pas au mot de passe (T10-1)
     return jsonify({'success': True, 'next': login})     # jamais de session ouverte ici (r8)

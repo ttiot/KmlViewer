@@ -103,3 +103,9 @@ def _fresh_outbound_refusal_log():
     from app import outbound
     outbound._refusals = outbound.RefusalLog()
     yield
+
+
+def ensure_column(conn, table, column, definition):
+    """ALTER TABLE ADD COLUMN tolérant : la colonne peut déjà exister (migration 0015 pour le second facteur)."""
+    if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
