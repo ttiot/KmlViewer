@@ -28,3 +28,39 @@
     <!-- Fichiers ouverts : nom (rend le fichier actif), œil, croix -->
     <ul class="file-tabs" id="fileTabs" aria-label="Fichiers ouverts"></ul>
 </div>
+
+{% if route_builder_available() %}
+<!-- Constructeur de traces (bêta) : absent du HTML quand la fonction ou le moteur n'est pas disponible -->
+<div class="field">
+    <button type="button" class="btn btn-outline-secondary" id="routeBuilderOpen">Créer une trace</button>
+</div>
+<section class="rb-panel" id="routeBuilderPanel" aria-label="Créer une trace" hidden>
+    <h2 class="eyebrow">Créer une trace</h2>
+    <p class="hint">Clique sur la carte pour poser des points (glisse pour déplacer, clic droit pour retirer).
+        La trace est une boucle qui les relie dans l'ordre.</p>
+    <p class="mono" id="rbCount" aria-live="polite">0 point</p>
+    <div class="field"><label for="rbActivity">Activité</label><select id="rbActivity" class="form-select"></select></div>
+    <div class="field"><label for="rbDistance">Distance voulue (km)</label>
+        <input id="rbDistance" type="number" class="form-control" inputmode="decimal" min="1" step="0.5"></div>
+    <div class="button-row">
+        <button type="button" class="btn btn-primary" id="rbFinish" disabled>Terminer</button>
+        <button type="button" class="btn btn-outline-secondary" id="rbCancel" hidden>Annuler</button>
+        <button type="button" class="btn btn-outline-secondary" id="rbUndo" disabled>Annuler le dernier</button>
+        <button type="button" class="btn btn-outline-secondary" id="rbRedo" disabled>Rétablir</button>
+        <button type="button" class="btn btn-outline-secondary" id="rbClear" disabled>Effacer</button>
+        <button type="button" class="btn btn-link" id="rbClose">Fermer</button>
+    </div>
+    <p class="hint" id="rbMessage" role="status" aria-live="polite"></p>
+    <div id="rbResult" hidden>
+        <p class="mono" id="rbSummary"></p>
+        <ul id="rbWarnings" class="mb-2"></ul>
+        <div class="field"><label for="rbName">Nom</label><input id="rbName" class="form-control" maxlength="200"></div>
+        <div class="button-row">
+            <button type="button" class="btn btn-primary" id="rbSave">Enregistrer</button>
+            <button type="button" class="btn btn-outline-secondary" id="rbAnother">Autre proposition</button>
+            <button type="button" class="btn btn-outline-secondary" id="rbEdit">Modifier les points</button>
+        </div>
+        <p class="hint" id="rbSaved" role="status" aria-live="polite"></p>
+    </div>
+</section>
+{% endif %}

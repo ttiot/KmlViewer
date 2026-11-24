@@ -657,3 +657,43 @@ def test_adding_or_removing_a_totp_closes_the_other_sessions_and_keeps_the_curre
     ok = api(current, 'DELETE', '/api/me/mfa/totp', {'password': GOOD, 'code': code_for(secret, 1)})
     assert ok.status_code == 200
     assert api(current, 'GET', '/api/me/mfa').status_code == 200 and api(third, 'GET', '/api/me/mfa').status_code == 401
+
+
+# --- Doc-3 / CA-54 : user-invite --admin --account <login> --reset-password -------------------------------------------------------
+
+def _invite_link(app, *args):
+    result = app.test_cli_runner().invoke(args=['user-invite', '--admin', *args])
+    assert result.exit_code == 0, result.output
+    return next(line for line in result.output.splitlines() if '/auth/token#t=' in line).split('#t=')[1].strip()
+
+
+def test_reset_password_resume_replaces_the_forgotten_password_then_enrols_and_grants_admin_CA_54(app, conn):
+    user = add(conn, 'alice')
+    token = _invite_link(app, '--account', 'alice', '--reset-password')
+    assert tokens.inspect(conn, token) == 'set_password'
+    client = app.test_client()
+    csrf = csrf_of(client, '/auth/token')
+    assert post(client, '/auth/token/consume', {'token': token, 'password': 'court'}, csrf).status_code == 400    # politique : jeton intact
+    assert tokens.inspect(conn, token) == 'set_password'
+    old_session = session_client(app, conn, user)
+    ok = post(client, '/auth/token/consume', {'token': token, 'password': 'un-autre-mot-de-passe-91'}, csrf)
+    assert ok.status_code == 200 and ok.get_json()['next'] == '/auth/password/enroll'
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user['id'],)).fetchone()
+    assert passwords.verify_password(row['password_hash'], 'un-autre-mot-de-passe-91')[0]
+    assert not passwords.verify_password(row['password_hash'], GOOD)[0] and row['is_admin'] == 0
+    assert api(old_session, 'GET', '/api/me/mfa').status_code == 401                       # sessions révoquées
+    state = pending_state(app, client)
+    assert state.admin_grant and state.user_id == user['id'] and tokens.inspect(conn, token) is None
+    secret = state.extra.get('totp_secret') or (client.get('/auth/password/enroll', **KW) and pending_state(app, client).extra['totp_secret'])
+    done = post(client, '/auth/password/enroll', {'code': code_for(secret)})
+    assert done.status_code == 200 and conn.execute("SELECT is_admin FROM users WHERE id = ?", (user['id'],)).fetchone()[0] == 1
+
+
+def test_reset_password_needs_an_account_and_an_eligible_one(app, conn):
+    assert app.test_cli_runner().invoke(args=['user-invite', '--admin', 'x@example.org', '--reset-password']).exit_code != 0
+    holder = add(conn, 'holder')
+    activate(app, conn, holder['id'])
+    assert app.test_cli_runner().invoke(args=['user-invite', '--admin', '--account', 'holder', '--reset-password']).exit_code != 0
+    plain = add(conn, 'plain')
+    token = _invite_link(app, '--account', 'plain')                                          # sans --reset-password : mot de passe actuel
+    assert tokens.inspect(conn, token) == 'confirm_password' and plain

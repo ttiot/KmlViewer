@@ -7,7 +7,7 @@
     // year : année affichée, null pour laisser le serveur choisir (année en cours, sinon la
     // dernière qui porte des données)
     const state = { period: 'year', metric: 'distance_km', type: '', year: null, stats: null, chart: null,
-                    demEnabled: false, activities: [], hasMore: false, total: null,
+                    demEnabled: false, activities: [], hasMore: false, total: null, kind: '',
                     // Numéro de la dernière requête de chaque liste : une réponse plus ancienne,
                     // arrivée en retard, ne doit pas écraser l'affichage du filtre courant
                     requests: { dashboard: 0, activities: 0 }, typeLabels: {} };
@@ -150,7 +150,8 @@
         return el('tr', {},
             el('td', { class: 'text-nowrap' }, date(a.start_time), a.start_time_known === false
                 ? el('span', { class: 'badge-soft ms-1', title: "Fichier sans date : rangé à sa date d'import" }, 'import') : null),
-            el('td', {}, el('a', { class: 'activity-name', href: `/?activity=${a.id}` }, a.name)),
+            el('td', {}, el('a', { class: 'activity-name', href: `/?activity=${a.id}` }, a.name),
+                a.kind === 'planned' ? el('span', { class: 'badge-soft is-info ms-1', title: 'Trace planifiée (non réalisée)' }, 'Planifiée') : null),
             el('td', {}, el('span', { class: 'chip' },
                 state.typeLabels[a.activity_type] || state.typeLabels.unclassified)),
             el('td', { class: 'text-end text-nowrap' }, distance(a.distance_m)),
@@ -208,6 +209,7 @@
         const limit = more ? PAGE_SIZE : Math.min(MAX_LIMIT, Math.max(PAGE_SIZE, state.activities.length));
         const params = new URLSearchParams({ limit, offset });
         if (state.type) params.set('type', state.type);
+        if (state.kind) params.set('kind', state.kind);
         const data = await api(`/api/activities?${params}`);
         if (request !== state.requests.activities) return;
 
@@ -274,6 +276,11 @@
         document.getElementById('yearNoticeButton').addEventListener('click', (event) => {
             state.year = Number(event.currentTarget.dataset.year) || null;
             loadDashboard().catch((e) => notify(e.message, 'danger'));
+        });
+        document.getElementById('kindFilter').addEventListener('change', (event) => {
+            state.kind = event.target.value;            // « Toutes » par défaut (RB-5.5)
+            state.activities = [];
+            loadActivities().catch((e) => notify(e.message, 'danger'));
         });
         document.getElementById('typeFilter').addEventListener('change', (event) => {
             state.type = event.target.value;

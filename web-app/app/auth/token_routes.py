@@ -132,7 +132,14 @@ def token_consume():
     login = url_for('auth.password_login')       # jetons de comptes password : jamais chez l'IdP (T10-3)
     ip = request.remote_addr
     try:
-        if kind == 'bootstrap' and found[1] is not None:
+        if kind == 'bootstrap' and found[1] is not None and tokens.is_reset_password(db, token):
+            password = _text(data, 'password')                # mot de passe OUBLIÉ : le formulaire pose le nouveau (CA-54)
+            if password is None:
+                return jsonify({'success': False, 'error': 'Nouveau mot de passe requis.'}), 400
+            result = invitations.reset_bootstrap(db, token, password, ip=ip)
+            if result is None:
+                return jsonify(INVALID), 404
+        elif kind == 'bootstrap' and found[1] is not None:
             password = _text(data, 'password')
             if password is None:
                 return jsonify({'success': False, 'error': 'Mot de passe actuel requis.'}), 400

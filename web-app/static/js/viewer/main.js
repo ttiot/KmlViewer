@@ -13,4 +13,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupAnalysis();
     setupEditor();
     setupLibrary();
+    if (typeof RouteBuilder !== 'undefined') RouteBuilder.setup();   // présent seulement si la fonction est disponible (EF-7.3)
 });

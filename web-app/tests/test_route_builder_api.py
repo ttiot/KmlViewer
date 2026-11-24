@@ -449,3 +449,41 @@ def test_the_admin_feature_view_carries_the_engine_diagnostic(app, conn):
 
 def test_unused_imports_guard():
     assert NoRouteFound and Actor
+
+
+# --- Front (TR6, EF-7.3, P-TR6-1, P-TR6-6, P-TR6-7) -------------------------------------------------------------------------------------
+
+def test_the_viewer_shows_the_builder_only_when_the_feature_and_the_engine_are_available(app, conn, tmp_path):
+    user = add(conn, 'alice')
+    client = session_for(app, user)
+    html = client.get('/', **KW).get_data(as_text=True)
+    assert 'routeBuilderOpen' not in html and 'route-builder.js' not in html                    # fonction `off` : rien dans le HTML
+    enable(conn)
+    html = client.get('/', **KW).get_data(as_text=True)
+    assert 'id="routeBuilderOpen"' in html and 'id="routeBuilderPanel"' in html and 'js/viewer/route-builder.js' in html
+    assert 'style=' not in html.split('routeBuilderPanel')[1].split('</section>')[0]
+    bare = make(tmp_path / 'bare', engine=False)
+    c2 = database.connect(bare.config['DB_PATH'])
+    enable(c2)
+    other = add(c2, 'bob')
+    assert 'routeBuilderOpen' not in session_for(bare, other).get('/', **KW).get_data(as_text=True)      # moteur non configuré
+    c2.close()
+
+
+def test_the_builder_script_follows_the_front_rules():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js'
+    js = (root / 'viewer' / 'route-builder.js').read_text(encoding='utf-8')
+    assert 'innerHTML' not in js and 'eval(' not in js and 'window.confirm' not in js and 'XMLHttpRequest' not in js
+    urls = set(re.findall(r"""(?:fetch|api)\(\s*['"`]([^'"`]+)""", js))
+    assert urls and all(u.startswith('/') for u in urls)                                          # aucune requête hors de l'origine
+    assert "kmlviewer.routeBuilder." in js and 'MAX_HISTORY = 100' in js and 'divIcon' in js
+    assert re.search(r"form\[action\$=\"/auth/logout\"\]", js)                                      # effacement à la déconnexion
+
+
+def test_the_library_filters_planned_traces_and_shows_the_badge(app, conn):
+    html = session_for(app, add(conn, 'alice')).get('/dashboard', **KW).get_data(as_text=True)
+    assert 'id="kindFilter"' in html and 'Planifiées' in html and 'Réalisées' in html
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js' / 'dashboard.js').read_text(encoding='utf-8')
+    assert "a.kind === 'planned'" in js and "params.set('kind', state.kind)" in js

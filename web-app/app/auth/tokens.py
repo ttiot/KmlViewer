@@ -41,6 +41,7 @@ FORM_FOR_KIND = {'invite': 'choose_credentials', 'bootstrap': 'choose_credential
                  'set_password': 'choose_credentials',      # conversion SSO : l'identifiant est choisi (EF-0.5)
                  'verify_email': 'verify_email'}
 MAX_NOTE = 200
+RESET_PASSWORD_NOTE = '@reset-password'     # marque interne d'un amorçage ciblé qui REMPLACE le mot de passe (EF-0.3b, CA-54)
 MAX_CREDITS = 1000
 _TOKEN_SHAPE = re.compile(r'[A-Za-z0-9_-]{43}')                  # token_urlsafe(32) : 43 caractères
 _TIME_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
@@ -148,12 +149,13 @@ def inspect(conn, token, now: Optional[datetime] = None) -> Optional[str]:
     """
     digest = hash_token(token)
     row = None if digest is None else conn.execute(
-        "SELECT kind, target_user_id FROM auth_tokens WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL "
+        "SELECT kind, target_user_id, note FROM auth_tokens WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL "
         "AND expires_at > ?", (digest, _stamp(now))).fetchone()
     if row is None:
         return None
     if row['kind'] == 'bootstrap' and row['target_user_id'] is not None:
-        return 'confirm_password'                   # reprise d'amorçage d'un compte existant (EF-0.3b)
+        # reprise d'amorçage d'un compte existant (EF-0.3b) : mot de passe actuel, ou nouveau mot de passe (`--reset-password`)
+        return 'set_password' if row['note'] == RESET_PASSWORD_NOTE else 'confirm_password'
     return FORM_FOR_KIND[row['kind']]
 
 
@@ -167,6 +169,15 @@ def peek(conn, token, now: Optional[datetime] = None):
         "SELECT kind, target_user_id FROM auth_tokens WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL "
         "AND expires_at > ?", (digest, _stamp(now))).fetchone()
     return (row['kind'], row['target_user_id']) if row else None
+
+
+def is_reset_password(conn, token, now: Optional[datetime] = None) -> bool:
+    """Jeton d'amorçage ciblé émis avec `--reset-password` (interne : jamais révélé au client)."""
+    digest = hash_token(token)
+    row = None if digest is None else conn.execute(
+        "SELECT note FROM auth_tokens WHERE token_hash = ? AND kind = 'bootstrap' AND target_user_id IS NOT NULL "
+        "AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", (digest, _stamp(now))).fetchone()
+    return bool(row and row['note'] == RESET_PASSWORD_NOTE)
 
 
 def kind_of(conn, token, now: Optional[datetime] = None) -> Optional[str]:

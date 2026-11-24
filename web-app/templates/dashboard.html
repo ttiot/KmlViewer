@@ -11,6 +11,12 @@
         <option value="{{ key }}">{{ label }}</option>
         {% endfor %}
     </select>
+    <label class="visually-hidden-label" for="kindFilter">Nature des traces</label>
+    <select id="kindFilter" class="form-select">
+        <option value="">Toutes</option>
+        <option value="activity">Réalisées</option>
+        <option value="planned">Planifiées</option>
+    </select>
     <div class="segmented" role="group" aria-label="Période" id="periodSwitch">
         <button type="button" class="btn" data-period="week" aria-pressed="false">Semaine</button>
         <button type="button" class="btn" data-period="month" aria-pressed="false">Mois</button>

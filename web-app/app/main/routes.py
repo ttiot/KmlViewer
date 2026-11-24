@@ -13,7 +13,14 @@ from app.services import activity_store, activity_types, profile_service
 @bp.app_context_processor
 def _catalogs():
     """Catalogue des types d'activité (listes déroulantes rendues côté serveur) et version du pied de page."""
-    return {'activity_types': activity_types.CATALOG,
+    def route_builder_available():
+        """Constructeur de traces : fonction ouverte à cet utilisateur ET moteur configuré ; sinon aucun élément dans le HTML."""
+        from app.features import feature_enabled_for_current_user
+        runtime = current_app.extensions.get('routing')
+        return bool(runtime is not None and runtime.configured() and feature_enabled_for_current_user('route_builder'))
+
+    return {'route_builder_available': route_builder_available,
+            'activity_types': activity_types.CATALOG,
             'unclassified': (activity_types.UNCLASSIFIED, activity_types.UNCLASSIFIED_LABEL),
             'app_version': current_app.config['APP_VERSION']}
 

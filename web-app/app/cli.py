@@ -123,7 +123,9 @@ def register_cli(app) -> None:
     @click.argument('email', required=False)
     @click.option('--admin', 'amorcage', is_flag=True, help="Amorçage : le seul jeton qui donne l'admin (obligatoire en CLI).")
     @click.option('--account', default=None, help="Reprend l'amorçage d'un compte à mot de passe existant, sans facteur.")
-    def user_invite(email, amorcage, account):
+    @click.option('--reset-password', 'reset_password', is_flag=True,
+                  help="Avec --account : le lien fait CHOISIR un nouveau mot de passe (mot de passe oublié) avant l'enrôlement.")
+    def user_invite(email, amorcage, account, reset_password):
         """
         Amorçage (EF-0.3) : émet un jeton à usage unique de 24 h dont la consommation crée le premier admin, ou
         reprend l'amorçage abandonné d'un compte (`--account`). Le lien est affiché une fois.
@@ -132,6 +134,8 @@ def register_cli(app) -> None:
         from app.auth import factors, modes, tokens
         if not amorcage:
             raise click.UsageError("Seul l'amorçage est disponible en ligne de commande : ajoute --admin.")
+        if reset_password and not account:
+            raise click.UsageError("--reset-password demande --account <identifiant>.")
         if not modes.password_accounts_available(app.config):
             raise click.ClickException("Les comptes à mot de passe ne sont pas disponibles (mode password, ou mode oidc "
                                        "avec SECRETS_KEY et PUBLIC_URL).")
@@ -166,7 +170,7 @@ def register_cli(app) -> None:
                                               "révoque-la ou attends son expiration.")
             try:
                 created = tokens.create(db, 'bootstrap', actor=Actor.cli(), target_user_id=target_id, email=address,
-                                        is_admin_grant=True)
+                                        is_admin_grant=True, note=tokens.RESET_PASSWORD_NOTE if reset_password else None)
             except ValueError as exc:
                 raise click.ClickException(str(exc)) from exc
         finally:

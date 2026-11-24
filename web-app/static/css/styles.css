@@ -793,3 +793,21 @@
     height: 8px;
     margin-bottom: 4px;
 }
+
+/* Constructeur de traces (TR6) : repères numérotés, glissables ; panneau d'édition */
+.rb-pin {
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 2.5px solid #fff;
+    background: var(--map-ink, #1f2937);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: grab;
+}
+
+.rb-panel { display: grid; gap: .5rem; margin-top: .75rem; }
+.rb-warn { color: var(--warning, #b45309); }
+.rb-error { color: var(--danger, #b91c1c); }

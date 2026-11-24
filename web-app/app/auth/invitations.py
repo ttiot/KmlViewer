@@ -250,6 +250,37 @@ def convert_account(conn, token, username, password, *, ip: Optional[str] = None
     return {'id': target, 'username': identifier, 'email_pending': moved}
 
 
+def reset_bootstrap(conn, token, password, *, ip: Optional[str] = None, now: Optional[datetime] = None) -> Optional[dict]:
+    """
+    Reprise d'amorçage AVEC remplacement du mot de passe oublié (`user-invite --admin --account <login> --reset-password`,
+    EF-0.3b, CA-54) : politique EF-1.4, mot de passe remplacé, sessions du compte révoquées, jeton consommé ; l'enrôlement suit
+    (l'appelant crée l'état). Même réponse neutre que partout pour un jeton ou un compte non valable.
+    """
+    found = tokens.peek(conn, token, now)
+    if found is None or found[0] != 'bootstrap' or found[1] is None or not tokens.is_reset_password(conn, token, now):
+        return None
+    target = found[1]
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (target,)).fetchone()
+    if user is None or not user['is_active'] or user['auth_method'] != 'password' or factors.has_second_factor(conn, target):
+        return None
+    passwords.check_policy(password, identities=[user['username'], user['email'], user['pending_email']])
+    hashed = passwords.hash_password(password)
+    with write_transaction(conn):
+        info = tokens.consume(conn, token, kind='bootstrap', target_user_id=target, used_by=target, now=now)
+        if info is None:
+            return None
+        fresh = conn.execute("SELECT * FROM users WHERE id = ?", (target,)).fetchone()
+        if (fresh is None or not fresh['is_active'] or fresh['auth_method'] != 'password'
+                or factors.has_second_factor(conn, target)):
+            conn.rollback()
+            return None
+        conn.execute("UPDATE users SET password_hash = ?, password_changed_at = ?, session_token = ? WHERE id = ?",
+                     (hashed, tokens._stamp(now), _new_session_token(), target))
+        audit.record(conn, 'user.bootstrap_password_reset', actor=audit.Actor.from_user(user), target_type='user',
+                     target_id=target, ip=ip)
+    return {'id': target, 'username': user['username'], 'grant': bool(info.is_admin_grant)}
+
+
 def verify_email(conn, user, token, *, ip: Optional[str] = None, now: Optional[datetime] = None) -> str:
     """
     Valide l'adresse en attente de `user` (EF-4.3, EF-4.3b). Le jeton est consommé SEULEMENT s'il vise ce compte

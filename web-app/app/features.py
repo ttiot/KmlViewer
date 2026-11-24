@@ -137,6 +137,11 @@ def feature_required(key: str):
     return decorator
 
 
+def feature_enabled_for_current_user(key: str) -> bool:
+    user = g.get('user')
+    return user is not None and is_enabled(get_db(), key, user['id'])
+
+
 def init_features(app) -> None:
     """Expose `feature_enabled(clé)` aux gabarits : une entrée d'une fonction indisponible n'est pas dans le HTML."""
     def feature_enabled(key):
