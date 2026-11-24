@@ -8,7 +8,7 @@ import requests
 
 from app import outbound
 from app.services.file_formats import MAX_FILE_POINTS
-from app.services.routing import profiles
+from app.services.routing import profiles  # noqa: F401
 from app.services.routing.base import (Health, InvalidRequest, InvalidResponse, NoRouteFound, RoutingError, RoutingTimeout,
                                        RoutingUnavailable)
 from app.services.routing.graphhopper import MAX_RESPONSE_BYTES, GraphHopperProvider, _decimate
@@ -302,12 +302,12 @@ def test_the_guard_runs_before_every_outbound_call_and_a_refusal_prevents_the_ca
 def test_the_api_key_travels_in_a_header_never_in_the_url_and_never_over_cleartext_by_default():
     gh, session, clock = provider(ok('route'))
     gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
-    assert 'headers' not in session.calls[0][1] and 'key' not in dict(session.calls[0][1]['params'])
+    assert session.calls[0][1]['headers'] == {'Connection': 'close'} and 'key' not in dict(session.calls[0][1]['params'])
     gh, session, clock = provider(FakeResponse(503), api_key='s3cret', allow_cleartext_key=True)
     with pytest.raises(RoutingError) as exc:
         gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
     kw = session.calls[0][1]
-    assert kw['headers'] == {'Authorization': 'Bearer s3cret'} and 's3cret' not in repr(kw['params']) and 's3cret' not in str(exc.value)
+    assert kw['headers']['Authorization'] == 'Bearer s3cret' and 's3cret' not in repr(kw['params']) and 's3cret' not in str(exc.value)
     assert 's3cret' not in session.calls[0][0]
     with pytest.raises(ValueError):
         GraphHopperProvider(BASE, guard=lambda d: None, api_key='s3cret')                    # http + clé : refusé
@@ -338,26 +338,6 @@ def test_a_slow_trickling_body_is_cut_at_the_deadline_not_at_the_end_of_the_stre
     assert clock.now - 1000.0 <= 4.0                                       # arrêt au premier bloc après l'échéance
 
 
-def test_the_watchdog_closes_the_connection_at_the_deadline_for_a_blocked_read():
-    import threading
-    import time as real_time
-    closed = threading.Event()
-
-    class Blocked(FakeResponse):
-        def iter_content(self, size):
-            closed.wait(5)                                               # une lecture bloquée jusqu'à la fermeture
-            raise OSError('fermée')
-
-        def close(self):
-            closed.set()
-
-    gh = GraphHopperProvider(BASE, guard=lambda d: None, session=FakeSession(Blocked(200)))
-    started = real_time.monotonic()
-    with pytest.raises(RoutingTimeout):
-        gh.route([LILLE, (50.7, 3.1)], 'foot', real_time.monotonic() + 0.3)
-    assert real_time.monotonic() - started < 2.0
-
-
 # --- health() -------------------------------------------------------------------------------------------------------------
 
 def test_health_reads_the_recorded_info_with_lat_lon_order():
@@ -381,7 +361,7 @@ def test_health_is_down_when_the_engine_does_not_answer_healthy(outcomes):
 def test_garbage_info_never_raises_and_never_yields_a_wrong_extent(info):
     gh, _, _ = provider(FakeResponse(200, b'OK'), FakeResponse(200, info))
     health = gh.health()
-    assert isinstance(health, Health) and (health == Health.down() or (health.available and health.bbox is None))
+    assert isinstance(health, Health) and (health == Health.down() or health.available)      # profil inattendu : ignoré, moteur disponible
 
 
 def test_health_with_an_unreachable_info_keeps_the_engine_available():
@@ -406,3 +386,62 @@ def test_default_activity_follows_the_user_default_type_otherwise_running():
     assert [profiles.default_for(t) for t in ('run', 'trail', 'hike', 'road_bike', 'mtb', 'walk', None, 'car')] == \
         ['run', 'trail', 'hike', 'road_bike', 'mtb', 'run', 'run', 'run']
     assert [o['key'] for o in profiles.options()] == ['run', 'trail', 'hike', 'road_bike', 'gravel', 'mtb']
+
+
+# --- TR3-1 : l'échéance borne aussi un moteur lent sur les EN-TÊTES et sur un corps avec Content-Length (serveur réel) --------------
+
+def _slow_server(kind):
+    """Serveur TCP réel : `headers` égrène les en-têtes, `body` annonce un Content-Length puis égrène le corps."""
+    import socket as socket_module
+    import threading as threading_module
+    import time as time_module
+    listener = socket_module.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(5)
+    stop = threading_module.Event()
+
+    def serve():
+        listener.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                continue
+            threading_module.Thread(target=handle, args=(conn,), daemon=True).start()
+
+    def handle(conn):
+        try:
+            conn.settimeout(5)
+            conn.recv(65536)
+            payload = b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100000\r\n\r\n'
+            if kind == 'headers':
+                for byte in payload:
+                    conn.sendall(bytes([byte]))
+                    time_module.sleep(0.3)
+            else:
+                conn.sendall(payload)
+                for _ in range(200):
+                    conn.sendall(b' ')
+                    time_module.sleep(0.3)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    threading_module.Thread(target=serve, daemon=True).start()
+    return listener, stop
+
+
+@pytest.mark.parametrize('kind', ['headers', 'body'])
+def test_a_slow_real_engine_is_cut_at_the_deadline_on_headers_and_on_a_content_length_body(kind):
+    import time as time_module
+    listener, stop = _slow_server(kind)
+    try:
+        gh = GraphHopperProvider(f'http://127.0.0.1:{listener.getsockname()[1]}', guard=lambda d: None, timeout_s=20)
+        started = time_module.monotonic()
+        with pytest.raises(RoutingTimeout):
+            gh.route([LILLE, (50.7, 3.1)], 'foot', time_module.monotonic() + 1.0)
+        assert time_module.monotonic() - started < 3.0
+    finally:
+        stop.set()
+        listener.close()

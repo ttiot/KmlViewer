@@ -67,6 +67,7 @@ class Outcome:
     iterations: int = 0
     warnings: List[str] = field(default_factory=list)       # codes : 'user_point_unreachable', …
     elevations: Optional[tuple] = None
+    engine_warnings: tuple = ()                 # avertissements du moteur (RB-4.9), déjà nettoyés par l'interface
 
 
 @dataclass
@@ -138,7 +139,7 @@ class LateralPoints(DetourStrategy):
         rng = random.Random(ctx.seed)
         base = start or Outcome(list(ctx.base_points), ctx.base_distance_m)
         seq = ctx.closed_sequence
-        out = Outcome(list(base.points), base.distance_m, elevations=base.elevations)
+        out = Outcome(list(base.points), base.distance_m, elevations=base.elevations, engine_warnings=base.engine_warnings)
         delta = ctx.target_m - ctx.base_distance_m
         if delta <= 0:
             return out
@@ -175,7 +176,7 @@ class LateralPoints(DetourStrategy):
             distance = quality.length_m(result.points)
             if ctx.accepts(result.points):
                 candidate = Outcome(list(result.points), distance, detours=len(techs), iterations=iteration,
-                                    elevations=result.elevations_m)
+                                    elevations=result.elevations_m, engine_warnings=tuple(result.warnings))
                 if _better(candidate, best, ctx.target_m):
                     best = candidate
                 if ctx.in_tolerance(distance):
@@ -221,7 +222,7 @@ class Petals(DetourStrategy):
         anchors = rng.sample(list(ctx.points), count)
         petal_target, best, previous = delta / count, out, None
         for iteration in range(1, MAX_ITERATIONS + 1):
-            trace, petals = list(base.points), 0
+            trace, petals, notes = list(base.points), 0, list(base.engine_warnings)
             try:
                 for j, anchor in enumerate(anchors):
                     petal = ctx.budget.call(
@@ -229,6 +230,7 @@ class Petals(DetourStrategy):
                             anchor, ctx.profile, length, ctx.seed + j, a[-1]))
                     trace = _graft(trace, anchor, list(petal.points))
                     petals += 1
+                    notes.extend(petal.warnings)
             except NoRouteFound:
                 petal_target *= 0.7
                 continue
@@ -236,7 +238,8 @@ class Petals(DetourStrategy):
                 break
             distance = quality.length_m(trace)
             if ctx.accepts(trace):
-                candidate = Outcome(trace, distance, detours=petals, iterations=iteration)
+                candidate = Outcome(trace, distance, detours=petals, iterations=iteration,
+                                    engine_warnings=tuple(dict.fromkeys(notes)))
                 if _better(candidate, best, ctx.target_m):
                     best = candidate
                 if ctx.in_tolerance(distance):

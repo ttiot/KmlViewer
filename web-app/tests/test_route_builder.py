@@ -99,7 +99,7 @@ def test_base_loop_longer_than_the_target_is_returned_with_the_minimum_distance_
     assert len(p.calls) == 1 and gen.meta['detours'] == 0
     [warning] = [w for w in gen.warnings if w['code'] == 'min_distance']
     assert f"{d0 / 1000:.1f}" in warning['message']
-    assert not any(w['code'] == 'off_target' for w in gen.warnings)
+    assert not any(w['code'] == 'target_gap' for w in gen.warnings)
 
 
 def test_without_a_target_the_base_loop_is_returned():
@@ -116,7 +116,7 @@ def test_detours_converge_into_the_tolerance_within_four_iterations(factor):
     target = d0 * factor
     gen = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', target / 1000, 3, CFG)
     assert abs(gen.meta['distance_m'] - target) <= 0.15 * target and gen.meta['detours'] > 0 and gen.meta['iterations'] <= 4
-    assert not any(w['code'] == 'off_target' for w in gen.warnings)
+    assert not any(w['code'] == 'target_gap' for w in gen.warnings)
 
 
 class Stubborn(FakeProvider):
@@ -136,7 +136,7 @@ def test_a_provider_that_never_converges_gives_the_best_trace_and_a_gap_warning(
     p = Stubborn(POINTS, sinuosity=0.05)
     gen = generate(p, POINTS, 'run', d0 * 2 / 1000, 0, BuildConfig(detour_strategy='s1'))
     assert gen.meta['distance_m'] == pytest.approx(d0, rel=0.01)
-    assert any(w['code'] == 'off_target' for w in gen.warnings)
+    assert any(w['code'] == 'target_gap' for w in gen.warnings)
 
 
 # --- CA-R7 : budget ----------------------------------------------------------------------------------------------------------
@@ -253,7 +253,7 @@ class FixedOverlap(FakeProvider):
         back = total * self.rate                                      # longueur repassée = rate × total
         loop = FakeProvider().route([(50.0, 3.0), (50.03, 3.0), (50.03, 3.04), (50.0, 3.0)], 'foot', deadline).points
         spur = [(50.0 + i * 25 / 111_194.9, 3.0 - 0.05) for i in range(int(back / 2 / 25))]
-        trace = list(loop) + [(50.0, 3.0 - 0.05)] + spur + spur[-2::-1]
+        trace = list(loop) + [(50.0, 3.0 - 0.05)] + spur + spur[-2::-1] + [(50.0, 3.0)]        # refermée sur le départ
         return RouteResult(points=trace, distance_m=length_m(trace))
 
 
@@ -314,7 +314,7 @@ def test_an_engine_failure_during_the_detours_keeps_the_base_trace_with_a_gap_wa
     d0 = d0_of()
     p = FakeProvider(sinuosity=0.05, fail=[None] + [RoutingUnavailable() for _ in range(30)])
     gen = generate(p, POINTS, 'run', d0 * 2 / 1000, 0, CFG)
-    assert gen.meta['distance_m'] == pytest.approx(d0, rel=0.01) and any(w['code'] == 'off_target' for w in gen.warnings)
+    assert gen.meta['distance_m'] == pytest.approx(d0, rel=0.01) and any(w['code'] == 'target_gap' for w in gen.warnings)
 
 
 def test_an_unreachable_point_is_reported_with_its_original_number():
@@ -363,7 +363,7 @@ def test_a_last_point_within_5_m_of_the_first_is_dropped_with_a_warning():
     sent = POINTS + [shifted(POINTS[0], 3)]
     gen = generate(FakeProvider(), sent, 'run', None, 0, CFG)
     assert gen.meta['point_numbers'] == [1, 2, 3, 4]
-    assert [w['code'] for w in gen.warnings] == ['last_point_removed'] and '5' in gen.warnings[0]['message']
+    assert [w['code'] for w in gen.warnings] == ['closing_point_removed'] and '5' in gen.warnings[0]['message']
 
 
 # --- Hybride, essais de graine (CA-R30, R31, R33) ----------------------------------------------------------------------------
@@ -431,11 +431,12 @@ def test_two_points_off_target_after_every_attempt_get_the_suggestion_to_add_a_p
     d0 = d0_of(pts)
     p = Stubborn(pts, sinuosity=0.0)
     gen = generate(p, pts, 'run', d0 * 2 / 1000, 0, BuildConfig(detour_strategy='s1'))
-    [warning] = [w for w in gen.warnings if w['code'] == 'off_target']
+    assert any(w['code'] == 'target_gap' for w in gen.warnings)
+    [warning] = [w for w in gen.warnings if w['code'] == 'add_waypoint']
     assert 'Ajoute un point de passage' in warning['message']
     five = Stubborn(POINTS, sinuosity=0.0)
     gen = generate(five, POINTS, 'run', d0_of() * 2 / 1000, 0, BuildConfig(detour_strategy='s1'))
-    assert 'Ajoute un point' not in next(w for w in gen.warnings if w['code'] == 'off_target')['message']
+    assert any(w['code'] == 'target_gap' for w in gen.warnings) and not any(w['code'] == 'add_waypoint' for w in gen.warnings)
 
 
 def test_one_point_retries_seeds_until_in_tolerance_and_keeps_the_best():
@@ -448,7 +449,7 @@ def test_one_point_retries_seeds_until_in_tolerance_and_keeps_the_best():
     assert gen.meta['attempts'] == 3 and abs(gen.meta['distance_m'] - 10_000) <= 1500
     p = Seeded()
     gen = generate(p, [POINTS[0]], 'run', 10, 0, BuildConfig(seed_retries=0))
-    assert gen.meta['attempts'] == 1 and any(w['code'] == 'off_target' for w in gen.warnings)
+    assert gen.meta['attempts'] == 1 and any(w['code'] == 'target_gap' for w in gen.warnings)
 
 
 # --- Stratégies : registre (CA-R18) ------------------------------------------------------------------------------------------

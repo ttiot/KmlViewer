@@ -13,26 +13,87 @@ Le cas « point non approchable » du moteur (400, `PointNotFoundException`, `po
 
 import json
 import logging
+import re
+import socket
 import threading
 import time
 from typing import Callable, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from app import outbound
 from app.services.file_formats import MAX_FILE_POINTS
-from app.services.routing.base import (Health, InvalidResponse, NoRouteFound, RouteResult, RoutingProvider, RoutingTimeout,
-                                       RoutingUnavailable, time_left, validate_deadline, validate_round_trip_request,
-                                       validate_route_request)
+from app.services.routing.base import (MAX_HEALTH_PROFILES, Health, InvalidResponse, NoRouteFound, RouteResult,
+                                       RoutingProvider, RoutingTimeout, RoutingUnavailable, time_left, validate_deadline,
+                                       validate_round_trip_request, validate_route_request)
 
 logger = logging.getLogger(__name__)
+# urllib3 journalise l'URL (coordonnées de la trace) dès DEBUG : jamais dans les journaux (RB-S9, CA-R17)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 
+_PROFILE_NAME = re.compile(r'[a-z0-9_]{1,32}')
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 CHUNK = 64 * 1024
 HEALTH_TIMEOUT_S = 3.0
 MAX_VISITED_NODES = 5_000_000      # borne large (2,2 M mesuré pour 440 km) ; seul le paramètre de REQUÊTE compte en 11.0
 MAX_RETRIES = 1                    # reprise sur 5xx / connexion refusée, décomptée du budget (RB-S6)
 MIN_RETRY_LEFT_S = 0.5             # pas de reprise s'il reste moins que cela
+
+
+_local = threading.local()
+
+
+class _TrackedHTTP(HTTPConnection):
+    def connect(self):
+        super().connect()
+        _track(self.sock)
+
+
+class _TrackedHTTPS(HTTPSConnection):
+    def connect(self):
+        super().connect()
+        _track(self.sock)
+
+
+def _track(sock) -> None:
+    registry = getattr(_local, 'registry', None)
+    if registry is not None and sock is not None:
+        registry.append(sock)
+
+
+class _HTTPPool(HTTPConnectionPool):
+    ConnectionCls = _TrackedHTTP
+
+
+class _HTTPSPool(HTTPSConnectionPool):
+    ConnectionCls = _TrackedHTTPS
+
+
+class _DeadlineAdapter(HTTPAdapter):
+    """Adaptateur dont les connexions s'inscrivent dans le registre de l'appel en cours : le minuteur d'échéance peut ainsi
+    COUPER le socket (shutdown) même au milieu de la lecture des en-têtes, là où `timeout` est remis à zéro à chaque octet."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {'http': _HTTPPool, 'https': _HTTPSPool}
+
+
+def _new_session():
+    session = requests.Session()
+    for scheme in ('http://', 'https://'):
+        session.mount(scheme, _DeadlineAdapter())
+    return session
+
+
+def _shutdown_all(registry) -> None:
+    for sock in list(registry):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
 
 def _decimate(points: list, limit: int = MAX_FILE_POINTS) -> list:
@@ -63,7 +124,7 @@ class GraphHopperProvider(RoutingProvider):
         self._timeout = float(timeout_s)
         self._key = api_key or None
         self._guard = guard
-        self._session = session if session is not None else requests.Session()
+        self._session = session if session is not None else _new_session()
         self._clock = clock
 
     # -- transport ---------------------------------------------------------------------------------------------------
@@ -75,46 +136,56 @@ class GraphHopperProvider(RoutingProvider):
                 self._guard(self._destination)
             except Exception:  # noqa: BLE001 - refus audité par la garde elle-même ; message fixe côté appelant
                 raise RoutingUnavailable() from None
-        headers = {'Authorization': f'Bearer {self._key}'} if self._key else None
+        headers = {'Connection': 'close'}               # pas de connexion réutilisée : un registre de sockets par appel
+        if self._key:
+            headers['Authorization'] = f'Bearer {self._key}'
+        # ÉCHÉANCE (TR3-1) : un minuteur coupe les sockets de l'appel à l'échéance (connexion, en-têtes OU corps) ; `timeout`
+        # seul est remis à zéro à chaque octet reçu : un moteur qui égrène sa réponse dépasserait le budget
+        registry: list = []
+        _local.registry = registry
+        watchdog = None
+        if deadline is not None:
+            watchdog = threading.Timer(max(0.0, time_left(deadline, self._clock)), _shutdown_all, (registry,))
+            watchdog.daemon = True
+            watchdog.start()
+        try:
+            return self._exchange(path, params, timeout, deadline, headers)
+        finally:
+            _local.registry = None
+            if watchdog is not None:
+                watchdog.cancel()
+
+    def _exchange(self, path, params, timeout, deadline, headers):
+        expired = lambda: deadline is not None and time_left(deadline, self._clock) <= 0      # noqa: E731
         try:
             response = self._session.get(f'{self._base}{path}', params=params, timeout=timeout, allow_redirects=False,
-                                         stream=True, **({'headers': headers} if headers else {}))
+                                         stream=True, headers=headers)
         except requests.Timeout:
             raise RoutingTimeout() from None
-        except requests.RequestException:
-            raise RoutingUnavailable() from None
+        except requests.TooManyRedirects:
+            raise InvalidResponse() from None
+        except Exception:  # noqa: BLE001 - connexion coupée par l'échéance ou injoignable : jamais le détail
+            raise (RoutingTimeout() if expired() else RoutingUnavailable()) from None
         try:
             status = response.status_code
             if 300 <= status < 400:
                 logger.warning("Moteur de routage : redirection refusée (%s)", status)
                 raise InvalidResponse()
             body = bytearray()
-            # Échéance de la LECTURE (TR3-1) : un minuteur ferme la connexion à l'échéance (débloque une lecture lente) et
-            # le temps restant est contrôlé entre les blocs ; un moteur qui goutte-à-goutte ne retient jamais au-delà
-            watchdog = None
-            if deadline is not None:
-                watchdog = threading.Timer(max(0.0, time_left(deadline, self._clock)), response.close)
-                watchdog.daemon = True
-                watchdog.start()
             try:
                 for chunk in response.iter_content(CHUNK):
                     body.extend(chunk)
                     if len(body) > MAX_RESPONSE_BYTES:
                         logger.warning("Moteur de routage : réponse trop volumineuse")
                         raise InvalidResponse()
-                    if deadline is not None and time_left(deadline, self._clock) <= 0:
+                    if expired():
                         raise RoutingTimeout()
             except (RoutingTimeout, InvalidResponse):
                 raise
             except requests.Timeout:
                 raise RoutingTimeout() from None
-            except Exception:  # noqa: BLE001 - connexion fermée par le minuteur, coupure : jamais le détail
-                if deadline is not None and time_left(deadline, self._clock) <= 0:
-                    raise RoutingTimeout() from None
-                raise RoutingUnavailable() from None
-            finally:
-                if watchdog is not None:
-                    watchdog.cancel()
+            except Exception:  # noqa: BLE001 - connexion coupée : jamais le détail
+                raise (RoutingTimeout() if expired() else RoutingUnavailable()) from None
             if deadline is not None and time_left(deadline, self._clock) < 0:
                 raise RoutingTimeout()
             return status, bytes(body)
@@ -169,7 +240,7 @@ class GraphHopperProvider(RoutingProvider):
             raise NoRouteFound(None)                         # trajet trop complexe pour la borne : aucun itinéraire exploitable
         if 'ConnectionNotFoundException' in details or 'PointOutOfBoundsException' in details:
             raise NoRouteFound(index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else None)
-        logger.warning("Moteur de routage : requête refusée (%s, %s)", status, details[:80])
+        logger.warning("Moteur de routage : requête refusée (statut %s)", status)       # jamais le texte du moteur (coordonnées)
         raise InvalidResponse()
 
     def _result(self, status: int, body: bytes) -> RouteResult:
@@ -229,7 +300,9 @@ class GraphHopperProvider(RoutingProvider):
                     raw = info.get('bbox')
                     if isinstance(raw, list) and len(raw) == 4:
                         bbox = (raw[1], raw[0], raw[3], raw[2])          # [lon_min, lat_min, lon_max, lat_max] -> (lat, lon…)
-                    profiles = tuple(p['name'] for p in info.get('profiles', []))
+                    names = (p.get('name') for p in info.get('profiles', []) if isinstance(p, dict))
+                    # Un profil au nom inattendu est IGNORÉ (le moteur reste disponible), au plus MAX_HEALTH_PROFILES retenus
+                    profiles = tuple(n for n in names if isinstance(n, str) and _PROFILE_NAME.fullmatch(n))[:MAX_HEALTH_PROFILES]
             except (RoutingUnavailable, InvalidResponse, AttributeError, KeyError, TypeError):
                 bbox, profiles = None, ()
             return Health(available=True, bbox=bbox, profiles=profiles)

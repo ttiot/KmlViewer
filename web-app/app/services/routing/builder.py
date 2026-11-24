@@ -19,8 +19,8 @@ from typing import Callable, List, Optional, Sequence
 from app.services import geo
 from app.services.file_formats import MAX_FILE_POINTS
 from app.services.routing import detours, profiles, quality
-from app.services.routing.base import (InvalidRequest, NoRouteFound, RoutingError, RoutingProvider, RoutingTimeout,
-                                       validate_point)
+from app.services.routing.base import (InvalidRequest, InvalidResponse, NoRouteFound, RoutingError, RoutingProvider,
+                                       RoutingTimeout, validate_point)
 
 logger = logging.getLogger(__name__)
 
@@ -168,24 +168,27 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
     if len(kept) > 1 and quality_distance(kept[-1], kept[0]) < DUPLICATE_M:
         numbers_dropped = numbers.pop()
         kept.pop()
-        warnings.append(_warning('last_point_removed', f"Le point {numbers_dropped} est confondu avec le point 1 : retiré."))
+        warnings.append(_warning('closing_point_removed', f"Le point {numbers_dropped} est confondu avec le point 1 : retiré."))
     if len(kept) == 1 and target_m is None:
         raise InvalidBuild("Distance requise avec un seul point")
     if len(kept) < len(points):
         logger.info("Génération : %d points réduits à %d", len(points), len(kept))
 
     budget = detours.Budget(config.max_calls, config.total_budget_s, clock)
+    notes: list = []                      # avertissements du moteur (RB-4.9)
     tolerance = config.tolerance_pct / 100.0
     meta = {'profile': entry.profile, 'activity': entry.key, 'points': len(kept), 'point_numbers': list(numbers),
             'target_m': target_m, 'seed': seed}
     if len(kept) == 1:
-        trace, elevations, tried, last_seed = _single_point(provider, kept[0], entry.profile, target_m, tolerance, seed, budget,
-                                                            config, meta)
+        trace, elevations, tried, last_seed = _single_point(provider, kept[0], entry.profile, target_m, tolerance, seed,
+                                                            budget, config, meta, notes, numbers[0])
         meta.update(d0_m=None, detours=0, strategy='round_trip')
     else:
         trace, elevations, tried, last_seed = _loop(provider, kept, numbers, entry.profile, target_m, tolerance, seed, budget,
-                                                    config, meta, warnings)
+                                                    config, meta, warnings, notes)
 
+    for note in dict.fromkeys(notes):
+        warnings.append(_warning('engine', note))
     trace = quality.decimate(trace, MAX_FILE_POINTS)  # borne des fichiers (TR2-2)
     distance = quality.length_m(trace)
     overlap = quality.overlap_rate(trace)
@@ -195,9 +198,10 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
     gap = quality.target_gap(distance, target_m)
     if target_m and abs(gap) > tolerance and not any(w['code'] == 'min_distance' for w in warnings):
         text = f"Distance obtenue : {distance / 1000:.1f} km pour {target_m / 1000:.1f} km voulus ({gap * 100:+.0f} %)."
-        if len(kept) == 2:
-            text += " Ajoute un point de passage pour une boucle plus proche de la distance voulue."
-        warnings.append(_warning('off_target', text))
+        warnings.append(_warning('target_gap', text))
+        if len(kept) == 2:                                      # RB-4.14 : suggestion distincte, à code stable
+            warnings.append(_warning('add_waypoint',
+                                     "Ajoute un point de passage pour une boucle plus proche de la distance voulue."))
     meta.update(distance_m=distance, gap_pct=None if gap is None else round(gap * 100, 1),
                 gap_m=None if not target_m else distance - target_m, overlap_pct=round(overlap * 100, 1),
                 closure_m=quality.closure_m(trace), calls=budget.calls, attempts=tried, last_seed=last_seed,
@@ -208,7 +212,7 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
                       warnings=warnings)
 
 
-def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta):
+def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta, notes, number=1):
     """RB-4.1 : boucle native ; hors tolérance ⇒ graine suivante dans la limite des essais et du budget."""
     best, tried, last_seed = None, 0, seed
     for attempt in range(1 + config.seed_retries):
@@ -219,11 +223,16 @@ def _single_point(provider, start, profile, target_m, tolerance, seed, budget, c
             result = budget.call(provider.round_trip, start, profile, target_m, last_seed)
         except (detours.BudgetExhausted, RoutingTimeout):
             break
+        except NoRouteFound:
+            if best is None:
+                raise UnreachablePoint(number, 0) from None         # le seul point de l'utilisateur : son numéro d'origine
+            break
         except RoutingError:
             if best is None:
                 raise
             break
         tried += 1
+        notes.extend(result.warnings)
         trace = list(result.points)
         candidate = (abs(quality.length_m(trace) - target_m), quality.overlap_rate(trace), trace, result.elevations_m)
         if best is None or candidate[:2] < best[:2]:
@@ -239,24 +248,27 @@ def _enough_left(budget) -> bool:
     return budget.calls_left() >= MIN_SEED_CALLS and budget.time_left() >= MIN_SEED_SECONDS
 
 
-def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, config, meta, warnings):
+def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, config, meta, warnings, notes):
     """RB-4.2 à RB-4.4 : boucle de base, comparaison à la cible, détours et essais de graine."""
     sequence = list(kept) + [kept[0]]
     try:
         base = budget.call(provider.route, sequence, profile)
     except NoRouteFound as exc:
         index = exc.waypoint_index
-        number = numbers[index % len(kept)] if index is not None else None
-        if number is None:
-            raise
-        raise UnreachablePoint(number, index) from None
+        if index is None or not 0 <= index <= len(kept):
+            raise NoRouteFound() from None              # index absent ou hors de la liste envoyée : aucun point n'est accusé
+        raise UnreachablePoint(numbers[index % len(kept)], index) from None
     base_points = list(base.points)
+    if quality.closure_m(base_points) > config.snap_tolerance_m:
+        logger.warning("Boucle de base non refermée par le moteur")
+        raise InvalidResponse()                      # une « boucle » qui ne revient pas au départ n'en est pas une (CA-R4)
     snapped, gaps = quality.snap_to_trace(base_points, kept)
     for gap_m, number in zip(gaps, numbers):
         if gap_m > config.snap_tolerance_m:
             raise UnreachablePoint(number)
     d0 = quality.length_m(base_points)
     meta.update(d0_m=d0, detours=0, strategy='base')
+    notes.extend(base.warnings)
     if not target_m or abs(d0 - target_m) <= tolerance * target_m:
         return base_points, base.elevations_m, 1, seed
     if d0 > (1 + tolerance) * target_m:
@@ -286,6 +298,7 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
         if ctx.in_tolerance(outcome.distance_m):
             break
     meta.update(detours=best.detours, strategy=strategy.name, iterations=best.iterations)
+    notes.extend(best.engine_warnings)
     for code in dict.fromkeys(best.warnings):
         if code == 'user_point_unreachable':
             warnings.append(_warning(code, "Un point n'a pas pu être approché pour allonger la trace."))

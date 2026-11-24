@@ -343,17 +343,12 @@ def test_no_url_coordinate_or_key_appears_in_error_messages_or_the_adapters_own_
         assert forbidden not in blob, forbidden
 
 
-@pytest.mark.xfail(strict=True, reason="nit : sur un 400 « autre » du moteur, l'adaptateur journalise les 80 premiers caractères du texte du moteur ; "
-                                       "ce texte peut répéter des coordonnées (RB-S9) : ne journaliser que le nom de l'exception")
 def test_the_adapter_does_not_log_the_text_of_an_unexpected_400(caplog):
     _leak_run(caplog, with_400_echo=True)
     own = [r for r in caplog.records if not r.name.startswith(('urllib3', 'requests'))]
     assert '50.63' not in _blob(own)
 
 
-@pytest.mark.xfail(strict=True, reason="nit (durcissement) : si le journal racine passe en DEBUG, urllib3 écrit la ligne « GET /route?point=lat,lon"
-                                       "&key=… » : coordonnées et clé d'API dans les journaux (RB-S9, CA-R17, EF-5) ; poser le niveau WARNING sur le "
-                                       "journal « urllib3 » (comme pour DEM_URL, dont l'URL porte les positions de la trace)")
 def test_urllib3_debug_logs_do_not_leak_the_key_or_the_coordinates(caplog):
     _leak_run(caplog)
     blob = _blob([r for r in caplog.records if r.name.startswith(('urllib3', 'requests'))])
@@ -433,9 +428,6 @@ def test_health_reads_the_extent_in_lat_lon_order_and_ignores_the_declared_exten
     assert health.available and health.bbox == (48.83, -8.32, 54.60, 6.42) and health.profiles == ('foot', 'bike')
 
 
-@pytest.mark.xfail(strict=True, reason="nit : un moteur SAIN dont l'un des profils porte un nom hors [a-z0-9_] (« mtb-fast », « Hike ») ou plus de "
-                                       "20 profils est déclaré INDISPONIBLE (Health.down) au lieu de 'disponible, profils inconnus' : le bouton "
-                                       "disparaît sans cause visible (à arbitrer)")
 @pytest.mark.parametrize('profiles', [[{'name': 'mtb-fast'}], [{'name': 'Hike'}], [{'name': f'p{i}'} for i in range(25)]])
 def test_a_healthy_engine_with_unusual_profile_names_stays_available(profiles):
     info = {'bbox': [-8.32, 48.83, 6.42, 54.60], 'profiles': profiles}
@@ -570,8 +562,6 @@ def test_the_seed_ceiling_does_not_break_retries():
     assert gen.meta['attempts'] >= 1 and len(gen.points) > 10
 
 
-@pytest.mark.xfail(strict=True, reason="T-TR2-A (RB-4.9) : route_meta doit porter « les avertissements du moteur » ; RouteResult.warnings (nettoyés par "
-                                       "l'interface) n'est lu nulle part dans le builder : ils sont perdus")
 def test_the_engine_warnings_reach_route_meta_RB49():
     """RB-4.9 : route_meta porte les avertissements du moteur."""
     class Warns(FakeProvider):
@@ -602,16 +592,12 @@ def test_an_unreachable_point_is_blamed_with_its_original_number_closing_point_i
     assert exc.value.number == [1, 2, 3, 1][index]
 
 
-@pytest.mark.xfail(strict=True, reason="nit : un index hors de la liste envoyée (moteur incohérent) est ramené « modulo » à un point réel de "
-                                       "l'utilisateur, qui est alors accusé à tort (422 avec un numéro inventé) ; devrait rester une erreur sans numéro")
 def test_an_out_of_range_engine_index_does_not_blame_an_innocent_point():
     with pytest.raises(NoRouteFound) as exc:
         generate(IndexLiar(10 ** 6), [(50.63, 3.05), (50.66, 3.10), (50.64, 3.15)], 'run', None, 1, CFG)
     assert not isinstance(exc.value, UnreachablePoint)
 
 
-@pytest.mark.xfail(strict=True, reason="CA-R15 « point non approchable ⇒ 422 avec son numéro d'origine » : pour UN seul point (round_trip), "
-                                       "NoRouteFound remonte nu, sans numéro ; le numéro 1 est évident (à traiter ici ou en TR5)")
 def test_a_single_point_that_cannot_be_approached_is_reported_with_its_number():
     with pytest.raises(UnreachablePoint) as exc:
         generate(FakeProvider(unroutable=lambda p: True), [(50.63, 3.06)], 'run', 10.0, 1, CFG)
@@ -627,9 +613,6 @@ def test_a_provider_returning_a_trace_far_from_the_points_is_an_unreachable_poin
         generate(Elsewhere(), [(50.63, 3.05), (50.66, 3.10)], 'run', None, 1, CFG)
 
 
-@pytest.mark.xfail(strict=True, reason="nit (durcissement) : la fermeture de la boucle de BASE n'est pas contrôlée (seuls les candidats de détour passent "
-                                       "par `accepts`) : un moteur qui ne revient pas au départ donne une « boucle » ouverte de 7 km, sans erreur "
-                                       "ni avertissement (CA-R4)")
 def test_a_provider_that_ignores_the_closing_point_is_not_returned_as_a_closed_loop():
     """Le moteur doit finir au point de départ ; une base qui ne se referme pas n'est pas une boucle (CA-R4 : la trace finit où elle commence)."""
     class Open(FakeProvider):
@@ -651,7 +634,7 @@ def test_a_target_just_inside_the_tolerance_edges_is_a_single_call_and_just_outs
         provider = FakeProvider(sinuosity=0.0)
         gen = generate(provider, points, 'run', target_m / 1000, 1, CFG)
         assert len(provider.calls) == 1 and gen.meta['detours'] == 0
-        assert not any(w['code'] in ('min_distance', 'off_target') for w in gen.warnings)
+        assert not any(w['code'] in ('min_distance', 'target_gap') for w in gen.warnings)
     short = FakeProvider(sinuosity=0.0)                                         # cible 2 % au-delà de la borne basse : des détours
     generate(short, points, 'run', d0 / 0.85 * 1.02 / 1000, 1, CFG)
     assert len(short.calls) > 1
