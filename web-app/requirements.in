@@ -4,6 +4,9 @@ Flask
 gunicorn
 requests
 
+# Hachage des mots de passe (ADR-0002)
+argon2-cffi
+
 # Authentification OIDC
 Authlib
 joserfc
