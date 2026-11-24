@@ -15,6 +15,8 @@ from typing import Any, Dict, Mapping, Optional, Set
 
 import numpy as np
 
+from app.settings import effective
+
 from app.services import (
     activity_stats, activity_store, activity_types, dem_service, file_formats, profile_service, segment_service,
 )
@@ -129,7 +131,7 @@ def _ingest(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, file
     if existing is not None:
         return IngestResult('duplicate', existing['id'], "Fichier déjà importé")
 
-    quota = int(cfg.get('USER_QUOTA_MB') or 0) * 1024 * 1024
+    quota = int(effective(cfg, 'USER_QUOTA_MB', db)) * 1024 * 1024
     if quota:
         try:
             used = activity_store.user_storage_bytes(cfg['DATA_DIR'], user_id)

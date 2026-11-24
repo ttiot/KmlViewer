@@ -96,3 +96,35 @@ def register_cli(app) -> None:
             for old in sorted(backups_dir.glob('kmlviewer-*.sqlite3'), reverse=True)[keep:]:
                 old.unlink()
                 click.echo(f"Ancienne sauvegarde supprimée : {old.name}")
+
+    @app.cli.command('settings-list')
+    def settings_list():
+        """Affiche chaque réglage administrable : valeur effective, source (base / env / défaut), surcharge."""
+        db = connect(app.config['DB_PATH'])
+        try:
+            store = app.extensions['settings']
+            store.refresh(db, force=True)
+            for d in store.diagnostic():
+                note = f"  [surcharge {d['env_overridden']}]" if d['env_overridden'] else ''
+                note += f"  [{d['env']} invalide, ignorée]" if d['env_invalid'] else ''
+                click.echo(f"{d['key']} = {d['value']!r}  ({d['source']}){note}")
+        finally:
+            db.close()
+
+    @app.cli.command('settings-reset')
+    @click.argument('key', required=False)
+    @click.option('--all', 'reset_all', is_flag=True, help="Supprime toutes les valeurs en base.")
+    def settings_reset(key, reset_all):
+        """Revient à la valeur d'env ou au défaut (supprime la valeur en base), tracé dans l'audit (acteur cli)."""
+        if bool(key) == reset_all:
+            raise click.UsageError("Donne une clé de réglage, ou --all (pas les deux).")
+        from app.audit import Actor
+        db = connect(app.config['DB_PATH'])
+        try:
+            try:
+                count = app.extensions['settings'].reset(db, None if reset_all else key, actor=Actor.cli())
+            except KeyError as exc:
+                raise click.ClickException(str(exc.args[0])) from exc
+        finally:
+            db.close()
+        click.echo(f"{count} valeur(s) en base supprimée(s)")

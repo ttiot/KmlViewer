@@ -5,7 +5,10 @@ autonome pour les traitements hors requête (watcher, CLI).
 
 import logging
 import os
+import re
 import sqlite3
+from collections.abc import Callable
+from contextlib import contextmanager
 
 from flask import current_app, g
 
@@ -116,7 +119,11 @@ CREATE TABLE IF NOT EXISTS activity_analyses (
 
 def connect(db_path: str) -> sqlite3.Connection:
     """Ouvre une connexion SQLite configurée (WAL, clés étrangères)."""
-    conn = sqlite3.connect(db_path, timeout=30)
+    # Mode transactionnel figé : les transactions explicites du registre de migrations
+    # (BEGIN IMMEDIATE) et le commit() des migrations positionnelles supposent le contrôle
+    # « legacy » de sqlite3 ; avec autocommit=False (PEP 249) une transaction est toujours
+    # ouverte et BEGIN échouerait. On ne dépend donc pas du défaut de la version de Python.
+    conn = sqlite3.connect(db_path, timeout=30, autocommit=sqlite3.LEGACY_TRANSACTION_CONTROL)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -189,9 +196,86 @@ def _normalize_activity_types(conn: sqlite3.Connection) -> None:
                          (normalized, row['activity_type']))
 
 
+@contextmanager
+def write_transaction(conn: sqlite3.Connection):
+    """
+    Transaction d'écriture. Si l'appelant en a déjà ouvert une (ex. le registre de migrations,
+    ou un changement de réglage qui efface aussi des secrets), on y participe sans rien valider :
+    c'est lui qui valide. Sinon BEGIN IMMEDIATE (verrou d'écriture pris d'emblée, pas de
+    promotion de verrou en cours de route) puis commit, ou rollback si le corps échoue.
+    """
+    if conn.in_transaction:
+        yield conn
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _audit_log_v2(conn: sqlite3.Connection) -> None:
+    """
+    0006 v2 - journal d'audit (admin-space EF-9, CA-24b). `actor_type` structurel : l'origine d'une action
+    ne se lit jamais sur le libellé, et la base refuse une ligne `cli`/`system` qui porterait un compte.
+    Remplace `0006_audit_log` (modifiée avant fusion : renommée, ADR-0012). Une base qui l'aurait déjà
+    appliquée (image de branche) est reconstruite : la table n'est référencée par rien.
+    """
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'").fetchone()
+    old_shape = exists and 'actor_type' not in {r['name'] for r in conn.execute("PRAGMA table_info(audit_log)")}
+    if old_shape:
+        conn.execute("DROP INDEX IF EXISTS idx_audit_log_at")
+        conn.execute("DROP INDEX IF EXISTS idx_audit_log_action")
+        conn.execute("ALTER TABLE audit_log RENAME TO audit_log_v1")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            at           TEXT NOT NULL,
+            actor_type   TEXT NOT NULL CHECK (actor_type IN ('user', 'cli', 'system')),
+            actor_id     INTEGER,
+            actor_label  TEXT NOT NULL DEFAULT '',
+            action       TEXT NOT NULL,
+            target_type  TEXT,
+            target_id    TEXT,
+            details      TEXT,
+            ip           TEXT,
+            CHECK ((actor_type = 'user') = (actor_id IS NOT NULL))
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log (at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log (action, at)")
+    if old_shape:
+        # Anciennes lignes : un identifiant de compte => user ; « cli » sans compte => cli ; le reste => system
+        conn.execute("""
+            INSERT INTO audit_log (id, at, actor_type, actor_id, actor_label, action, target_type, target_id, details, ip)
+            SELECT id, at,
+                   CASE WHEN actor_id IS NOT NULL THEN 'user' WHEN actor_label = 'cli' THEN 'cli' ELSE 'system' END,
+                   actor_id,
+                   CASE WHEN actor_id IS NOT NULL THEN actor_label ELSE '' END,
+                   action, target_type, target_id, details, ip
+            FROM audit_log_v1""")
+        conn.execute("DROP TABLE audit_log_v1")
+
+
+def _settings_tables(conn: sqlite3.Connection) -> None:
+    """0007 - réglages administrables et leur version (admin-space EF-6.4, M10)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL
+        )""")
+    conn.execute("CREATE TABLE IF NOT EXISTS settings_meta (id INTEGER PRIMARY KEY CHECK (id = 1), "
+                 "version INTEGER NOT NULL)")
+    conn.execute("INSERT OR IGNORE INTO settings_meta (id, version) VALUES (1, 1)")
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
-# dernière passée. SCHEMA décrit toujours l'état final : une base neuve le reçoit directement,
-# puis chaque migration est un no-op. Règle : on ajoute en fin de liste, on ne modifie jamais
+# dernière passée. SCHEMA décrit l'état final de ces 5 migrations positionnelles : une base neuve le reçoit
+# directement, puis chacune est un no-op. Les tables ajoutées depuis (ADR-0012) ne sont créées que par
+# leur migration NOMMÉE, appliquée aussi aux bases neuves. Règle : on ajoute en fin de liste, on ne modifie jamais
 # une migration déjà publiée.
 MIGRATIONS = [
     # 1 - état de la correction d'altitude par MNT
@@ -207,15 +291,114 @@ MIGRATIONS = [
 ]
 
 
-def migrate(conn: sqlite3.Connection) -> int:
-    """Applique les migrations manquantes. Retourne la version de schéma atteinte."""
+# Migrations nommées (ADR-0012), appliquées après les 5 positionnelles. Chaque entrée est
+# (nom, fonction) ; la fonction reçoit la connexion DANS une transaction ouverte par le
+# registre : elle ne fait ni commit ni rollback, et ne touche pas à PRAGMA foreign_keys.
+# Règles (admin-space §7) :
+#   - le nom est unique et STABLE (interface) ; le préfixe numérique n'est qu'un ordre de lecture ;
+#   - « publiée » = fusionnée sur la branche principale : on ne la modifie plus, on en ajoute une ;
+#   - modifiée AVANT fusion (donc peut-être déjà dans une image unstable-<branche>) : elle change
+#     de nom (suffixe _v2…), pour être appliquée dans sa nouvelle version partout ;
+#   - idempotente (_add_column, CREATE … IF NOT EXISTS) : une base « en avance » ou une reprise
+#     après interruption ne doit pas échouer ;
+#   - deux migrations dépendantes l'une de l'autre vivent dans la même tâche ;
+#   - elle ne reconstruit pas de table : cela exige de suspendre les clés étrangères, donc de
+#     sortir de la transaction (modèle _rebuild_users), ce que ce registre n'offre pas. Ajouter
+#     une colonne ou un index suffit ; une reconstruction demande une décision à part ;
+#   - elle reste courte : un second processus qui démarre attend le verrou d'écriture au plus
+#     busy_timeout (30 s) puis échoue en « database is locked ». Une migration longue (index sur
+#     une grosse table activities) demanderait de relancer ce démarrage ou d'allonger l'attente.
+# L'ordre de cette liste est l'ordre d'application des migrations manquantes.
+NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
+    ('0006_audit_log_v2', _audit_log_v2),
+    ('0007_settings', _settings_tables),
+]
+
+_MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')
+
+_MIGRATIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    name       TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+)
+"""
+
+
+def _check_registry(named) -> None:
+    """Un registre mal formé (nom dupliqué ou invalide, fonction absente) est une erreur de code."""
+    seen = set()
+    for entry in named:
+        name, func = entry
+        if not isinstance(name, str) or not _MIGRATION_NAME.fullmatch(name):
+            raise ValueError(f"Nom de migration invalide : {name!r}")
+        if name in seen:
+            raise ValueError(f"Nom de migration en double : {name!r}")
+        if not callable(func):
+            raise ValueError(f"Migration {name!r} : fonction manquante")
+        seen.add(name)
+
+
+def _apply_named(conn: sqlite3.Connection, name: str, func) -> bool:
+    """
+    Applique une migration nommée et l'enregistre dans la même transaction. BEGIN IMMEDIATE
+    prend le verrou d'écriture avant de relire la table : deux processus qui démarrent
+    ensemble ne l'appliquent pas deux fois. Retourne False si un autre l'a passée entre-temps.
+    """
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (name,)).fetchone():
+            conn.rollback()
+            return False
+        func(conn)
+        if not conn.in_transaction:
+            # Elle a validé (ou annulé) elle-même : l'atomicité avec l'enregistrement est perdue.
+            # On n'enregistre rien ; la prochaine exécution la rejouera, d'où l'idempotence exigée.
+            raise RuntimeError(f"La migration {name!r} a terminé sa transaction elle-même (commit/rollback interdits)")
+        conn.execute("INSERT INTO schema_migrations (name) VALUES (?)", (name,))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        logger.error("Migration %r annulée et non enregistrée ; si elle avait validé elle-même, "
+                     "la base peut être partiellement modifiée", name)
+        raise
+    return True
+
+
+def migrate(conn: sqlite3.Connection, named=None) -> int:
+    """
+    Applique les migrations manquantes : les positionnelles (PRAGMA user_version, 5 au plus),
+    puis chaque migration nommée absente de schema_migrations, dans l'ordre de la liste, chacune
+    dans sa transaction. Un nom enregistré mais inconnu du code (base passée par une image de
+    branche) est signalé en WARNING sans rien annuler. `named` n'est injecté que par les tests.
+    Retourne la version positionnelle atteinte.
+    """
+    named = NAMED_MIGRATIONS if named is None else named
+    _check_registry(named)
+
     version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version > len(MIGRATIONS):
+        # Base passée par une image de branche antérieure au registre nommé (numérotation
+        # positionnelle à la fusion) : on ne la modifie pas, mais on le dit
+        logger.warning("Version de schéma positionnelle %d supérieure à celle du code (%d) : base "
+                       "passée par une autre version de l'application ?", version, len(MIGRATIONS))
     for number, migration in enumerate(MIGRATIONS, start=1):
         if number > version:
             migration(conn)
             conn.execute(f"PRAGMA user_version = {int(number)}")
             conn.commit()
             logger.info("Migration de schéma %d appliquée", number)
+
+    conn.execute(_MIGRATIONS_TABLE)
+    conn.commit()
+    applied = {row['name'] for row in conn.execute("SELECT name FROM schema_migrations")}
+    unknown = sorted(applied - {name for name, _ in named})
+    if unknown:
+        logger.warning("Migrations enregistrées en base mais inconnues de cette version du code "
+                       "(image de branche ? migration renommée ?) : %s", ', '.join(unknown))
+    for name, func in named:
+        if name not in applied and _apply_named(conn, name, func):
+            logger.info("Migration nommée %r appliquée", name)
     return max(version, len(MIGRATIONS))
 
 

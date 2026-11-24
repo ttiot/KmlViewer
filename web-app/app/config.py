@@ -45,7 +45,9 @@ class Config:
     # sous-domaines). Vide : en mode local, seul localhost est accepté (anti DNS rebinding).
     TRUSTED_HOSTS = _env_list('TRUSTED_HOSTS')
     # Stockage maximal des fichiers d'origine par utilisateur (0 = illimité)
-    USER_QUOTA_MB = int(os.environ.get('USER_QUOTA_MB') or 2048)
+    # Géré par le registre de réglages (app/settings) : None = variable non renseignée, la valeur
+    # effective est alors celle de la base, sinon le défaut du registre (2048)
+    USER_QUOTA_MB = os.environ.get('USER_QUOTA_MB') or None
 
     # Configuration des fichiers d'exemple
     SAMPLE_FILES_DIR = os.environ.get('SAMPLE_FILES_DIR') or '/app/sample_files'

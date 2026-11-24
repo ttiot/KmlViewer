@@ -42,6 +42,11 @@ def create_app(config_class=Config, overrides=None):
     from app.errors import init_errors
     init_errors(app)
 
+    # Après le contrôle d'hôte et d'origine (une requête rejetée ne lit pas la base), avant le garde
+    # (qui voit des réglages à jour)
+    from app.settings import init_settings
+    init_settings(app)
+
     from app.auth import init_auth
     init_auth(app)
 
