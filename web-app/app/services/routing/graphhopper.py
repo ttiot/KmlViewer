@@ -58,10 +58,40 @@ class _TrackedHTTPS(HTTPSConnection):
         _track(self.sock)
 
 
+class _Registry:
+    """Sockets d'UN appel. Une fois fermé (échéance), tout socket créé ensuite est coupé aussitôt."""
+
+    def __init__(self):
+        self._socks: list = []
+        self._lock = threading.Lock()
+        self.closed = False
+
+    def add(self, sock) -> None:
+        with self._lock:
+            if not self.closed:
+                self._socks.append(sock)
+                return
+        _cut(sock)
+
+    def close(self) -> None:
+        with self._lock:
+            self.closed = True
+            socks, self._socks = self._socks, []
+        for sock in socks:
+            _cut(sock)
+
+
+def _cut(sock) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def _track(sock) -> None:
     registry = getattr(_local, 'registry', None)
     if registry is not None and sock is not None:
-        registry.append(sock)
+        registry.add(sock)
 
 
 class _HTTPPool(HTTPConnectionPool):
@@ -86,14 +116,6 @@ def _new_session():
     for scheme in ('http://', 'https://'):
         session.mount(scheme, _DeadlineAdapter())
     return session
-
-
-def _shutdown_all(registry) -> None:
-    for sock in list(registry):
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
 
 
 def _decimate(points: list, limit: int = MAX_FILE_POINTS) -> list:
@@ -139,21 +161,33 @@ class GraphHopperProvider(RoutingProvider):
         headers = {'Connection': 'close'}               # pas de connexion réutilisée : un registre de sockets par appel
         if self._key:
             headers['Authorization'] = f'Bearer {self._key}'
-        # ÉCHÉANCE (TR3-1) : un minuteur coupe les sockets de l'appel à l'échéance (connexion, en-têtes OU corps) ; `timeout`
-        # seul est remis à zéro à chaque octet reçu : un moteur qui égrène sa réponse dépasserait le budget
-        registry: list = []
-        _local.registry = registry
-        watchdog = None
-        if deadline is not None:
-            watchdog = threading.Timer(max(0.0, time_left(deadline, self._clock)), _shutdown_all, (registry,))
-            watchdog.daemon = True
-            watchdog.start()
-        try:
-            return self._exchange(path, params, timeout, deadline, headers)
-        finally:
-            _local.registry = None
-            if watchdog is not None:
-                watchdog.cancel()
+        # ÉCHÉANCE (TR3-1, TR3-1b) : l'appel tourne dans un fil de travail et l'appelant n'attend que le temps restant, quoi qu'il
+        # arrive (résolution DNS, connexion TCP, en-têtes, corps : `timeout` seul est remis à zéro à chaque octet reçu). À
+        # l'échéance, les sockets de l'appel sont coupés (ceux créés plus tard le sont à leur création) et le fil est abandonné.
+        if deadline is None:
+            return self._exchange(path, params, timeout, None, headers)
+        registry = _Registry()
+        outcome: dict = {}
+        done = threading.Event()
+
+        def work():
+            _local.registry = registry
+            try:
+                outcome['value'] = self._exchange(path, params, timeout, deadline, headers)
+            except BaseException as exc:  # noqa: BLE001 - relayée à l'appelant
+                outcome['error'] = exc
+            finally:
+                _local.registry = None
+                done.set()
+
+        threading.Thread(target=work, name='routing-call', daemon=True).start()
+        if not done.wait(max(0.0, time_left(deadline, self._clock))):
+            registry.close()
+            raise RoutingTimeout()
+        registry.close()
+        if 'error' in outcome:
+            raise outcome['error']
+        return outcome['value']
 
     def _exchange(self, path, params, timeout, deadline, headers):
         expired = lambda: deadline is not None and time_left(deadline, self._clock) <= 0      # noqa: E731

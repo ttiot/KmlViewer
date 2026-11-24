@@ -85,6 +85,8 @@ def create_app(config_class=Config, overrides=None):
 
     from app.background import Scheduler
     app.extensions['scheduler'] = Scheduler(app.config)      # toujours créé (tests : tick manuel) ; le thread, selon le contexte
+    from app.services.routing.runtime import init_routing
+    init_routing(app)                                        # tâche `routing_health` (T19) et diagnostic des fonctions bêta
     _start_scheduler(app)
     return app
 

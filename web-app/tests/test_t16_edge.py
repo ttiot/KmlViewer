@@ -67,6 +67,7 @@ OTHER = {                      # clé -> (type, défaut)
     'map.basemaps': ('basemaps', None), 'map.default_basemap': ('str', 'osm'), 'smtp.host': ('str', ''),
     'smtp.security': ('enum', 'starttls'), 'smtp.username': ('str', ''), 'smtp.sender': ('email', ''), 'DEM_URL': ('url', ''),
     'routing.base_url': ('url', ''), 'routing.detour_strategy': ('enum', 'hybrid'),
+    'routing.coverage_bbox': ('rectangle', [1.35, 48.80, 6.45, 51.55]),      # RB-1.3, P-TR5-1 (tests/test_route_builder_api.py)
 }
 NUMERIC = list(SPEC)
 

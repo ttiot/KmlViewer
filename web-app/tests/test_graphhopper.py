@@ -445,3 +445,54 @@ def test_a_slow_real_engine_is_cut_at_the_deadline_on_headers_and_on_a_content_l
     finally:
         stop.set()
         listener.close()
+
+
+# --- TR3-1b : résolution DNS / connexion TCP bornées par l'échéance --------------------------------------------------------------
+
+def test_a_blocked_name_resolution_is_cut_at_the_deadline(monkeypatch):
+    import socket as socket_module
+    import threading as threading_module
+    import time as time_module
+    release = threading_module.Event()
+
+    def slow_resolver(*args, **kwargs):
+        release.wait(8)                                                    # un DNS qui ne répond pas
+        raise socket_module.gaierror('timeout')
+
+    monkeypatch.setattr(socket_module, 'getaddrinfo', slow_resolver)
+    gh = GraphHopperProvider('http://moteur-qui-ne-repond-pas.example:8989', guard=lambda d: None, timeout_s=30)
+    started = time_module.monotonic()
+    try:
+        with pytest.raises(RoutingTimeout):
+            gh.route([LILLE, (50.7, 3.1)], 'foot', time_module.monotonic() + 1.0)
+        assert time_module.monotonic() - started < 2.5
+    finally:
+        release.set()
+
+
+def test_a_connection_that_never_completes_is_cut_at_the_deadline():
+    """Socket en écoute dont la file d'attente est saturée : la connexion TCP suivante reste en attente."""
+    import socket as socket_module
+    import time as time_module
+    listener = socket_module.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(0)
+    fillers = []
+    try:
+        for _ in range(6):                                                 # sature la file d'acceptation
+            filler = socket_module.socket()
+            filler.setblocking(False)
+            try:
+                filler.connect(listener.getsockname())
+            except (BlockingIOError, OSError):
+                pass
+            fillers.append(filler)
+        gh = GraphHopperProvider(f'http://127.0.0.1:{listener.getsockname()[1]}', guard=lambda d: None, timeout_s=30)
+        started = time_module.monotonic()
+        with pytest.raises((RoutingTimeout, RoutingUnavailable)):
+            gh.route([LILLE, (50.7, 3.1)], 'foot', time_module.monotonic() + 1.0)
+        assert time_module.monotonic() - started < 2.5
+    finally:
+        for filler in fillers:
+            filler.close()
+        listener.close()

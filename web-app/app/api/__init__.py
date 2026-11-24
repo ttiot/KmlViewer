@@ -20,3 +20,4 @@ from . import map_routes  # noqa: E402,F401
 from . import mfa_routes  # noqa: E402,F401
 from . import admin_routes  # noqa: E402,F401
 from . import account_routes  # noqa: E402,F401
+from . import route_builder_routes  # noqa: E402,F401

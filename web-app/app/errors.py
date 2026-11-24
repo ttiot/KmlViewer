@@ -24,10 +24,12 @@ class ApiError(Exception):
     façon pour une route API de répondre une erreur (400 par défaut, 404, 409, 413, 503…).
     """
 
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, **extra):
         super().__init__(message)
         self.message = message
         self.status = status
+        self.extra = extra          # champs JSON ajoutés à la réponse (ex. `activity_id` d'un 409), jamais de donnée interne
+        self.retry_after = None     # secondes : en-tête Retry-After d'un 429
 
 
 def is_api_request() -> bool:
@@ -43,7 +45,14 @@ def json_error(message: str, status: int):
 def init_errors(app) -> None:
     @app.errorhandler(ApiError)
     def api_error(exc):
-        return json_error(exc.message, exc.status)
+        body, status = json_error(exc.message, exc.status)
+        if getattr(exc, 'extra', None):
+            payload = body.get_json()
+            payload.update(exc.extra)
+            body = jsonify(payload)
+        if getattr(exc, 'retry_after', None):
+            body.headers['Retry-After'] = str(int(exc.retry_after))
+        return body, status
 
     @app.errorhandler(HTTPException)
     def http_error(exc):

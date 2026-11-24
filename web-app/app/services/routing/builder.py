@@ -64,9 +64,9 @@ class BuildConfig:
     def from_settings(cls, get: Callable[[str], object]) -> 'BuildConfig':
         bbox = None
         try:
-            raw = get('routing.coverage_bbox')
-            bbox = tuple(float(v) for v in raw) if raw else None
-        except (KeyError, TypeError, ValueError):
+            raw = get('routing.coverage_bbox')                     # registre : [lon_min, lat_min, lon_max, lat_max]
+            bbox = (float(raw[1]), float(raw[0]), float(raw[3]), float(raw[2])) if raw else None     # -> (lat, lon, lat, lon)
+        except (KeyError, TypeError, ValueError, IndexError):
             bbox = None
         return cls(max_waypoints=int(get('routing.max_waypoints')), max_distance_km=float(get('routing.max_distance_km')),
                    tolerance_pct=float(get('routing.distance_tolerance_pct')),
@@ -86,6 +86,7 @@ class Generation:
     points: list
     meta: dict
     warnings: List[dict] = field(default_factory=list)
+    name: str = ''
 
 
 def _warning(code: str, message: str) -> dict:
@@ -141,12 +142,20 @@ def _technical_bbox(points: Sequence, margin_m: float, limit: Optional[tuple]) -
 
 # -- Génération ------------------------------------------------------------------------------------------------------------
 
-def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed, config: BuildConfig, *,
-             clock: Callable = time.monotonic, today: Optional[datetime] = None) -> Generation:
-    """
-    Génère une boucle fermée. Lève `InvalidBuild` (400, avant tout appel), `UnreachablePoint` (422 avec numéro d'origine),
-    ou l'erreur du moteur quand aucune trace n'a pu être obtenue.
-    """
+@dataclass
+class Prepared:
+    """Entrée VALIDÉE d'une génération (aucun appel au moteur n'a eu lieu) : points conservés et numérotation d'origine."""
+
+    entry: object
+    target_m: Optional[float]
+    kept: list
+    numbers: list
+    warnings: List[dict]
+    seed: int
+
+
+def prepare(raw_points, activity, distance_km, seed, config: BuildConfig) -> Prepared:
+    """Validation stricte (RB-S1, RB-S1b) : lève `InvalidBuild` (400). Les routes comptent une génération APRÈS cette étape."""
     # 1. validation, AUCUN appel sortant avant la fin
     entry = profiles.get(activity)
     if entry is None:
@@ -173,7 +182,23 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
         raise InvalidBuild("Distance requise avec un seul point")
     if len(kept) < len(points):
         logger.info("Génération : %d points réduits à %d", len(points), len(kept))
+    return Prepared(entry, target_m, kept, numbers, warnings, seed)
 
+
+def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed, config: BuildConfig, *,
+             clock: Callable = time.monotonic, today: Optional[datetime] = None) -> Generation:
+    """
+    Génère une boucle fermée. Lève `InvalidBuild` (400, avant tout appel), `UnreachablePoint` (422 avec numéro d'origine),
+    ou l'erreur du moteur quand aucune trace n'a pu être obtenue.
+    """
+    return execute(provider, prepare(raw_points, activity, distance_km, seed, config), config, clock=clock, today=today)
+
+
+def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, *, clock: Callable = time.monotonic,
+            today: Optional[datetime] = None) -> Generation:
+    """Calcule la trace d'une entrée validée : boucle de base, détours, essais de graine, contrôles, GPX."""
+    entry, target_m, kept, numbers, warnings, seed = (prepared.entry, prepared.target_m, prepared.kept, prepared.numbers,
+                                                      list(prepared.warnings), prepared.seed)
     budget = detours.Budget(config.max_calls, config.total_budget_s, clock)
     notes: list = []                      # avertissements du moteur (RB-4.9)
     tolerance = config.tolerance_pct / 100.0
@@ -208,8 +233,9 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
                 warnings=[w['message'] for w in warnings])
     logger.info("Génération : profil=%s points=%d distance=%.0f appels=%d essais=%d durée=%.1fs", entry.profile, len(kept),
                 distance, budget.calls, tried, clock() - budget.started)
+    name = default_name(today)
     return Generation(gpx=build_gpx(trace, kept, entry.stored_type, elevations, today), points=trace, meta=meta,
-                      warnings=warnings)
+                      warnings=warnings, name=name)
 
 
 def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta, notes, number=1):
@@ -307,8 +333,21 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
 
 # -- GPX ---------------------------------------------------------------------------------------------------------------------
 
+def default_name(today: Optional[datetime] = None) -> str:
+    return f"Trace planifiée du {(today or datetime.now()).strftime('%d/%m/%Y')}"
+
+
+def rename_gpx(gpx: bytes, name: str) -> bytes:
+    """Remplace `<trk><name>` d'un GPX produit par `build_gpx` : API XML (échappement automatique), jamais une concaténation."""
+    ET.register_namespace('', GPX_NS)
+    root = ET.fromstring(gpx)
+    node = root.find(f'{{{GPX_NS}}}trk/{{{GPX_NS}}}name')
+    node.text = name
+    return ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+
 def build_gpx(trace: Sequence, user_points: Sequence, stored_type: str, elevations: Optional[Sequence] = None,
-              today: Optional[datetime] = None) -> bytes:
+              today: Optional[datetime] = None, name: Optional[str] = None) -> bytes:
     """
     GPX 1.1 par l'API XML (échappement automatique, jamais de concaténation) : P1…Pn en `<wpt>` (jamais les points
     techniques), un `<trk>` / un `<trkseg>`, `<type>` = type stocké, aucun horodatage (RB-4.8).
@@ -319,8 +358,7 @@ def build_gpx(trace: Sequence, user_points: Sequence, stored_type: str, elevatio
         waypoint = ET.SubElement(root, f'{{{GPX_NS}}}wpt', {'lat': f'{lat:.6f}', 'lon': f'{lon:.6f}'})
         ET.SubElement(waypoint, f'{{{GPX_NS}}}name').text = f'P{number}'
     track = ET.SubElement(root, f'{{{GPX_NS}}}trk')
-    day = (today or datetime.now()).strftime('%d/%m/%Y')
-    ET.SubElement(track, f'{{{GPX_NS}}}name').text = f'Trace planifiée du {day}'
+    ET.SubElement(track, f'{{{GPX_NS}}}name').text = name or default_name(today)
     ET.SubElement(track, f'{{{GPX_NS}}}type').text = stored_type
     segment = ET.SubElement(track, f'{{{GPX_NS}}}trkseg')
     with_elevation = elevations is not None and len(elevations) == len(trace)

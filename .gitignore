@@ -12,3 +12,6 @@ inbox/
 README-workflow.md
 TODO.md
 plan-ameliorations-visualiseur-kml.md
+
+# Artefact d'update.sh (verrou du service routing)
+.routing-update.lock
