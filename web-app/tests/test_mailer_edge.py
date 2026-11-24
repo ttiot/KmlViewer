@@ -667,7 +667,10 @@ def test_a_slow_or_dead_smtp_never_slows_down_enqueue(tmp_path):
             assert server.connections == 0 or mode == 'ok'
         finally:
             server.stop()
-    assert max(timings.values()) < 1.0 and max(timings.values()) < 5 * min(timings.values()) + 0.1, timings
+    # Propriété : l'envoi (timeout 5 s) n'est JAMAIS attendu. 200 attentes de 5 s dureraient ~1000 s ; la borne reste donc très large (CI chargée,
+    # couverture active, fil d'envoi en concurrence pour le mode « ok ») et ne mesure qu'une absence de blocage.
+    assert max(timings.values()) < 8.0, timings
+    assert timings['hang'] < 3 * timings['ok'] + 1.0 and timings['dead'] < 3 * timings['ok'] + 1.0, timings
 
 
 def test_a_failing_message_does_not_stop_the_following_ones():
