@@ -504,3 +504,23 @@ def test_haversine_length_is_used_for_distance_and_matches_the_geometry():
     gen = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', None, 0, CFG)
     arr = list(gen.points)
     assert gen.meta['distance_m'] == pytest.approx(sum(float(geo.haversine(a[0], a[1], b[0], b[1])) for a, b in zip(arr, arr[1:])))
+
+
+# --- TR2-1 / TR2-2 : coût et bornes sur trace hostile ---------------------------------------------------------------------------
+
+def test_the_overlap_of_a_hostile_trace_is_computed_in_linear_time():
+    import time as real_time
+    base = 50.0
+    trace = [(base + (i % 2) * 1e-6, 3.0 + (i % 3) * 1e-6) for i in range(60_000)]         # tout dans quelques mètres
+    trace += [(base + 0.05, 3.0 + i * 1e-4) for i in range(60_000)]
+    started = real_time.monotonic()
+    quality.overlap_rate(trace)
+    assert real_time.monotonic() - started < 5.0
+
+
+def test_a_grafted_trace_never_exceeds_the_file_point_limit():
+    from app.services.file_formats import MAX_FILE_POINTS
+    points = [(50.0 + i * 1e-7, 3.0) for i in range(MAX_FILE_POINTS + 5000)]
+    out = quality.decimate(points, MAX_FILE_POINTS)
+    assert len(out) == MAX_FILE_POINTS and out[0] == points[0] and out[-1] == points[-1]
+    assert quality.decimate(points[:5], 10) == points[:5]

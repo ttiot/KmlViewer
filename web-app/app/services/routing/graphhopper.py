@@ -13,6 +13,7 @@ Le cas « point non approchable » du moteur (400, `PointNotFoundException`, `po
 
 import json
 import logging
+import threading
 import time
 from typing import Callable, Optional
 
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 CHUNK = 64 * 1024
 HEALTH_TIMEOUT_S = 3.0
+MAX_VISITED_NODES = 5_000_000      # borne large (2,2 M mesuré pour 440 km) ; seul le paramètre de REQUÊTE compte en 11.0
 MAX_RETRIES = 1                    # reprise sur 5xx / connexion refusée, décomptée du budget (RB-S6)
 MIN_RETRY_LEFT_S = 0.5             # pas de reprise s'il reste moins que cela
 
@@ -44,9 +46,18 @@ def _decimate(points: list, limit: int = MAX_FILE_POINTS) -> list:
 class GraphHopperProvider(RoutingProvider):
     supports_round_trip = True
 
-    def __init__(self, base_url: str, *, timeout_s: float = 20.0, api_key: Optional[str] = None,
-                 guard: Optional[Callable[[str], None]] = None, session=None, clock=time.monotonic):
+    def __init__(self, base_url: str, *, guard: Callable[[str], None], timeout_s: float = 20.0, api_key: Optional[str] = None,
+                 allow_cleartext_key: bool = False, session=None, clock=time.monotonic):
+        """
+        `guard` est OBLIGATOIRE (TR3-2) : la politique de destination (`outbound.guard`) tourne avant chaque appel ; un adaptateur
+        sans garde échouerait ouvert. La clé API part en EN-TÊTE (jamais dans l'URL, que `urllib3` journalise) et
+        seulement en https, sauf `allow_cleartext_key` (réseau interne explicitement choisi) (TR3-3).
+        """
+        if not callable(guard):
+            raise TypeError("guard obligatoire")
         outbound.normalize_url(base_url)                                         # http(s), sans identifiants, hôte valide
+        if api_key and not base_url.lower().startswith('https://') and not allow_cleartext_key:
+            raise ValueError("Une clé API ne part pas en clair : https requis")
         self._destination = outbound.destination_of_url(base_url)
         self._base = base_url.rstrip('/')
         self._timeout = float(timeout_s)
@@ -64,11 +75,10 @@ class GraphHopperProvider(RoutingProvider):
                 self._guard(self._destination)
             except Exception:  # noqa: BLE001 - refus audité par la garde elle-même ; message fixe côté appelant
                 raise RoutingUnavailable() from None
-        if self._key:
-            params = list(params) + [('key', self._key)]
+        headers = {'Authorization': f'Bearer {self._key}'} if self._key else None
         try:
             response = self._session.get(f'{self._base}{path}', params=params, timeout=timeout, allow_redirects=False,
-                                         stream=True)
+                                         stream=True, **({'headers': headers} if headers else {}))
         except requests.Timeout:
             raise RoutingTimeout() from None
         except requests.RequestException:
@@ -79,16 +89,34 @@ class GraphHopperProvider(RoutingProvider):
                 logger.warning("Moteur de routage : redirection refusée (%s)", status)
                 raise InvalidResponse()
             body = bytearray()
+            # Échéance de la LECTURE (TR3-1) : un minuteur ferme la connexion à l'échéance (débloque une lecture lente) et
+            # le temps restant est contrôlé entre les blocs ; un moteur qui goutte-à-goutte ne retient jamais au-delà
+            watchdog = None
+            if deadline is not None:
+                watchdog = threading.Timer(max(0.0, time_left(deadline, self._clock)), response.close)
+                watchdog.daemon = True
+                watchdog.start()
             try:
                 for chunk in response.iter_content(CHUNK):
                     body.extend(chunk)
                     if len(body) > MAX_RESPONSE_BYTES:
                         logger.warning("Moteur de routage : réponse trop volumineuse")
                         raise InvalidResponse()
+                    if deadline is not None and time_left(deadline, self._clock) <= 0:
+                        raise RoutingTimeout()
+            except (RoutingTimeout, InvalidResponse):
+                raise
             except requests.Timeout:
                 raise RoutingTimeout() from None
-            except requests.RequestException:
+            except Exception:  # noqa: BLE001 - connexion fermée par le minuteur, coupure : jamais le détail
+                if deadline is not None and time_left(deadline, self._clock) <= 0:
+                    raise RoutingTimeout() from None
                 raise RoutingUnavailable() from None
+            finally:
+                if watchdog is not None:
+                    watchdog.cancel()
+            if deadline is not None and time_left(deadline, self._clock) < 0:
+                raise RoutingTimeout()
             return status, bytes(body)
         finally:
             response.close()
@@ -131,11 +159,14 @@ class GraphHopperProvider(RoutingProvider):
             hints = data.get('hints') if isinstance(data, dict) else None
             first = hints[0] if isinstance(hints, list) and hints and isinstance(hints[0], dict) else {}
             details = str(first.get('details', ''))
+            message = str(data.get('message', '')) if isinstance(data, dict) else ''
             index = first.get('point_index')
         except (ValueError, RecursionError, AttributeError):
             raise InvalidResponse() from None
         if 'PointNotFoundException' in details:
             raise NoRouteFound(index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else None)
+        if 'maximum nodes exceeded' in message.lower():
+            raise NoRouteFound(None)                         # trajet trop complexe pour la borne : aucun itinéraire exploitable
         if 'ConnectionNotFoundException' in details or 'PointOutOfBoundsException' in details:
             raise NoRouteFound(index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else None)
         logger.warning("Moteur de routage : requête refusée (%s, %s)", status, details[:80])
@@ -172,14 +203,15 @@ class GraphHopperProvider(RoutingProvider):
     def route(self, waypoints, profile, deadline):
         points, profile = validate_route_request(waypoints, profile)
         params = [('point', f'{p.lat:.6f},{p.lon:.6f}') for p in points]
-        params += [('profile', profile), ('points_encoded', 'false'), ('instructions', 'false'), ('calc_points', 'true')]
+        params += [('profile', profile), ('points_encoded', 'false'), ('instructions', 'false'), ('calc_points', 'true'),
+                   ('max_visited_nodes', MAX_VISITED_NODES)]
         return self._result(*self._call('/route', params, deadline))
 
     def round_trip(self, start, profile, distance_m, seed, deadline):
         start, profile, distance_m, seed = validate_round_trip_request(start, profile, distance_m, seed)
         params = [('point', f'{start.lat:.6f},{start.lon:.6f}'), ('profile', profile), ('algorithm', 'round_trip'),
                   ('round_trip.distance', int(distance_m)), ('round_trip.seed', seed), ('points_encoded', 'false'),
-                  ('instructions', 'false')]
+                  ('instructions', 'false'), ('max_visited_nodes', MAX_VISITED_NODES)]
         return self._result(*self._call('/route', params, deadline))
 
     def health(self) -> Health:

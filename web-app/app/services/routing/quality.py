@@ -14,6 +14,7 @@ CELL_M = 25.0
 NEAR_M = 15.0
 MIN_ARC_GAP_M = 120.0      # deux passages « au même endroit » doivent être séparés d'au moins cela le long de la trace
 STEP_M = 20.0
+MAX_PER_CELL = 8           # borne dure : coût linéaire même sur une trace hostile qui oscille dans une cellule (TR2-1)
 MAX_SAMPLES = 20_000       # plafond du rééchantillonnage (une trace de 1000 km à 20 m = 50 000 : on espace davantage)
 
 
@@ -59,7 +60,9 @@ def overlap_rate(points) -> float:
         hit = any(arc[i] - arc[j] >= MIN_ARC_GAP_M and math.hypot(x - xy[j][0], y - xy[j][1]) <= NEAR_M
                   for dx in (-1, 0, 1) for dy in (-1, 0, 1) for j in grid.get((cx + dx, cy + dy), ()))
         repeated += hit
-        grid.setdefault((cx, cy), []).append(i)
+        cell = grid.setdefault((cx, cy), [])
+        if len(cell) < MAX_PER_CELL:       # les plus ANCIENS échantillons (abscisse minimale) suffisent à tester l'écart de 120 m
+            cell.append(i)
     return repeated / len(xy)
 
 
@@ -94,3 +97,12 @@ def ordered_pass(trace, waypoints: Sequence, tolerance_m: float) -> bool:
 def target_gap(distance_m: float, target_m: Optional[float]) -> Optional[float]:
     """Écart relatif signé à la cible, None sans cible."""
     return None if not target_m else (distance_m - target_m) / target_m
+
+
+def decimate(points, limit: int):
+    """Au plus `limit` points, premier et dernier conservés, répartition régulière (TR2-2)."""
+    points = list(points)
+    if len(points) <= limit:
+        return points
+    step = (len(points) - 1) / (limit - 1)
+    return [points[round(i * step)] for i in range(limit)]

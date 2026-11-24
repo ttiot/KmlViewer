@@ -65,7 +65,7 @@ class Clock:
 def provider(*outcomes, **kw):
     session = FakeSession(*outcomes)
     clock = kw.pop('clock', Clock())
-    return GraphHopperProvider(BASE, session=session, clock=clock, **kw), session, clock
+    return GraphHopperProvider(BASE, session=session, clock=clock, **{"guard": lambda destination: None, **kw}), session, clock
 
 
 def ok(name='route'):
@@ -92,7 +92,7 @@ def test_route_request_parameters_and_transport_options():
     params = kw['params']
     assert [v for k, v in params if k == 'point'] == ['50.629200,3.057300', '50.637100,3.063000']
     assert dict(p for p in params if p[0] != 'point') == {'profile': 'hike', 'points_encoded': 'false', 'instructions': 'false',
-                                                           'calc_points': 'true'}
+                                                           'calc_points': 'true', 'max_visited_nodes': 5_000_000}
 
 
 def test_round_trip_parameters_and_result():
@@ -100,6 +100,7 @@ def test_round_trip_parameters_and_result():
     result = gh.round_trip(LILLE, 'foot', 5000.7, 42, clock() + 10)
     params = dict(session.calls[0][1]['params'])
     assert params['algorithm'] == 'round_trip' and params['round_trip.distance'] == 5000 and params['round_trip.seed'] == 42
+    assert params['max_visited_nodes'] == 5_000_000              # seul le paramètre de requête est appliqué par GraphHopper 11.0
     assert params['point'] == '50.629200,3.057300' and result.distance_m == pytest.approx(4384.182) and len(result.points) == 110
 
 
@@ -140,6 +141,17 @@ def test_unreadable_400_bodies_are_invalid_responses(body):
     gh, _, clock = provider(FakeResponse(400, body))
     with pytest.raises(InvalidResponse):
         gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
+
+
+def test_the_visited_nodes_limit_is_sent_on_every_call_and_its_error_is_no_route():
+    body = json.dumps({'message': 'maximum nodes exceeded: 50', 'hints': [{'message': 'maximum nodes exceeded: 50', 'details': 'x'}]})
+    gh, session, clock = provider(FakeResponse(400, body.encode()), ok('route'), ok('round_trip'))
+    with pytest.raises(NoRouteFound) as exc:
+        gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
+    assert exc.value.waypoint_index is None
+    gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
+    gh.round_trip(LILLE, 'foot', 5000, 1, clock() + 10)
+    assert all(dict(c[1]['params'])['max_visited_nodes'] == 5_000_000 for c in session.calls)
 
 
 def test_connection_not_found_is_no_route_without_index():
@@ -268,7 +280,7 @@ def test_invalid_input_is_refused_before_any_call():
 @pytest.mark.parametrize('url', ['ftp://h/', 'http://u:p@h:8989', 'http://', '', 'http://h\n/x', 'javascript:alert(1)'])
 def test_base_url_must_be_a_plain_http_destination(url):
     with pytest.raises(outbound.OutboundError):
-        GraphHopperProvider(url)
+        GraphHopperProvider(url, guard=lambda destination: None)
 
 
 def test_the_guard_runs_before_every_outbound_call_and_a_refusal_prevents_the_call():
@@ -287,14 +299,63 @@ def test_the_guard_runs_before_every_outbound_call_and_a_refusal_prevents_the_ca
     assert session.calls == [] and gh.health() == Health.down()
 
 
-def test_the_api_key_is_sent_only_when_configured_and_never_in_an_error_message():
+def test_the_api_key_travels_in_a_header_never_in_the_url_and_never_over_cleartext_by_default():
     gh, session, clock = provider(ok('route'))
     gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
-    assert 'key' not in dict(session.calls[0][1]['params'])
-    gh, session, clock = provider(FakeResponse(503), api_key='s3cret')
+    assert 'headers' not in session.calls[0][1] and 'key' not in dict(session.calls[0][1]['params'])
+    gh, session, clock = provider(FakeResponse(503), api_key='s3cret', allow_cleartext_key=True)
     with pytest.raises(RoutingError) as exc:
         gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 10)
-    assert dict(session.calls[0][1]['params'])['key'] == 's3cret' and 's3cret' not in str(exc.value)
+    kw = session.calls[0][1]
+    assert kw['headers'] == {'Authorization': 'Bearer s3cret'} and 's3cret' not in repr(kw['params']) and 's3cret' not in str(exc.value)
+    assert 's3cret' not in session.calls[0][0]
+    with pytest.raises(ValueError):
+        GraphHopperProvider(BASE, guard=lambda d: None, api_key='s3cret')                    # http + clé : refusé
+    GraphHopperProvider('https://graphhopper.internal', guard=lambda d: None, api_key='s3cret')     # https : accepté
+
+
+def test_the_guard_is_mandatory_at_construction():
+    for bad in (None, 'oui', 5):
+        with pytest.raises(TypeError):
+            GraphHopperProvider(BASE, guard=bad)
+    with pytest.raises(TypeError):
+        GraphHopperProvider(BASE)
+
+
+def test_a_slow_trickling_body_is_cut_at_the_deadline_not_at_the_end_of_the_stream():
+    """TR3-1 : l'échéance borne la LECTURE du corps ; un moteur qui goutte-à-goutte ne retient pas au-delà."""
+    clock = Clock()
+
+    class Trickle(FakeResponse):
+        def iter_content(self, size):
+            for _ in range(100):
+                clock.now += 1.0                                          # chaque bloc arrive une seconde plus tard
+                yield b' '
+
+    gh, session, _ = provider(Trickle(200), clock=clock)
+    with pytest.raises(RoutingTimeout):
+        gh.route([LILLE, (50.7, 3.1)], 'foot', clock() + 2)
+    assert clock.now - 1000.0 <= 4.0                                       # arrêt au premier bloc après l'échéance
+
+
+def test_the_watchdog_closes_the_connection_at_the_deadline_for_a_blocked_read():
+    import threading
+    import time as real_time
+    closed = threading.Event()
+
+    class Blocked(FakeResponse):
+        def iter_content(self, size):
+            closed.wait(5)                                               # une lecture bloquée jusqu'à la fermeture
+            raise OSError('fermée')
+
+        def close(self):
+            closed.set()
+
+    gh = GraphHopperProvider(BASE, guard=lambda d: None, session=FakeSession(Blocked(200)))
+    started = real_time.monotonic()
+    with pytest.raises(RoutingTimeout):
+        gh.route([LILLE, (50.7, 3.1)], 'foot', real_time.monotonic() + 0.3)
+    assert real_time.monotonic() - started < 2.0
 
 
 # --- health() -------------------------------------------------------------------------------------------------------------

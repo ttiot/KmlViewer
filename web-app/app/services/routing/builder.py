@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Callable, List, Optional, Sequence
 
 from app.services import geo
+from app.services.file_formats import MAX_FILE_POINTS
 from app.services.routing import detours, profiles, quality
 from app.services.routing.base import (InvalidRequest, NoRouteFound, RoutingError, RoutingProvider, RoutingTimeout,
                                        validate_point)
@@ -185,6 +186,7 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
         trace, elevations, tried, last_seed = _loop(provider, kept, numbers, entry.profile, target_m, tolerance, seed, budget,
                                                     config, meta, warnings)
 
+    trace = quality.decimate(trace, MAX_FILE_POINTS)  # borne des fichiers (TR2-2)
     distance = quality.length_m(trace)
     overlap = quality.overlap_rate(trace)
     threshold = config.overlap_warning_pct_2pts if len(kept) == 2 else config.overlap_warning_pct
