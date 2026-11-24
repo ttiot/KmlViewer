@@ -10,7 +10,7 @@ from joserfc import jwt
 from joserfc.jwk import KeySet
 from flask import current_app, g, redirect, render_template, request, session, url_for
 
-from app.auth import bp, users
+from app.auth import bp, modes, users
 from app.auth.guard import oidc_enabled, safe_next
 from app.db import get_db
 
@@ -122,6 +122,11 @@ def _purge_pending_logins() -> None:
 @bp.route('/auth/login')
 def login():
     if not oidc_enabled():
+        if modes.auth_mode() == 'password':
+            # La connexion par mot de passe arrive avec T10 ; en attendant, une page claire plutôt qu'une boucle
+            # de redirections entre le garde et cette route
+            return render_template('auth_message.html', title='Connexion indisponible',
+                                   message="La connexion par mot de passe n'est pas encore disponible."), 503
         return redirect(url_for('main.index'))
     _purge_pending_logins()
     session['next'] = safe_next(request.args.get('next', ''))

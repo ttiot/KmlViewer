@@ -7,6 +7,9 @@ requests
 # Hachage des mots de passe (ADR-0002)
 argon2-cffi
 
+# Chiffrement des secrets au repos, Fernet (ADR-0003)
+cryptography
+
 # Authentification OIDC
 Authlib
 joserfc

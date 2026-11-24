@@ -1,14 +1,18 @@
 """Contrôle d'accès : tout est fermé par défaut, sauf une liste blanche explicite."""
 
+import logging
 import time
 from functools import wraps
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, g, redirect, render_template, request, session, url_for
 
-from app.auth import users
+from app.auth import factors, modes, users
 from app.db import get_db
 from app.errors import is_api_request, json_error
+from app.security import SQLITE_MAX_INT
+
+logger = logging.getLogger(__name__)
 
 # Seuls ces endpoints sont accessibles sans session. Toute nouvelle route est protégée d'office.
 PUBLIC_ENDPOINTS = frozenset({
@@ -17,8 +21,8 @@ PUBLIC_ENDPOINTS = frozenset({
 
 
 def oidc_enabled() -> bool:
-    """Mode validé au démarrage (auth/checks.py) : un OIDC_ISSUER défini équivaut au mode OIDC."""
-    return bool(current_app.config.get('OIDC_ISSUER'))
+    """Vrai en mode `oidc` (le mode validé, jamais la seule présence d'OIDC_ISSUER)."""
+    return modes.auth_mode() == 'oidc'
 
 
 def safe_next(target: str) -> str:
@@ -61,9 +65,14 @@ def _session_user():
     if user_id is None:
         return None
     user = None
-    if isinstance(user_id, int) and not session_expired():
+    if (isinstance(user_id, int) and not isinstance(user_id, bool) and 0 < user_id <= SQLITE_MAX_INT
+            and not session_expired()):
         user = users.get_by_id(get_db(), user_id)
         if user is not None and not users.owns_session(user, session.get('token')):
+            user = None
+        # M4 : un compte dont la méthode n'est pas permise par le mode courant n'a pas de session (bascule de
+        # mode : un cookie émis avant ne vaut plus rien)
+        if user is not None and not modes.method_permitted(modes.auth_mode(), user['auth_method']):
             user = None
     if user is None:
         session.clear()
@@ -75,7 +84,8 @@ def _load_user_and_guard():
     if request.endpoint == 'static':
         return None
 
-    if not oidc_enabled():
+    # Seul le mode `local` crée ou charge le compte `local` (B1). Les autres modes exigent une session valide.
+    if modes.auth_mode() == 'local':
         g.user = users.get_or_create_local_user(get_db())
         return None
 
@@ -100,7 +110,9 @@ def _load_user_and_guard():
 
 def init_guard(app) -> None:
     app.before_request(_load_user_and_guard)
-    app.context_processor(lambda: {'current_user': g.get('user'), 'oidc_enabled': oidc_enabled()})
+    app.context_processor(lambda: {
+        'current_user': g.get('user'), 'auth_mode': modes.auth_mode(), 'oidc_enabled': oidc_enabled(),
+        'password_accounts': modes.password_accounts_available()})
 
 
 def current_user_id() -> int:
@@ -111,11 +123,22 @@ def current_user_id() -> int:
 
 
 def admin_required(view):
+    """
+    Réservé aux admins. Défense en profondeur (EF-2.2, ADR-0004) : un admin à MOT DE PASSE doit avoir un second
+    facteur actif, vérifié ici à chaque requête et non seulement à la promotion : un admin sans facteur (base
+    modifiée, facteur retiré sans rétrogradation) n'ouvre aucune route d'administration.
+    """
     @wraps(view)
     def wrapper(*args, **kwargs):
-        if g.get('user') is None or not g.user['is_admin']:
+        user = g.get('user')
+        refused = user is None or not user['is_admin']
+        if not refused and user['auth_method'] == 'password' and not factors.has_second_factor(get_db(), user['id']):
+            logger.warning("Accès admin refusé : le compte #%s est admin sans second facteur actif", user['id'])
+            refused = True
+        if refused:
             if is_api_request():
                 return json_error('Droits administrateur requis', 403)
             abort(403)
         return view(*args, **kwargs)
+    wrapper.admin_only = True        # repéré par le test paramétré sur le url_map
     return wrapper

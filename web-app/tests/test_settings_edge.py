@@ -28,7 +28,7 @@ from app.settings.registry import Setting
 from tests.conftest import line, make_gpx
 
 NUMERIC = [k for k, s in REGISTRY.items() if s.type in ('int', 'float')]
-WITH_ENV = [k for k, s in REGISTRY.items() if s.env]
+WITH_ENV = [k for k, s in REGISTRY.items() if s.env and s.type in ('int', 'float')]   # les bool ont leurs propres tests
 HUGE = 10 ** 400
 CLI = audit.Actor.cli()
 

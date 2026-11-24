@@ -120,7 +120,7 @@ _BBOX_OVERLAP = ("{a}.min_lat <= {b}.max_lat + {m} AND {a}.max_lat >= {b}.min_la
 def match_activity(db: sqlite3.Connection, user_id: int, activity_id: int) -> int:
     """Cherche tous les tronçons de l'utilisateur dans une activité. Retourne le nombre d'efforts."""
     activity = activity_store.get(db, user_id, activity_id)
-    if activity is None:
+    if activity is None or activity['kind'] != 'activity':      # une trace planifiée ne crée aucun effort (RB-5.5)
         return 0
     overlap = _BBOX_OVERLAP.format(a='s', b='a', m=BBOX_MARGIN_DEG)
     segments = db.execute(
@@ -139,7 +139,7 @@ def match_segment(db: sqlite3.Connection, user_id: int, segment_id: int) -> int:
     overlap = _BBOX_OVERLAP.format(a='a', b='s', m=BBOX_MARGIN_DEG)
     ids = [r[0] for r in db.execute(
         f"SELECT a.id FROM activities a JOIN segments s ON s.id = ? "
-        f"WHERE a.user_id = ? AND a.has_time = 1 AND {overlap}", (segment_id, user_id)).fetchall()]
+        f"WHERE a.user_id = ? AND a.has_time = 1 AND a.kind = 'activity' AND {overlap}", (segment_id, user_id)).fetchall()]
     count = 0
     for activity_id in ids:  # une activité à la fois : mémoire bornée
         count += _store_efforts(db, segment, activity_store.get(db, user_id, activity_id))
@@ -189,6 +189,7 @@ def list_for_user(db: sqlite3.Connection, user_id: int) -> List[Dict[str, Any]]:
         "SELECT s.id, s.name, s.distance_m, s.created_at, COUNT(e.id) AS nb_efforts, "
         "MIN(e.elapsed_s) AS best_s, MAX(e.start_time) AS last_effort "
         "FROM segments s LEFT JOIN efforts e ON e.segment_id = s.id "
+        "AND e.activity_id IN (SELECT id FROM activities WHERE kind = 'activity') "
         "WHERE s.user_id = ? GROUP BY s.id ORDER BY s.name COLLATE NOCASE", (user_id,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -202,7 +203,7 @@ def detail(db: sqlite3.Connection, user_id: int, segment_id: int) -> Optional[Di
     efforts = db.execute(
         "SELECT e.id, e.activity_id, e.start_time, e.elapsed_s, a.name AS activity_name "
         "FROM efforts e JOIN activities a ON a.id = e.activity_id "
-        "WHERE e.segment_id = ? AND a.user_id = ? ORDER BY e.elapsed_s", (segment_id, user_id)).fetchall()
+        "WHERE e.segment_id = ? AND a.user_id = ? AND a.kind = 'activity' ORDER BY e.elapsed_s", (segment_id, user_id)).fetchall()
     return {
         'id': segment['id'], 'name': segment['name'], 'distance_m': segment['distance_m'],
         'created_at': segment['created_at'],

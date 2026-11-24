@@ -11,7 +11,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.errors import ApiError
 from app.security import SQLITE_MAX_INT
-from app.services import activity_types
+from app.services import activity_store, activity_types
 
 logger = logging.getLogger(__name__)
 
@@ -83,4 +83,12 @@ def type_filter() -> Optional[str]:
     value = request.args.get('type') or None
     if value is not None and not activity_types.is_filter(value):
         raise ApiError("Type d'activité inconnu")
+    return value
+
+
+def kind_filter() -> Optional[str]:
+    """Paramètre d'URL `kind` : `activity` (réalisées), `planned` (planifiées), ou rien (toutes, défaut)."""
+    value = request.args.get('kind') or None
+    if value is not None and value not in activity_store.KINDS:
+        raise ApiError("Nature de trace inconnue")
     return value

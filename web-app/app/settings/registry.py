@@ -129,6 +129,13 @@ _ENTRIES = (
     _int('USER_QUOTA_MB', 2048, 0, 102_400, 'Stockage', "Quota de stockage par utilisateur (Mo)", env='USER_QUOTA_MB',
          help="0 = illimité (conservé pour compatibilité)."),
     _int('audit.retention_days', 90, 30, 3650, 'Sécurité', "Rétention du journal d'audit (jours)"),
+    # Tâches de fond (EF-6.5) : relues à chaque tour de l'ordonnanceur, aucun redémarrage
+    Setting('INBOX_ENABLED', 'bool', True, 'Dossier surveillé', "Surveiller le dossier d'import", env='INBOX_ENABLED'),
+    _int('INBOX_SCAN_INTERVAL', 30, 5, 3600, 'Dossier surveillé', "Intervalle de scrutation du dossier (s)",
+         env='INBOX_SCAN_INTERVAL'),
+    _int('DEM_BACKFILL_INTERVAL', 300, 30, 3600, 'Altitude', "Intervalle du balayage de correction d'altitude (s)",
+         env='DEM_BACKFILL_INTERVAL'),
+    _int('routing.health_interval_s', 60, 15, 600, 'Traces planifiées', "Intervalle du sondage du moteur (s)"),
     # Seuils du limiteur (ADR-0006, EF-6.5) : lus à chaud, sans remise à zéro des compteurs
     _int('ratelimit.password_per_identifier', 5, 3, 20, 'Sécurité', "Tentatives de mot de passe / 15 min / identifiant"),
     _int('ratelimit.password_per_ip', 20, 10, 100, 'Sécurité', "Tentatives de mot de passe / 15 min / IP"),

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.services import activity_types, file_formats
 
+KINDS = ('activity', 'planned')   # réalisée / planifiée (RB-5.4) ; `kind` n'est jamais modifiable (EDITABLE_COLUMNS)
 MAX_PENDING_LATE = 500  # borne la liste passée à pending_dem (nombre de variables SQL)
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 SUMMARY_COLUMNS = (
     "id, name, filename, source, activity_type, start_time, start_time_known, has_time, duration_s, moving_s, "
     "distance_m, ascent_m, descent_m, ascent_gps_m, descent_gps_m, elev_source, dem_status, max_speed_ms, "
-    "best_efforts, created_at"
+    "best_efforts, created_at, kind"
 )
 
 
@@ -128,17 +129,22 @@ def to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 def list_for_user(db: sqlite3.Connection, user_id: int, activity_type: Optional[str] = None,
-                  limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+                  limit: int = 100, offset: int = 0, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Bibliothèque : réalisées et planifiées (`kind` renvoyé) ; `kind` filtre sur l'une des deux (RB-5.5, défaut : toutes)."""
+    if kind is not None and kind not in KINDS:
+        raise ValueError("Nature de trace inconnue")
     clause, type_params = activity_types.sql_filter(activity_type)
-    sql = f"SELECT {SUMMARY_COLUMNS} FROM activities WHERE user_id = ?{clause}"
-    params: list = [user_id, *type_params]
+    kind_clause = " AND kind = ?" if kind else ""
+    sql = f"SELECT {SUMMARY_COLUMNS} FROM activities WHERE user_id = ?{clause}{kind_clause}"
+    params: list = [user_id, *type_params, *([kind] if kind else [])]
     sql += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
     params += [max(1, min(int(limit), 500)), max(0, int(offset))]
     return [to_dict(r) for r in db.execute(sql, params).fetchall()]
 
 
 def list_types(db: sqlite3.Connection, user_id: int) -> List[str]:
-    rows = db.execute("SELECT DISTINCT activity_type FROM activities WHERE user_id = ? "
+    # Types présents : activités réalisées seulement (RB-5.5), une trace planifiée n'en ajoute pas au filtre
+    rows = db.execute("SELECT DISTINCT activity_type FROM activities WHERE user_id = ? AND kind = 'activity' "
                       "AND activity_type IS NOT NULL AND activity_type != '' ORDER BY 1", (user_id,))
     return [r[0] for r in rows.fetchall()]
 
@@ -150,7 +156,12 @@ def get(db: sqlite3.Connection, user_id: int, activity_id: int) -> Optional[sqli
 
 
 def count_for_user(db: sqlite3.Connection, user_id: int) -> int:
-    return db.execute("SELECT COUNT(*) FROM activities WHERE user_id = ?", (user_id,)).fetchone()[0]
+    """Activités réalisées ; les traces planifiées se comptent à part (count_planned_for_user)."""
+    return db.execute("SELECT COUNT(*) FROM activities WHERE user_id = ? AND kind = 'activity'", (user_id,)).fetchone()[0]
+
+
+def count_planned_for_user(db: sqlite3.Connection, user_id: int) -> int:
+    return db.execute("SELECT COUNT(*) FROM activities WHERE user_id = ? AND kind = 'planned'", (user_id,)).fetchone()[0]
 
 
 EDITABLE_COLUMNS = frozenset({'name', 'activity_type'})

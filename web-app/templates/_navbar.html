@@ -14,7 +14,7 @@
         {{ nav_link('viewer', 'main.index', 'Carte') }}
         {{ nav_link('dashboard', 'main.dashboard', 'Tableau de bord') }}
         {{ nav_link('segments', 'main.segments', 'Tronçons') }}
-        {% if current_user and current_user['is_admin'] and oidc_enabled %}
+        {% if current_user and current_user['is_admin'] and auth_mode != 'local' %}
         {{ nav_link('users', 'main.users', 'Utilisateurs') }}
         {% endif %}
     </nav>
@@ -27,7 +27,7 @@
             {{- current_user['display_name'] or current_user['username'] or 'Mon profil' -}}
         </a>
         {% endif %}
-        {% if current_user and oidc_enabled %}
+        {% if current_user and auth_mode != 'local' %}
         {# POST : un lien ou une image d'un site tiers ne peut pas déconnecter l'utilisateur #}
         <form method="post" action="{{ url_for('auth.logout') }}" class="d-flex">
             <button type="submit" class="icon-btn" title="Se déconnecter" aria-label="Se déconnecter">

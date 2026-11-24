@@ -4,10 +4,11 @@ import logging
 import shutil
 from pathlib import Path
 
-from flask import current_app, g, jsonify
+from flask import current_app, g, jsonify, request
 
 from app.api import bp
 from app.api.payload import json_body
+from app.audit import Actor
 from app.auth import admin_required, users
 from app.auth.guard import oidc_enabled
 from app.db import get_db
@@ -22,16 +23,18 @@ def _unknown_user() -> ApiError:
 
 @bp.route('/me')
 def me():
-    return jsonify({'user': users.to_dict(g.user), 'oidc': oidc_enabled()})
+    return jsonify({'user': users.to_dict(g.user), 'oidc': oidc_enabled(), 'auth_mode': current_app.config['AUTH_MODE']})
 
 
 @bp.route('/users')
 @admin_required
 def list_users():
     rows = get_db().execute(
-        "SELECT u.*, (SELECT COUNT(*) FROM activities a WHERE a.user_id = u.id) AS nb_activities "
+        "SELECT u.*, (SELECT COUNT(*) FROM activities a WHERE a.user_id = u.id AND a.kind = 'activity') AS nb_activities, "
+        "(SELECT COUNT(*) FROM activities a WHERE a.user_id = u.id AND a.kind = 'planned') AS nb_planned "
         "FROM users u ORDER BY u.created_at").fetchall()
-    return jsonify({'users': [users.to_dict(r) | {'nb_activities': r['nb_activities']} for r in rows],
+    counts = ('nb_activities', 'nb_planned')
+    return jsonify({'users': [users.to_dict(r) | {c: r[c] for c in counts} for r in rows],
                     'admin_managed_by_idp': bool(current_app.config.get('OIDC_ADMIN_ROLE'))})
 
 
@@ -57,9 +60,16 @@ def update_user(user_id):
     if 'is_admin' in updates and current_app.config.get('OIDC_ADMIN_ROLE'):
         raise ApiError("Le rôle admin est piloté par l'IdP (OIDC_ADMIN_ROLE)", 409)
 
-    assignments = ', '.join(f"{field} = ?" for field in updates)
-    db.execute(f"UPDATE users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
-    db.commit()
+    if 'is_admin' in updates:
+        # Chemin commun avec la CLI (B5, CA-13) : un compte à mot de passe sans second facteur ne devient pas admin
+        try:
+            users.set_admin(db, user_id, bool(updates.pop('is_admin')), actor=Actor.from_user(g.user), ip=request.remote_addr)
+        except users.AdminPromotionRefused as exc:
+            raise ApiError(str(exc), 409) from exc
+    if updates:
+        assignments = ', '.join(f"{field} = ?" for field in updates)
+        db.execute(f"UPDATE users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
+        db.commit()
     if updates.get('is_active') == 0:
         # Un compte désactivé perd ses sessions : le réactiver ne ressuscite pas un vieux cookie
         users.revoke_sessions(db, user_id)

@@ -135,6 +135,11 @@ def common_passwords() -> frozenset:
     return _common
 
 
+def init_common_passwords() -> int:
+    """Charge la liste au démarrage (mode avec comptes à mot de passe) ; CommonPasswordsError si absente ou vide."""
+    return len(common_passwords())
+
+
 def __getattr__(name):
     if name == 'COMMON_PASSWORDS':          # compatibilité : accès paresseux, la liste n'est pas lue à l'import
         return common_passwords()

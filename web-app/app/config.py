@@ -59,18 +59,27 @@ class Config:
     DB_PATH = os.environ.get('DB_PATH') or ''  # défaut : DATA_DIR/kmlviewer.sqlite3
 
     # Dossier surveillé
-    INBOX_ENABLED = _env_bool('INBOX_ENABLED', True)
+    # None = variable non renseignée : la valeur effective vient de la base, sinon du défaut du registre (app/settings)
+    INBOX_ENABLED = _env_bool('INBOX_ENABLED', None)
     INBOX_DIR = os.environ.get('INBOX_DIR') or ''  # défaut : DATA_DIR/inbox
-    INBOX_SCAN_INTERVAL = int(os.environ.get('INBOX_SCAN_INTERVAL') or 30)
+    INBOX_SCAN_INTERVAL = os.environ.get('INBOX_SCAN_INTERVAL') or None
+    DEM_BACKFILL_INTERVAL = os.environ.get('DEM_BACKFILL_INTERVAL') or None
     # Propriétaire des fichiers déposés à la racine de l'inbox (username ou email)
     INBOX_DEFAULT_USER = os.environ.get('INBOX_DEFAULT_USER') or ''
     # Activités corrigées par cycle de la tâche de fond (rattrapage d'altitude)
     DEM_BACKFILL_BATCH = int(os.environ.get('DEM_BACKFILL_BATCH') or 25)
 
+    # SECRETS_KEY (clés Fernet des secrets, ADR-0003) n'est volontairement PAS déclarée ici : un attribut de classe
+    # resterait lisible par tout code qui importe Config. app/secrets_store.init_secrets la lit dans l'environnement.
+
     # Mode d'authentification : « oidc » ou « local » (mono-utilisateur SANS authentification).
     # Vide : déduit d'OIDC_ISSUER, et le mode local est refusé au démarrage si la configuration
     # ressemble à une mise en production (voir app/auth/checks.py).
     AUTH_MODE = (os.environ.get('AUTH_MODE') or '').strip().lower()
+
+    # Origine publique de l'application (https://hôte[:port]) : seule source des liens envoyés ou affichés et
+    # du RP ID WebAuthn, jamais l'en-tête Host (EF-S7). Obligatoire en mode password.
+    PUBLIC_URL = (os.environ.get('PUBLIC_URL') or '').strip()
 
     # OIDC (FusionAuth ou autre)
     OIDC_ISSUER = (os.environ.get('OIDC_ISSUER') or '').rstrip('/')

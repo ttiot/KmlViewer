@@ -68,7 +68,8 @@ def _recent_buckets(today: date, period: str, shown_year: int) -> List[str]:
 
 def _rows(db: sqlite3.Connection, user_id: int, activity_type: Optional[str], columns: str):
     clause, type_params = activity_types.sql_filter(activity_type)
-    return db.execute(f"SELECT {columns} FROM activities WHERE user_id = ?{clause}",
+    # Activités réalisées seulement : une trace planifiée n'est ni un volume ni un record (RB-5.5)
+    return db.execute(f"SELECT {columns} FROM activities WHERE user_id = ? AND kind = 'activity'{clause}",
                       [user_id, *type_params]).fetchall()
 
 

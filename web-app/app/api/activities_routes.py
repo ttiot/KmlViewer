@@ -6,17 +6,25 @@ import numpy as np
 from flask import current_app, jsonify
 
 from app.api import bp
-from app.api.payload import int_arg, json_body, json_name, type_filter
+from app.api.payload import int_arg, json_body, json_name, kind_filter, type_filter
 from app.api.uploads import public_error, uploaded_files
 from app.api.workload import heavy_slot
 from app.auth import admin_required, current_user_id
 from app.db import get_db
 from app.errors import ApiError
+from app.settings import effective
 from app.services import (
-    activity_store, activity_types, analysis_store, dem_service, geo, inbox_watcher, ingest_service,
+    activity_store, activity_types, analysis_store, dem_service, geo, ingest_service,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _wake_background(task: str) -> None:
+    """Rend une tâche de fond due au tour suivant (altitude corrigée aussitôt après un import)."""
+    scheduler = current_app.extensions.get('scheduler')
+    if scheduler is not None:
+        scheduler.wake(task)
 
 DEFAULT_TRACK_POINTS = 5000
 MAX_TRACK_POINTS = 50000
@@ -35,8 +43,9 @@ def list_activities():
     db, user_id = get_db(), current_user_id()
     return jsonify({
         'activities': activity_store.list_for_user(
-            db, user_id, type_filter(), int_arg('limit', 100), int_arg('offset', 0)),
+            db, user_id, type_filter(), int_arg('limit', 100), int_arg('offset', 0), kind_filter()),
         'types': activity_store.list_types(db, user_id),
+        'planned_count': activity_store.count_planned_for_user(db, user_id),
         'dem_enabled': dem_service.is_enabled(current_app.config),
     })
 
@@ -65,7 +74,7 @@ def import_activities():
         results.append({'filename': file.filename, 'status': result.status,
                         'activity_id': result.activity_id, 'message': message})
     if any(r['status'] == 'created' for r in results):
-        inbox_watcher.wake()
+        _wake_background('dem_backfill')
     return jsonify({'success': any(r['status'] != 'error' for r in results), 'results': results})
 
 
@@ -212,4 +221,4 @@ def inbox_status():
     rows = get_db().execute(
         "SELECT path, size, status, error, activity_id, processed_at FROM inbox_files "
         "ORDER BY processed_at DESC LIMIT 100").fetchall()
-    return jsonify({'enabled': current_app.config['INBOX_ENABLED'], 'files': [dict(r) for r in rows]})
+    return jsonify({'enabled': bool(effective(current_app.config, 'INBOX_ENABLED')), 'files': [dict(r) for r in rows]})

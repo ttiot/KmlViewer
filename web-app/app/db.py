@@ -272,6 +272,84 @@ def _settings_tables(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO settings_meta (id, version) VALUES (1, 1)")
 
 
+def _secrets_table(conn: sqlite3.Connection) -> None:
+    """0008 - secrets des services externes, chiffrés (admin-space EF-5, ADR-0003). `bound_to` : destination liée."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS secrets (
+            name       TEXT PRIMARY KEY,
+            ciphertext BLOB NOT NULL,
+            last4      TEXT,
+            bound_to   TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL
+        )""")
+
+
+def _activities_kind(conn: sqlite3.Connection) -> None:
+    """
+    0011 - nature d'une trace (gpx-route-builder RB-5.4, ADR-0009) : `activity` (réalisée) ou `planned`
+    (générée par le planificateur). Toute ligne existante devient `activity` : statistiques inchangées.
+    La colonne et son index vivent dans la même migration (deux migrations dépendantes, même tâche).
+    """
+    _add_column(conn, 'activities', 'kind', "TEXT NOT NULL DEFAULT 'activity' CHECK (kind IN ('activity', 'planned'))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_activities_user_kind_start ON activities (user_id, kind, start_time)")
+
+
+def _users_auth_method(conn: sqlite3.Connection) -> None:
+    """
+    0009 - méthode d'authentification d'un compte (admin-space EF-1.3, EF-0.6) : `oidc` | `password` | `none`.
+    Les comptes existants sont SSO (`oidc`), sauf le compte du mode local (`sub = 'local'`) : `none`.
+    """
+    _add_column(conn, 'users', 'auth_method', "TEXT NOT NULL DEFAULT 'oidc' CHECK (auth_method IN ('oidc', 'password', 'none'))")
+    conn.execute("UPDATE users SET auth_method = 'none' WHERE sub = 'local' AND auth_method = 'oidc'")
+
+
+def _feature_tables(conn: sqlite3.Connection) -> None:
+    """0010 - fonctions bêta (admin-space EF-7) : état par fonction et liste d'utilisateurs, conservée entre états."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS feature_flags (
+            key        TEXT PRIMARY KEY,
+            state      TEXT NOT NULL CHECK (state IN ('off', 'users', 'all')),
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS feature_users (
+            feature_key TEXT NOT NULL,
+            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            PRIMARY KEY (feature_key, user_id)
+        )""")
+
+
+def _auth_tokens(conn: sqlite3.Connection) -> None:
+    """
+    0012 - jetons à usage unique (admin-space §7, EF-3, EF-0.3) : invitation, amorçage, réinitialisation, validation
+    d'adresse, définition de mot de passe. Seul le SHA-256 du jeton est stocké : le jeton en clair n'existe que
+    dans le lien montré une fois.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash      TEXT NOT NULL UNIQUE,
+            kind            TEXT NOT NULL CHECK (kind IN ('invite', 'bootstrap', 'reset', 'verify_email', 'set_password')),
+            created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            target_user_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            email           TEXT,
+            is_admin_grant  INTEGER NOT NULL DEFAULT 0 CHECK (is_admin_grant IN (0, 1)),
+            initial_credits INTEGER NOT NULL DEFAULT 0 CHECK (initial_credits BETWEEN 0 AND 1000),
+            note            TEXT,
+            sent_by_mail    INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            expires_at      TEXT NOT NULL,
+            used_at         TEXT,
+            used_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            revoked_at      TEXT,
+            CHECK (is_admin_grant = 0 OR kind = 'bootstrap')
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_tokens_target ON auth_tokens (target_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_tokens_creator ON auth_tokens (created_by)")
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
 # dernière passée. SCHEMA décrit l'état final de ces 5 migrations positionnelles : une base neuve le reçoit
 # directement, puis chacune est un no-op. Les tables ajoutées depuis (ADR-0012) ne sont créées que par
@@ -312,6 +390,11 @@ MIGRATIONS = [
 NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ('0006_audit_log_v2', _audit_log_v2),
     ('0007_settings', _settings_tables),
+    ('0008_secrets', _secrets_table),
+    ('0009_users_auth_method', _users_auth_method),
+    ('0010_feature_flags', _feature_tables),
+    ('0011_activities_kind', _activities_kind),
+    ('0012_auth_tokens', _auth_tokens),
 ]
 
 _MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')

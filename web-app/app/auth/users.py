@@ -9,6 +9,7 @@ from typing import List, Mapping, Optional
 logger = logging.getLogger(__name__)
 
 LOCAL_SUB = 'local'
+PASSWORD_SUB_PREFIX = 'pwd:'      # espace des `sub` des comptes à mot de passe (EF-1.3)
 _NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
 
 
@@ -48,13 +49,54 @@ def owns_session(user: sqlite3.Row, token) -> bool:
     return bool(expected) and isinstance(token, str) and hmac.compare_digest(expected, token)
 
 
+ADMIN_NEEDS_FACTOR = ("Ce compte à mot de passe n'a pas de second facteur actif : il doit d'abord en enrôler un "
+                      "(promotion refusée).")
+
+
+class AdminPromotionRefused(ValueError):
+    """Promotion refusée par l'invariant B5 : un mot de passe seul ne donne jamais l'admin."""
+
+
+def set_admin(db: sqlite3.Connection, user_id: int, make_admin: bool, *, actor, activate: bool = False, ip=None) -> sqlite3.Row:
+    """
+    SEUL chemin d'écriture de `is_admin` pour la CLI et l'API (B5, CA-13) : un compte à mot de passe sans second
+    facteur ACTIF ne devient jamais admin. Le contrôle est fait sous le verrou d'écriture, dans la transaction de
+    la promotion : un retrait de facteur concurrent ne peut pas passer entre les deux. Tracé (`user.admin_grant` /
+    `user.admin_revoke`). Lève LookupError (compte absent) ou AdminPromotionRefused. `activate` : active aussi le
+    compte (désignation du premier admin).
+    """
+    from app import audit
+    from app.auth import factors
+    from app.db import write_transaction
+    refused = False
+    with write_transaction(db):
+        target = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise LookupError("Compte introuvable")
+        refused = make_admin and target['auth_method'] == 'password' and not factors.has_second_factor(db, user_id)
+        if refused:
+            # La trace du refus est validée (la transaction se termine normalement) ; l'erreur part après
+            audit.record(db, 'user.admin_refused', actor=actor, target_type='user', target_id=user_id, ip=ip,
+                         details={'reason': 'second facteur absent'})
+        elif make_admin:
+            db.execute("UPDATE users SET is_admin = 1" + (", is_active = 1" if activate else "") + " WHERE id = ?", (user_id,))
+        else:
+            db.execute("UPDATE users SET is_admin = 0 WHERE id = ?", (user_id,))
+        if not refused:
+            audit.record(db, 'user.admin_grant' if make_admin else 'user.admin_revoke', actor=actor, target_type='user',
+                         target_id=user_id, ip=ip)
+    if refused:
+        raise AdminPromotionRefused(ADMIN_NEEDS_FACTOR)
+    return db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
 def get_or_create_local_user(db: sqlite3.Connection) -> sqlite3.Row:
     """Compte unique du mode sans OIDC."""
     row = db.execute("SELECT * FROM users WHERE sub = ?", (LOCAL_SUB,)).fetchone()
     if row is None:
         db.execute(
-            "INSERT OR IGNORE INTO users (sub, username, display_name, is_admin) "
-            "VALUES (?, 'local', 'Local', 1)", (LOCAL_SUB,))
+            "INSERT OR IGNORE INTO users (sub, username, display_name, is_admin, auth_method) "
+            "VALUES (?, 'local', 'Local', 1, 'none')", (LOCAL_SUB,))
         db.commit()
         row = db.execute("SELECT * FROM users WHERE sub = ?", (LOCAL_SUB,)).fetchone()
     return row
@@ -101,7 +143,9 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
       son propriétaire.
     """
     sub = claims.get('sub')
-    if not sub or sub == LOCAL_SUB:
+    if not sub or not isinstance(sub, str) or sub == LOCAL_SUB or sub.startswith(PASSWORD_SUB_PREFIX):
+        # `pwd:` est l'espace des comptes à mot de passe : un IdP ne peut pas désigner l'un d'eux (EF-0.5)
+        logger.warning("Connexion OIDC refusée : claim 'sub' absent ou réservé")
         raise ValueError("Claim 'sub' absent ou invalide dans le jeton OIDC")
 
     # Seul un email que l'IdP déclare vérifié identifie quelqu'un (il désigne un dossier de
@@ -114,6 +158,9 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
     role_admin = (admin_role in _claim_roles(claims)) if admin_role else None
 
     row = db.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
+    if row is not None and row['auth_method'] != 'oidc':
+        logger.warning("Connexion OIDC refusée : le compte #%s n'est pas un compte SSO", row['id'])
+        raise ValueError("Ce compte n'est pas un compte SSO")
     if row is None:
         is_admin = bool(role_admin)
         is_active = auto_activate or is_admin
@@ -137,4 +184,5 @@ def to_dict(row: sqlite3.Row) -> dict:
         'display_name': row['display_name'], 'created_at': row['created_at'],
         'last_login': row['last_login'],
         'is_admin': bool(row['is_admin']), 'is_active': bool(row['is_active']),
+        'auth_method': row['auth_method'],
     }

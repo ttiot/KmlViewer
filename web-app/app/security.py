@@ -116,7 +116,7 @@ def init_security(app) -> None:
     # un site tiers qui se résout vers 127.0.0.1 deviendrait « même origine » que l'appli.
     # Avec l'OIDC, la liste est exigée au démarrage (app/auth/checks.py).
     hosts = list(app.config.get('TRUSTED_HOSTS') or [])
-    if not hosts and not app.config.get('OIDC_ISSUER'):
+    if not hosts and app.config.get('AUTH_MODE', 'local') == 'local':
         hosts = list(LOCAL_HOSTS)
     app.config['TRUSTED_HOSTS'] = hosts or None
     if hosts:

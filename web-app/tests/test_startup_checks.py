@@ -4,10 +4,10 @@ import logging
 
 import pytest
 
-from app import _start_inbox_watcher, create_app
+from app import _start_scheduler, create_app
 from app.auth import oidc, users
 from app.config import Config, TestingConfig
-from app.services import inbox_watcher
+from app import background
 from tests.conftest import OIDC_OVERRIDES, login_as
 
 
@@ -159,19 +159,20 @@ def test_csp_restricts_form_targets(client, oidc_app):
 
 def test_watcher_starts_under_gunicorn_even_in_development_config(tmp_path, monkeypatch):
     started = []
-    monkeypatch.setattr(inbox_watcher.InboxWatcher, 'start', lambda self: started.append(self))
+    monkeypatch.setattr(background.Scheduler, 'start', lambda self: started.append(self))
     monkeypatch.delenv('WERKZEUG_RUN_MAIN', raising=False)
     monkeypatch.delenv('FLASK_RUN_FROM_CLI', raising=False)
     app = _app(tmp_path)
+    started.clear()                       # create_app a lui-même démarré l'ordonnanceur (mode servi : toujours, EF-10.1)
     app.config.update(TESTING=False, INBOX_ENABLED=True)
     app.debug = True
 
     monkeypatch.delenv('SERVER_SOFTWARE', raising=False)
-    _start_inbox_watcher(app)
+    _start_scheduler(app)
     assert started == []  # parent du reloader du serveur de développement : rien
 
     monkeypatch.setenv('SERVER_SOFTWARE', 'gunicorn/23.0.0')
-    _start_inbox_watcher(app)
+    _start_scheduler(app)
     assert len(started) == 1
 
 

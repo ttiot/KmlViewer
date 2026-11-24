@@ -10,32 +10,21 @@ seule, et ça ne perturbe pas un outil de synchro type Syncthing) : le suivi se 
 dans la table inbox_files. Scrutation par polling, fiable sur bind mounts et NFS.
 """
 
-import fcntl
 import logging
 import os
 import sqlite3
 import stat as stat_module
-import threading
 import time
 from pathlib import Path
 from typing import Dict, Iterator, Mapping, Optional, Set, Tuple
 
-from app.auth import users
-from app.db import connect
+from app.auth import modes, users
 from app.services import file_formats, ingest_service
 
 logger = logging.getLogger(__name__)
 
 STABLE_AGE_S = 5  # un fichier modifié il y a moins de 5 s est peut-être encore en cours d'écriture
 MAX_DEPTH = 8
-
-# Réveil anticipé de la tâche de fond (ex. après un import, pour corriger l'altitude sans attendre)
-_wake_event = threading.Event()
-
-
-def wake() -> None:
-    _wake_event.set()
-
 
 def inbox_dir(cfg: Mapping) -> Path:
     return Path(cfg.get('INBOX_DIR') or Path(cfg['DATA_DIR']) / 'inbox')
@@ -93,7 +82,7 @@ def _resolve_owner(db: sqlite3.Connection, cfg: Mapping, folder: Optional[str]) 
     quelque titre que ce soit, le dossier n'est rattaché à personne : se donner le
     username ou l'email d'un autre ne fait donc pas recevoir ses fichiers.
     """
-    if not cfg.get('OIDC_ISSUER'):
+    if modes.auth_mode(cfg) == 'local':       # mode validé au démarrage ; absent => erreur, jamais de repli ouvert
         return users.get_or_create_local_user(db)
     login = folder or cfg.get('INBOX_DEFAULT_USER')
     if not login:
@@ -213,59 +202,3 @@ def scan_once(db: sqlite3.Connection, cfg: Mapping, warned: Optional[set] = None
         if status:
             counts[status] += 1
     return counts
-
-
-class InboxWatcher(threading.Thread):
-    """
-    Tâche de fond : scrutation du dossier surveillé (si INBOX_ENABLED) et rattrapage de la
-    correction d'altitude. Un verrou fichier garantit un seul thread actif par DATA_DIR.
-    """
-
-    def __init__(self, cfg: Mapping):
-        super().__init__(name='inbox-watcher', daemon=True)
-        self.cfg = dict(cfg)
-        self.interval = max(5, int(self.cfg.get('INBOX_SCAN_INTERVAL', 30)))
-        self._stop_event = threading.Event()
-        self._lock_file = None
-
-    def _acquire_lock(self) -> bool:
-        lock_path = Path(self.cfg['DATA_DIR']) / 'inbox.lock'
-        self._lock_file = open(lock_path, 'w')  # noqa: SIM115 - gardé ouvert toute la vie du thread
-        try:
-            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except OSError:
-            self._lock_file.close()
-            return False
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        wake()
-
-    def run(self) -> None:
-        if not self._acquire_lock():
-            logger.info("Inbox : un autre processus surveille déjà le dossier, rien à faire ici")
-            return
-        scan_inbox = bool(self.cfg.get('INBOX_ENABLED'))
-        if scan_inbox:
-            root = inbox_dir(self.cfg)
-            try:
-                root.mkdir(parents=True, exist_ok=True)
-                logger.info("Inbox : surveillance de %s toutes les %d s", root, self.interval)
-            except OSError as exc:
-                logger.error("Inbox : création de %s impossible (%s), surveillance désactivée", root, exc)
-                scan_inbox = False
-        warned: set = set()
-        while not self._stop_event.is_set():
-            _wake_event.clear()
-            try:
-                db = connect(self.cfg['DB_PATH'])
-                try:
-                    if scan_inbox:
-                        scan_once(db, self.cfg, warned)
-                    ingest_service.backfill_elevation(db, self.cfg)
-                finally:
-                    db.close()
-            except Exception:  # noqa: BLE001 - le watcher doit survivre à tout
-                logger.exception("Tâche de fond : passage en erreur, nouvel essai au prochain cycle")
-            _wake_event.wait(self.interval)

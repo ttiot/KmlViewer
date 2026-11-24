@@ -93,14 +93,18 @@ def _elevation_fields(track, cfg: Mapping, summary: Dict[str, Any], defer: bool)
 
 def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, filename: str,
                  source: str, fallback_epoch: Optional[float] = None,
-                 defer_elevation: bool = False) -> IngestResult:
+                 defer_elevation: bool = False, kind: str = 'activity') -> IngestResult:
     """
     Ingère un fichier. Ne lève pas : toute erreur est renvoyée dans IngestResult.
+    kind : `activity` (upload, inbox : toujours, même sans horodatage, RB-5.6) ou `planned` (trace générée
+    par le planificateur) ; une trace planifiée n'a ni meilleurs efforts ni effort sur tronçon.
     defer_elevation : laisse la correction d'altitude à la tâche de fond (import interactif,
     où interroger le MNT fichier par fichier ferait expirer la requête HTTP).
     """
+    if kind not in activity_store.KINDS:
+        return IngestResult('error', message="Nature de trace inconnue")
     try:
-        return _ingest(db, cfg, user_id, raw, filename, source, fallback_epoch, defer_elevation)
+        return _ingest(db, cfg, user_id, raw, filename, source, fallback_epoch, defer_elevation, kind)
     except Exception as exc:  # noqa: BLE001 - contrat : un fichier, quel qu'il soit, ne fait pas tomber le lot
         logger.exception("Ingestion de %r : erreur inattendue", str(filename)[:MAX_NAME_LENGTH])
         try:
@@ -111,7 +115,8 @@ def ingest_bytes(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes,
 
 
 def _ingest(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, filename: str,
-            source: str, fallback_epoch: Optional[float], defer_elevation: bool) -> IngestResult:
+            source: str, fallback_epoch: Optional[float], defer_elevation: bool,
+            kind: str = 'activity') -> IngestResult:
     # L'extension est lue sur le nom réduit, dont seul le radical est tronqué
     filename = file_formats.safe_name(filename, MAX_NAME_LENGTH)
     ext = file_formats.extension(filename)
@@ -175,7 +180,8 @@ def _ingest(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, file
         'max_speed_ms': summary['max_speed_ms'],
         'min_lat': summary['min_lat'], 'max_lat': summary['max_lat'],
         'min_lon': summary['min_lon'], 'max_lon': summary['max_lon'],
-        'best_efforts': summary['best_efforts'],
+        'best_efforts': summary['best_efforts'] if kind == 'activity' else {},
+        'kind': kind,
         'points': activity_store.pack_points(track.lat, track.lon, track.ele, track.t, elevation['ele_dem'],
                                               track.breaks),
     }
@@ -258,7 +264,7 @@ def recompute_summaries(db: sqlite3.Connection, user_id: Optional[int] = None) -
     à partir de leurs points (utile après une correction du calcul). L'altitude MNT est
     conservée. Retourne le nombre d'activités mises à jour.
     """
-    sql, params = "SELECT id, user_id FROM activities", ()
+    sql, params = "SELECT id, user_id, kind FROM activities", ()
     if user_id is not None:
         sql, params = sql + " WHERE user_id = ?", (user_id,)
     updated = 0
@@ -274,6 +280,8 @@ def recompute_summaries(db: sqlite3.Connection, user_id: Optional[int] = None) -
         values = {key: summary[key] for key in ('distance_m', 'duration_s', 'moving_s', 'max_speed_ms',
                                                 'ascent_gps_m', 'descent_gps_m', 'best_efforts')}
         values['has_time'] = int(summary['has_time'])
+        if row['kind'] != 'activity':       # trace planifiée : distance et D+ recalculés, jamais de meilleurs efforts (M14)
+            values['best_efforts'] = {}
         if row['elev_source'] != 'dem':
             values['ascent_m'], values['descent_m'] = summary['ascent_gps_m'], summary['descent_gps_m']
         activity_store.update_summary(db, ref['user_id'], ref['id'], values)
