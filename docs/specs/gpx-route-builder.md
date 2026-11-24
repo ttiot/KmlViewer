@@ -385,6 +385,9 @@ La région n'est plus un point ouvert (arbitrée, vague 4). Le **périmètre bel
 - m11 : dédoublonnage sur le `result_id` (un second enregistrement du même résultat est refusé, même renommé).
 - m12 : Pn confondu avec P1 retiré ; numérotation d'origine dans les messages.
 - n5 : points en cours effacés à la déconnexion.
+- RB-1.3 : valeur par défaut de `routing.coverage_bbox` `[1.35, 48.80, 6.45, 51.55]` (choix de spec, demande d'ops relayée par coord) ; elle englobe aussi des bords des Pays-Bas, du Luxembourg, d'Allemagne, du Grand Est et de Normandie, qui répondent 422 (hors données).
+
+**Point de reprise (pause du 2026-11-24)** : aucune modification en cours. Dernière livraison : RB-1.3 et CA-R20b (couverture configurée), limites connues dans l'ADR-0007. En attente : retours de dev et coord, confirmation de la liste ci-dessus, points 1 et 2.
 
 ## 14. Découpage en tâches
 
