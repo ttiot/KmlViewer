@@ -37,6 +37,9 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks:
+      - default
+      - routing
     restart: unless-stopped
 
   # --- Correction d'altitude (optionnel) : docker compose --profile dem up -d ---------
@@ -96,10 +99,161 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # --- Routage (traces planifiées, ADR-0007) : docker compose --profile routing up -d ---------
+
+  # Moteur GraphHopper auto-hébergé. Aucun port publié : joignable uniquement par kml-viewer sur
+  # le réseau interne (ROUTING_BASE_URL=http://graphhopper:8989, à autoriser dans OUTBOUND_ALLOWED_HOSTS
+  # par routing=graphhopper:8989). Le graphe est produit par routing/update.sh (jamais au démarrage).
+  # Sans graphe, le conteneur s'arrête en erreur et redémarre : lancer d'abord routing/update.sh.
+  graphhopper:
+    profiles: ["routing"]
+    build:
+      context: ./routing
+    image: kml-viewer-graphhopper:11.0
+    environment:
+      # Mesures dune (HdF + Belgique, 6 profils) : 1,2 Go de RAM conteneur après charge avec Xmx 1g,
+      # 3,2 Go avec Xmx 3g. 1536m laisse de la marge ; la limite couvre le tas et la mémoire native.
+      JAVA_OPTS: "-Xmx${ROUTING_XMX:-1536m} -XX:+ExitOnOutOfMemoryError"
+    volumes:
+      # écriture requise : GraphHopper pose un verrou (gh.lock) dans le dossier du graphe ; le reste
+      # du système de fichiers du conteneur est en lecture seule
+      - routing-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: ${ROUTING_MEM_LIMIT:-2g}
+    pids_limit: 512
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - routing
+    expose:
+      - "8989"
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8989 &&
+          printf 'GET /health HTTP/1.0\r\n\r\n' >&3 &&
+          head -n 1 <&3 | grep -q ' 200'
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # --- Chaîne de données du routage : lancée par routing/update.sh, jamais à la main ---------
+  # Tâches ponctuelles, sans port publié ; seules celles qui téléchargent ont un réseau.
+
+  # Initialise le volume routing-data (propriétaire 10002) et y crée les dossiers.
+  routing-init:
+    profiles: ["routing-tools"]
+    image: kml-viewer-graphhopper:11.0
+    entrypoint: ["mkdir", "-p", "/data/in", "/data/graphs"]
+    volumes:
+      - routing-data:/data
+    network_mode: none
+    read_only: true
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # Téléchargement des extraits Geofabrik : seule tâche avec accès réseau (réseau par défaut).
+  routing-fetch:
+    profiles: ["routing-tools"]
+    image: kml-viewer-graphhopper:11.0
+    entrypoint: ["bash", "-euo", "pipefail", "-c"]
+    volumes:
+      - routing-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # Opérations sur le volume (lien courant, suppressions, contrôles) : aucun réseau, moindre privilège.
+  routing-volume:
+    profiles: ["routing-tools"]
+    image: kml-viewer-graphhopper:11.0
+    entrypoint: ["bash", "-euo", "pipefail", "-c"]
+    volumes:
+      - routing-data:/data
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # Fusion des extraits (osmium) : pas d'outil de fusion dans l'image de l'appli ni du moteur.
+  routing-merge:
+    profiles: ["routing-tools"]
+    image: iboates/osmium@sha256:ce46c6bc52b42899ae53a46b1a9e05c0f5fce964bf4974ed5c07a90f4d2b7679
+    user: "10002:10002"
+    volumes:
+      - routing-data:/data
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1g
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # Import GraphHopper dans un dossier neuf (l'ancien graphe sert jusqu'à la bascule).
+  routing-import:
+    profiles: ["routing-tools"]
+    image: kml-viewer-graphhopper:11.0
+    command: ["import"]
+    environment:
+      # Mesuré à dune : import HdF + Belgique en 154 s avec Xmx 6g (tas utilisé 3,6 Go en fin d'import)
+      JAVA_OPTS: "-Xmx${ROUTING_IMPORT_XMX:-6g} -XX:+ExitOnOutOfMemoryError"
+      GH_PBF: ${ROUTING_IMPORT_PBF:-/data/in/hdf-be.osm.pbf}
+      GH_GRAPH: ${ROUTING_IMPORT_GRAPH:-/data/graphs/import}
+    volumes:
+      - routing-data:/data
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: ${ROUTING_IMPORT_MEM_LIMIT:-8g}
+    pids_limit: 512
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
 volumes:
   kml-viewer-data:
   dem-data:
+  routing-data:
 
 networks:
   default:
     name: kml-viewer-network
+  # Réseau du moteur de routage : interne (aucun accès sortant), partagé par kml-viewer et graphhopper seulement
+  routing:
+    name: kml-viewer-routing
+    internal: true

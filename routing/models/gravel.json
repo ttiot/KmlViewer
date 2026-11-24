@@ -1,0 +1,25 @@
+// Modèle gravel (spike TR0) : base bike.json, pénalise bitume, routes fréquentées, pavés et sable ;
+// seules des pénalités (<= 1) sont utilisées.
+{
+  "priority": [
+    { "if": "true",  "multiply_by": "bike_priority" },
+    { "if": "bike_road_access == PRIVATE || bike_road_access == DESTINATION", "multiply_by": "0.1" },
+    { "if": "mtb_rating > 3",  "multiply_by": "0" },
+    { "else_if": "mtb_rating == 3",  "multiply_by": "0.4" },
+    { "if": "hike_rating > 1",  "multiply_by": "0" },
+    { "if": "!bike_access && (!backward_bike_access || roundabout)",  "multiply_by": "0" },
+    { "else_if": "!bike_access && backward_bike_access",  "multiply_by": "0.2" },
+    { "if": "road_class == MOTORWAY || road_class == TRUNK || road_class == PRIMARY", "multiply_by": "0.15" },
+    { "else_if": "road_class == SECONDARY", "multiply_by": "0.5" },
+    { "else_if": "road_class == TERTIARY", "multiply_by": "0.8" },
+    { "if": "surface == ASPHALT || surface == CONCRETE || surface == PAVED", "multiply_by": "0.6" },
+    { "if": "surface == COBBLESTONE || surface == PAVING_STONES", "multiply_by": "0.4" },
+    { "if": "surface == SAND || surface == GRASS", "multiply_by": "0.3" }
+  ],
+  "speed": [
+    { "if": "true", "limit_to": "bike_average_speed" },
+    { "if": "!bike_access && backward_bike_access", "limit_to": "6" },
+    { "if": "bike_road_access == PRIVATE || bike_road_access == DESTINATION", "limit_to": "6" },
+    { "if": "surface == GRAVEL || surface == COMPACTED || surface == FINE_GRAVEL || surface == GROUND || surface == DIRT", "limit_to": "18" }
+  ]
+}

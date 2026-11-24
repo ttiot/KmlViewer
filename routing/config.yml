@@ -1,0 +1,49 @@
+graphhopper:
+  datareader.file: ""
+  graph.location: /data/graphs/current
+  profiles:
+    - name: foot
+      custom_model_files: [foot.json]
+    - name: hike
+      custom_model_files: [hike.json]
+    - name: bike
+      custom_model_files: [bike.json]
+    - name: racingbike
+      custom_model_files: [racingbike.json]
+    - name: mtb
+      custom_model_files: [mtb.json]
+    - name: gravel
+      custom_model_files: [gravel.json]
+  profiles_ch: []
+  profiles_lm: []
+  graph.encoded_values: >-
+    foot_access, foot_priority, foot_average_speed, foot_road_access, foot_network,
+    hike_rating, bike_access, bike_priority, bike_average_speed, bike_road_access,
+    racingbike_access, racingbike_priority, racingbike_average_speed, mtb_access, mtb_priority,
+    mtb_average_speed, mtb_rating, roundabout, country, road_class,
+    surface, smoothness, average_slope
+  import.osm.ignored_highways: motorway,trunk
+  routing.snap_preventions_default: tunnel, bridge, ferry
+  routing.non_ch.max_waypoint_distance: 1000000
+  # Borne de nœuds visités : la clé de config routing.max_visited_nodes est SANS EFFET en 11.0 (testé, valeur 50
+  # ignorée) ; seul le paramètre de requête max_visited_nodes est appliqué. L'adaptateur de l'appli (TR3) doit
+  # l'envoyer à chaque appel (mesuré : 2,2 M de nœuds pour 440 km à 3 tronçons ; 5 000 000 est une borne large).
+  graph.dataaccess.default_type: RAM_STORE
+  custom_models.directory: /opt/graphhopper/models
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+      max_request_header_size: 50k
+  request_log:
+    appenders: []
+  # admin : jamais joignable depuis l'extérieur du conteneur
+  admin_connectors:
+    - type: http
+      port: 8990
+      bind_host: 127.0.0.1
+logging:
+  appenders:
+    - type: console
+      time_zone: UTC
+      log_format: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
