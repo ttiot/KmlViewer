@@ -229,7 +229,7 @@ Priorité base > env (ADR-0008). `routing.base_url` : URL `http(s)` ≤ 500 cara
 | Méthode | Chemin | Effet |
 |---|---|---|
 | GET | `/api/route-builder/options` | Activités, bornes, tolérance, emprise couverte, `available` (état de santé en cache) |
-| POST | `/api/route-builder/route` | `{waypoints: [[lat, lon], …], activity, target_km?, seed?}` ⇒ payload visualiseur + `route_meta` |
+| POST | `/api/route-builder/route` | `{points: [[lat, lon], …], activity, distance_km?, seed?}` ⇒ payload visualiseur + `route_meta` (noms des champs alignés sur le code livré, TR5) |
 | POST | `/api/route-builder/save` | `{result_id, name?}` ⇒ trace enregistrée (`kind='planned'`) |
 
 Codes (M9, M13) :
@@ -388,6 +388,7 @@ La région n'est plus un point ouvert (arbitrée, vague 4). Le **périmètre bel
 - m12 : Pn confondu avec P1 retiré ; numérotation d'origine dans les messages.
 - n5 : points en cours effacés à la déconnexion.
 - Interprétations de dev (DEV-ETAT.md) **confirmées par spec** le 2026-11-24 et reportées : RB-4.1 (`1 + routing.seed_retries` graines à 1 point), RB-4.8 (altitude du moteur si complète, MNT à l'enregistrement), RB-3.2 (pas de 0,5 km côté front seulement), TR5 (`routing.coverage_bbox` au registre). Seule RB-4.8 change un comportement écrit (MNT à l'enregistrement au lieu de la génération) : signalée à l'utilisateur.
+- RB-1.3, **proposition de correction (2026-11-25)** : avec ce défaut, le diagnostic signale en permanence « rectangle non contenu » (le moteur annonce `48,83` au sud et `6,42` à l'est). Défaut proposé : **`[1.35, 48.83, 6.42, 51.55]`**, contenu dans le rectangle annoncé, sans perte de zone utile (les bords retirés sont hors des données). Changement du défaut du registre : dev, après accord.
 - RB-1.3 : valeur par défaut de `routing.coverage_bbox` `[1.35, 48.80, 6.45, 51.55]` (choix de spec, demande d'ops relayée par coord) ; elle englobe aussi des bords des Pays-Bas, du Luxembourg, d'Allemagne, du Grand Est et de Normandie, qui répondent 422 (hors données).
 
 **Point de reprise (2026-11-24, soir)** : aucune modification en cours. Dernières livraisons : interprétations de dev confirmées, §15 (précisions TR5/TR6), mesures dune et TR7 alignées sur l'ADR-0007 « Accepté ». En attente : confirmation de la liste ci-dessus et des défauts de §15, appréciation visuelle (point 2).
