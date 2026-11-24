@@ -24,11 +24,21 @@ web-app/app/
 ├── security.py            en-têtes HTTP, contrôle d'origine (CSRF), reverse proxy
 ├── cli.py                 commandes d'exploitation
 ├── version.py             version affichée (build de l'image, sinon git)
+├── settings/              registre des réglages administrables (bornes) et valeur effective base > env > défaut
+├── secrets_store.py       secrets chiffrés (Fernet, multi-clés), rotation
+├── outbound.py            liste blanche des destinations sortantes, CSP des tuiles
+├── mailer.py              e-mails (SMTP), file d'envoi
+├── background.py          ordonnanceur de fond (dossier surveillé, altitude, purge d'audit)
+├── ratelimit.py · audit.py   limiteur de débit en mémoire · journal d'audit
 ├── auth/
-│   ├── checks.py          contrôles de configuration au démarrage (mode, clé, hôtes)
+│   ├── checks.py          contrôles de configuration au démarrage (mode, clé, hôtes, PUBLIC_URL)
+│   ├── modes.py           mode d'authentification validé : seule source pour le garde et les gabarits
 │   ├── oidc.py            client OIDC, login / callback / logout
 │   ├── guard.py           contrôle d'accès global (fermé par défaut), session liée au compte
-│   └── users.py           persistance des comptes, jeton de session
+│   ├── users.py           persistance des comptes, jeton de session
+│   ├── tokens.py · token_routes.py · invitations.py   jetons à usage unique, invitations
+│   ├── passwords.py       politique et hachage argon2id (liste : auth/wordlists/)
+│   └── factors.py         seconds facteurs (lecture et remise à zéro ; TOTP, WebAuthn non livrés)
 ├── api/                   une famille de routes par fichier, aucune logique métier
 │   ├── activities_routes.py · dashboard_routes.py · segments_routes.py · users_routes.py
 │   ├── profile_routes.py  profil de l'utilisateur courant (aucun identifiant dans l'URL)
@@ -54,10 +64,15 @@ mapping de configuration, ce qui les rend testables et réutilisables hors requ�
 
 ## Schéma de base et interface
 
-- **Migrations** : `app/db.py` porte une liste `MIGRATIONS` appliquée dans l'ordre aux bases
-  existantes (`PRAGMA user_version`). `SCHEMA` décrit toujours l'état final. Pour faire évoluer
-  le schéma : modifier `SCHEMA` et ajouter une migration en fin de liste, sans jamais retoucher
-  une migration déjà publiée.
+- **Migrations** : `app/db.py`. Les 5 premières (`MIGRATIONS`, `PRAGMA user_version`) sont figées ;
+  toute évolution du schéma passe par une migration **nommée** (`NAMED_MIGRATIONS`, par exemple
+  `0014_emails_canonical`), enregistrée dans la table `schema_migrations` dans la même transaction.
+  Au démarrage, chaque migration absente de la table est appliquée, quel que soit l'ordre de fusion des
+  branches. `SCHEMA` décrit l'état final des 5 premières. Pour faire évoluer le schéma : ajouter une
+  migration nommée en fin de liste, idempotente (elle vérifie le schéma avant d'agir), sans jamais
+  retoucher une migration publiée (publiée = fusionnée sur `main`) ; une migration modifiée après avoir
+  été poussée change de nom (`_v2`). Exploitation (images de branche, nom inconnu) :
+  [exploitation.md](exploitation.md#migrations-nommées-et-images-de-branche).
 - **Thème** : toutes les couleurs sont des jetons définis dans `static/css/theme.css`, en clair
   et en sombre ; les autres feuilles ne référencent que des rôles (`--surface`, `--accent`…).
   Les polices (Barlow, Barlow Condensed, JetBrains Mono) sont embarquées dans `static/vendor/fonts`.
@@ -96,7 +111,10 @@ inbox/
 - Dédoublonnage par SHA-256 du contenu, par utilisateur.
 - Un dossier sans compte actif correspondant reste en attente et est repris dès que le compte existe.
 - Liens symboliques et fichiers cachés ignorés ; le volume peut être monté en lecture seule.
-- Diagnostic : `GET /api/inbox` (admin) ou `flask --app kml_viewer inbox-scan`.
+- Diagnostic : `GET /api/inbox` (admin) ou `flask --app kml_viewer inbox-scan`, qui refuse de tourner
+  tant que l'application servie détient le verrou du dossier (`SCHEDULER_ENABLED=0` ou application arrêtée).
+- L'intervalle, l'activation (`INBOX_ENABLED`) et le propriétaire par défaut sont des réglages administrables :
+  relus à chaud (voir le [README](../README.md#réglages-administrables--base--env--défaut)).
 
 ## Calculs
 
@@ -132,7 +150,9 @@ Les rôles applicatifs ne figurent pas dans l'ID token : ils sont lus via `/user
 défaut dans l'access token après vérification de sa signature, de son audience et de son sujet.
 
 Puis renseigner `.env` (modèle : `.env.example`) : `AUTH_MODE=oidc`, `SECRET_KEY`, `OIDC_ISSUER`,
-`OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `TRUSTED_HOSTS`, `TRUST_PROXY=1`.
+`OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `TRUSTED_HOSTS`, `TRUST_PROXY=1`. Les comptes à mot de passe
+(invitations) s'y ajoutent avec `SECRETS_KEY` et `PUBLIC_URL`, et le mode `password` (sans SSO) existe : voir
+[README, Configuration](../README.md#-configuration) (modes, état de livraison).
 
 L'application refuse de démarrer, avec le motif dans les logs, plutôt que de tourner sur une
 configuration dangereuse :
@@ -145,6 +165,10 @@ configuration dangereuse :
 | OIDC sans `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | incomplet |
 | OIDC avec la `SECRET_KEY` par défaut ou de moins de 32 caractères | cookies falsifiables |
 | OIDC sans `TRUSTED_HOSTS` | l'en-tête `Host` du client servirait à construire l'URL de retour |
+| `AUTH_MODE=password` avec `OIDC_ISSUER`, ou sans `SECRET_KEY` valide, `TRUSTED_HOSTS`, `SECRETS_KEY`, `PUBLIC_URL`, ou avec une `PUBLIC_URL` hors de `TRUSTED_HOSTS` | le mode `password` n'a pas de SSO et ses liens, ses secrets et ses cookies exigent ces garanties |
+| `SECRETS_KEY` mal formée, ou valeur chiffrée en base qu'aucune clé ne déchiffre | secrets perdus : voir [exploitation.md](exploitation.md#perte-de-la-secrets_key) |
+| `OUTBOUND_ALLOWED_HOSTS` invalide (port manquant, IPv6 sans crochets, service inconnu) | liste blanche ambiguë |
+| Liste de mots de passe courants absente ou vide, quand les comptes à mot de passe sont disponibles | politique silencieusement affaiblie |
 
 Écrire `AUTH_MODE=oidc` en production : c'est ce qui transforme une variable OIDC perdue en
 arrêt franc. Sans `AUTH_MODE`, une instance lancée sans aucune variable démarre en mode local,
@@ -170,8 +194,11 @@ Points de sécurité à connaître :
   l'export d'une trace entière (16 Mo). La simplification accepte 50 000 points par trace.
 - **Traitements lourds** : deux à la fois (parsing, analyse d'une trace entière, export,
   simplification), tous utilisateurs confondus ; une requête qui n'obtient pas de place en
-  20 s reçoit un 503 et peut être relancée. Pas de limitation de débit dans l'appli : la
-  poser sur le reverse proxy si l'instance est ouverte à des comptes peu sûrs.
+  20 s reçoit un 503 et peut être relancée. Pas de limitation de débit sur les routes du visualiseur
+  ni de la bibliothèque : la poser sur le reverse proxy si l'instance est ouverte à des comptes peu sûrs.
+  Un limiteur en mémoire (`ratelimit.py`) protège seulement les routes publiques de jeton
+  (`/auth/token*`, 10 essais par 15 min et par IP par défaut) et, quand elles seront livrées, celles de la
+  connexion par mot de passe.
 
 Gestion des comptes :
 
@@ -252,7 +279,9 @@ son altitude GPS ; le bouton montagne du tableau de bord relance la correction �
 
 ## Sauvegarde
 
-Deux choses sont à conserver : la base SQLite et les fichiers d'origine (`/data/files`).
+Trois choses sont à conserver : la base SQLite, les fichiers d'origine (`/data/files`) et, **à part**, la
+`SECRETS_KEY` : la base contient les secrets chiffrés mais jamais la clé, et sans elle une base restaurée
+ne peut plus les relire ([procédure](exploitation.md#perte-de-la-secrets_key)).
 
 ```bash
 # Copie cohérente de la base, application en marche ; --keep limite le nombre de copies gardées
