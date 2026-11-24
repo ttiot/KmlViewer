@@ -37,12 +37,15 @@ def change_password():
     user = _password_user()
     data = json_body()
     _check_password(user, {'password': data.get('current_password')})
-    _check_second_factor(user, data)
     new = data.get('new_password')
     if not isinstance(new, str):
         raise ApiError('Nouveau mot de passe requis.')
-    try:
+    try:                                   # politique AVANT le second facteur : un refus ne brûle pas un code (T13-n1)
         passwords.check_policy(new, identities=[user['username'], user['email'], user['pending_email']])
+    except passwords.PolicyError as exc:
+        raise ApiError(str(exc)) from None
+    _check_second_factor(user, data)
+    try:
         hashed = passwords.hash_password(new)
     except passwords.PolicyError as exc:
         raise ApiError(str(exc)) from None

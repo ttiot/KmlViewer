@@ -109,3 +109,13 @@ def ensure_column(conn, table, column, definition):
     """ALTER TABLE ADD COLUMN tolérant : la colonne peut déjà exister (migration 0015 pour le second facteur)."""
     if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def force_setting(conn, store, key, value):
+    """Écrit un réglage DIRECTEMENT en base (contourne les contrôles d'écriture), pour tester l'état qu'ils interdisent."""
+    import json
+    conn.execute("INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, 'x', 'sql') "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, json.dumps(value)))
+    conn.execute("UPDATE settings_meta SET version = version + 1")
+    conn.commit()
+    store.refresh(conn, force=True)

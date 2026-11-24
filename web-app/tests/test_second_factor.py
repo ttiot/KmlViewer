@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 
 from app import create_app, db as database
 from app.audit import Actor
+from tests.conftest import force_setting
 from app.auth import factors, passwords, second_factor, tokens
 from app.auth.pending import PendingStore
 from app.config import TestingConfig
@@ -402,7 +403,7 @@ def test_an_admin_without_factor_is_sent_to_enrolment_and_policy_all_applies_to_
     add(conn, 'alice')
     assert login(app.test_client(), 'root').get_json()['step'] == 'enroll'
     assert login(app.test_client(), 'alice').get_json().get('step') is None
-    app.config['SETTINGS_STORE'].set_many(conn, {'auth.mfa_policy': 'all'}, actor=CLI)
+    force_setting(conn, app.config['SETTINGS_STORE'], 'auth.mfa_policy', 'all')
     assert login(app.test_client(), 'alice').get_json()['step'] == 'enroll'
 
 
@@ -588,3 +589,71 @@ def test_the_password_check_of_the_profile_is_limited_before_hashing(app, conn, 
 
     monkeypatch.setattr(passwords, '_gate', Gate())
     assert api(client, 'POST', '/api/me/mfa/totp/setup', {'password': GOOD}).status_code == 429 and Gate.calls == 0
+
+
+# --- CA-13b : auth.mfa_policy = all refusé tant qu'un compte actif n'a pas de facteur ---------------------------------------------
+
+def test_the_policy_all_is_refused_while_an_active_password_account_has_no_factor_CA_13b(app, conn):
+    from app.settings import SettingsError
+    store = app.config['SETTINGS_STORE']
+    add(conn, 'alice')
+    add(conn, 'bob')
+    add(conn, 'off', active=False)                                              # un compte inactif ne compte pas
+    with pytest.raises(SettingsError) as exc:
+        store.set_many(conn, {'auth.mfa_policy': 'all'}, actor=CLI)
+    assert '2 compte(s)' in str(exc.value) and exc.value.field == 'auth.mfa_policy'
+    assert store.get('auth.mfa_policy') == 'admins'
+    row = conn.execute("SELECT details FROM audit_log WHERE action = 'setting.refused'").fetchone()
+    assert row and '"accounts": 2' in row[0]
+
+
+def test_a_batch_containing_the_refused_policy_is_rejected_as_a_whole(app, conn):
+    from app.settings import SettingsError
+    store = app.config['SETTINGS_STORE']
+    add(conn, 'alice')
+    with pytest.raises(SettingsError):
+        store.set_many(conn, {'routing.max_calls': 9, 'auth.mfa_policy': 'all'}, actor=CLI)
+    assert store.get('routing.max_calls') == 15 and store.get('auth.mfa_policy') == 'admins'
+    assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0
+
+
+def test_the_policy_all_is_accepted_once_every_active_account_has_a_factor_and_recovery_codes_do_not_count(app, conn):
+    from app.settings import SettingsError
+    store = app.config['SETTINGS_STORE']
+    alice = add(conn, 'alice')
+    second_factor.replace_recovery_codes(conn, alice['id'])
+    conn.commit()
+    with pytest.raises(SettingsError):                                          # des codes de secours seuls ne sont pas un facteur
+        store.set_many(conn, {'auth.mfa_policy': 'all'}, actor=CLI)
+    activate(app, conn, alice['id'])
+    store.set_many(conn, {'auth.mfa_policy': 'all'}, actor=CLI)
+    assert store.get('auth.mfa_policy') == 'all'
+    store.set_many(conn, {'auth.mfa_policy': 'admins'}, actor=CLI)               # le retour est toujours permis
+
+
+def test_the_api_answers_409_with_the_count(app, conn):
+    add(conn, 'alice')
+    admin = add(conn, 'root', admin=True)
+    conn.execute("UPDATE users SET totp_secret = x'01', totp_enabled_at = '2026-01-01T00:00:00Z' WHERE id = ?", (admin['id'],))
+    conn.commit()
+    client = app.test_client()
+    with client.session_transaction(**KW) as s:
+        s['user_id'], s['token'], s['login_at'] = admin['id'], 'tok', int(time.time())
+    r = client.patch('/api/admin/settings', json={'auth.mfa_policy': 'all'}, **KW, headers={'Origin': f'https://{HOST}'})
+    assert r.status_code == 409 and '1 compte(s)' in r.get_json()['error']
+
+
+# --- T11-1 / CA-14 : un changement de facteur ferme les autres sessions -------------------------------------------------------------
+
+def test_adding_or_removing_a_totp_closes_the_other_sessions_and_keeps_the_current_one(app, conn):
+    user = add(conn, 'alice')
+    current, other = session_client(app, conn, user), session_client(app, conn, user)
+    setup = api(current, 'POST', '/api/me/mfa/totp/setup', {'password': GOOD}).get_json()
+    secret = setup['uri'].split('secret=')[1].split('&')[0]
+    assert api(current, 'POST', '/api/me/mfa/totp/confirm', {'code': code_for(secret)}).status_code == 200
+    assert api(current, 'GET', '/api/me/mfa').status_code == 200                       # la session courante est réémise
+    assert api(other, 'GET', '/api/me/mfa').status_code == 401                         # les autres sont fermées
+    third = session_client(app, conn, conn.execute("SELECT * FROM users WHERE id = ?", (user['id'],)).fetchone())
+    ok = api(current, 'DELETE', '/api/me/mfa/totp', {'password': GOOD, 'code': code_for(secret, 1)})
+    assert ok.status_code == 200
+    assert api(current, 'GET', '/api/me/mfa').status_code == 200 and api(third, 'GET', '/api/me/mfa').status_code == 401

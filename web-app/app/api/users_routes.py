@@ -18,6 +18,16 @@ from app.errors import ApiError
 logger = logging.getLogger(__name__)
 
 
+def ensure_admin_remains(db, user_id, what: str) -> None:
+    """
+    EF-8.2 : à appeler DANS la transaction d'écriture (BEGIN IMMEDIATE : les écritures sont sérialisées, deux admins qui
+    s'éliminent en même temps ne passent pas tous les deux). Lève 409 si `user_id` est un admin ACTIF et qu'aucun autre ne reste.
+    """
+    row = db.execute("SELECT is_admin, is_active FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is not None and row['is_admin'] and row['is_active'] and _last_active_admin(db, user_id):
+        raise ApiError(f"Dernier administrateur actif : impossible de {what}.", 409)
+
+
 def _last_active_admin(db, user_id) -> bool:
     """EF-8.2 : `user_id` est l'unique admin actif (jamais désactivé, rétrogradé ni supprimé par l'API)."""
     others = db.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_active = 1 AND id != ?", (user_id,)).fetchone()[0]
@@ -108,8 +118,8 @@ def update_user(user_id):
     # (`user.admin_refused`) soit validée avec elle ; rien d'autre n'est alors appliqué, et l'erreur 409 part après.
     refused = None
     with write_transaction(db):
-        if updates.get('is_active') == 0 and target['is_admin'] and _last_active_admin(db, user_id):
-            raise ApiError('Dernier administrateur actif : impossible de le désactiver.', 409)
+        if updates.get('is_active') == 0 or updates.get('is_admin') == 0:
+            ensure_admin_remains(db, user_id, 'le désactiver ou le rétrograder')
         if 'is_admin' in updates:
             try:
                 users.set_admin(db, user_id, bool(updates.pop('is_admin')), actor=Actor.from_user(g.user),
@@ -148,9 +158,8 @@ def delete_user(user_id):
     target = users.get_by_id(db, user_id)
     if target is None:
         raise _unknown_user()
-    if target['is_admin'] and target['is_active'] and _last_active_admin(db, user_id):
-        raise ApiError('Dernier administrateur actif : impossible de le supprimer.', 409)
     with write_transaction(db):
+        ensure_admin_remains(db, user_id, 'le supprimer')
         # Avant la suppression : la clé étrangère de l'émetteur passerait à NULL et ses invitations ne seraient plus retrouvables
         tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))
         db.execute("DELETE FROM users WHERE id = ?", (user_id,))  # cascade : activités, tronçons, efforts

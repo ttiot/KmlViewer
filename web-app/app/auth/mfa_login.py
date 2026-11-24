@@ -99,8 +99,9 @@ def password_mfa():
     if done is None:
         return jsonify(RESTART), 401
     user = db.execute("SELECT * FROM users WHERE id = ? AND is_active = 1", (done.user_id,)).fetchone()
-    if user is None:
-        return jsonify(RESTART), 401
+    bound = tuple(done.binding) == (user['session_token'], user['password_changed_at']) if user is not None else False
+    if user is None or user['auth_method'] != 'password' or not bound:
+        return jsonify(RESTART), 401                  # liaison revérifiée au moment d'ouvrir la session (T11-n2)
     if kind == 'recovery':
         audit.record(db, 'user.recovery_used', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
                      ip=request.remote_addr, details={'remaining': second_factor.remaining_recovery(db, user['id'])})
@@ -152,9 +153,15 @@ def password_enroll():
     actor = audit.Actor.from_user(user)
     with write_transaction(db):
         first = not factors.has_second_factor(db, user['id'])
-        db.execute("UPDATE users SET totp_secret = ?, totp_enabled_at = ?, totp_last_step = ? WHERE id = ?",
-                   (store.encrypt_value(secret.encode('ascii')), time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), step,
-                    user['id']))
+        # Écriture CONDITIONNELLE à la liaison de l'état (session, mot de passe, compte actif) et à l'absence de TOTP (T11-n2/n3)
+        written = db.execute(
+            "UPDATE users SET totp_secret = ?, totp_enabled_at = ?, totp_last_step = ? WHERE id = ? AND is_active = 1 "
+            "AND auth_method = 'password' AND session_token IS ? AND password_changed_at IS ? AND totp_enabled_at IS NULL",
+            (store.encrypt_value(secret.encode('ascii')), time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), step,
+             user['id'], *state.binding)).rowcount
+        if not written:
+            db.rollback()
+            return jsonify(RESTART), 401
         codes = second_factor.replace_recovery_codes(db, user['id']) if first else []
         audit.record(db, 'user.factor_added', actor=actor, target_type='user', target_id=user['id'], ip=request.remote_addr,
                      details={'type': 'totp'})

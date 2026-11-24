@@ -21,7 +21,7 @@ function initMap() {
         toner: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             maxZoom: 20, attribution: '© OpenStreetMap contributors © CARTO' }),
     };
-    setBaseLayer('osm');            // fonds intégrés en attendant /api/map-config (applyMapConfig)
+    // Aucun fond tant que /api/map-config n'a pas répondu : le navigateur ne contacte pas un hôte que l'admin a retiré (T15-n1)
 
     // Toute action de l'utilisateur sur la carte (glisser, molette, zoom, clavier) rend son
     // cadrage : la carte ne sera plus recadrée d'office.
@@ -40,7 +40,7 @@ function initMap() {
 // une liste VIDE (aucun hôte autorisé) retire tout fond : aucun navigateur ne contacte un hôte non autorisé.
 async function applyMapConfig() {
     const config = await App.mapConfig();
-    if (!config || !Array.isArray(config.basemaps)) return;
+    if (!config || !Array.isArray(config.basemaps)) { setBaseLayer('osm'); return; }     // sans configuration : fonds intégrés
     Object.values(Viewer.baseLayers).forEach((layer) => Viewer.map.removeLayer(layer));
     Viewer.baseLayers = {};
     config.basemaps.forEach((basemap) => { Viewer.baseLayers[basemap.name] = App.basemapLayer(basemap); });

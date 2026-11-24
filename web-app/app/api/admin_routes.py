@@ -75,7 +75,9 @@ def admin_mfa_reset(user_id):
     target = _target(user_id)
     _password_account_required(target)
     demoted = bool(target['is_admin'])
+    from app.api.users_routes import ensure_admin_remains
     with write_transaction(db):
+        ensure_admin_remains(db, user_id, 'réinitialiser ses facteurs (il serait rétrogradé)')
         removed = factors.clear_factors(db, user_id)
         db.execute("UPDATE users SET session_token = ?, is_admin = 0 WHERE id = ?", (users._new_session_token(), user_id))
         audit.record(db, 'user.mfa_reset', actor=_actor(), target_type='user', target_id=user_id, ip=request.remote_addr,
@@ -135,6 +137,15 @@ def admin_invitations():
     return jsonify({'success': True, 'invitations': invitations.list_for(get_db(), g.user, everyone=True)})
 
 
+@bp.route('/admin/invitations/<int:token_id>', methods=['DELETE'])
+@admin_required
+def admin_invitation_revoke(token_id):
+    """L'admin révoque n'importe quelle invitation (crédit non rendu, EF-3.7)."""
+    if not invitations.revoke(get_db(), g.user, token_id, ip=request.remote_addr):
+        raise ApiError('Invitation introuvable', 404)
+    return jsonify({'success': True})
+
+
 # -- Réglages (P-T14-6) -------------------------------------------------------------------------------------------------------
 
 def _setting_view(store, setting, conn_overrides) -> dict:
@@ -177,8 +188,19 @@ def admin_settings_patch():
     try:
         store.set_many(get_db(), changes, actor=_actor(), ip=request.remote_addr)
     except SettingsError as exc:
-        raise ApiError(f"{exc.field} : {exc}", 400) from None
+        refused_policy = exc.field == 'auth.mfa_policy' and 'second facteur' in str(exc)       # CA-13b
+        raise ApiError(f"{exc.field} : {exc}", 409 if refused_policy else 400) from None
     return jsonify({'success': True, 'changed': sorted(changes)})
+
+
+@bp.route('/admin/settings/<path:key>')
+@admin_required
+def admin_setting_one(key):
+    store = current_app.config['SETTINGS_STORE']
+    if key not in REGISTRY:
+        raise ApiError('Réglage inconnu', 404)
+    store.refresh(get_db())
+    return jsonify({'success': True, 'setting': _setting_view(store, REGISTRY[key], {})})
 
 
 @bp.route('/admin/settings/diagnostic')
@@ -225,6 +247,7 @@ def _bound_destination(name: str):
 def _secret_status(name: str) -> dict:
     store = current_app.extensions['secrets']
     status = store.status(get_db(), name)
+    status.setdefault('last4', None)                      # présent pour tous ; renseigné pour les seules clés API (EF-5.3)
     status['bound_is_effective'] = bool(status.get('configured')) and status.get('bound_to') == _bound_destination(name)
     return status
 
@@ -234,6 +257,14 @@ def _secret_status(name: str) -> dict:
 def admin_secrets():
     return jsonify({'success': True, 'available': current_app.extensions['secrets'].available,
                     'secrets': [_secret_status(n) for n in SECRET_KINDS]})
+
+
+@bp.route('/admin/secrets/<name>')
+@admin_required
+def admin_secret_one(name):
+    if name not in SECRET_KINDS:
+        raise ApiError('Secret inconnu', 404)
+    return jsonify({'success': True, 'secret': _secret_status(name)})
 
 
 @bp.route('/admin/secrets/<name>', methods=['PUT'])

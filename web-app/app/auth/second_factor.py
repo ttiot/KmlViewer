@@ -20,6 +20,8 @@ from urllib.parse import quote
 import pyotp
 import segno
 
+from app.db import write_transaction
+
 ISSUER = 'KmlViewer'
 STEP_S = 30
 DIGITS = 6
@@ -90,9 +92,10 @@ def verify_totp(conn: sqlite3.Connection, store, user_id: int, code, *, now: Opt
     step = matching_step(secret, normalized, now)
     if step is None:
         return False
-    cursor = conn.execute("UPDATE users SET totp_last_step = ? WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)",
-                          (step, user_id, step))
-    conn.commit()
+    with write_transaction(conn):                 # rejoint la transaction de l'appelant s'il y en a une, sinon la valide (T11-n1)
+        cursor = conn.execute(
+            "UPDATE users SET totp_last_step = ? WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)",
+            (step, user_id, step))
     return cursor.rowcount == 1
 
 
@@ -137,9 +140,9 @@ def consume_recovery(conn: sqlite3.Connection, user_id: int, code) -> bool:
     normalized = normalize_recovery(code)
     if normalized is None:
         return False
-    cursor = conn.execute("UPDATE recovery_codes SET used_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
-                          "WHERE user_id = ? AND code_hash = ? AND used_at IS NULL", (user_id, _hash(normalized)))
-    conn.commit()
+    with write_transaction(conn):
+        cursor = conn.execute("UPDATE recovery_codes SET used_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+                              "WHERE user_id = ? AND code_hash = ? AND used_at IS NULL", (user_id, _hash(normalized)))
     return cursor.rowcount == 1
 
 

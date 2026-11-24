@@ -12,13 +12,12 @@
     function initMap() {
         state.map = L.map('segmentMap', { zoomControl: false }).setView([46.6, 2.5], 6);
         L.control.zoom({ position: 'topright' }).addTo(state.map);
-        // Fond et cadrage viennent de /api/map-config (fonds autorisés seulement) ; le fond intégré sert d'attente
-        const fallback = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19, attribution: '© OpenStreetMap',
-        }).addTo(state.map);
+        // Fond et cadrage viennent de /api/map-config (fonds autorisés seulement) ; fond intégré seulement sans réponse
         App.mapConfig().then((config) => {
-            if (!config || !Array.isArray(config.basemaps)) return;
-            state.map.removeLayer(fallback);
+            if (!config || !Array.isArray(config.basemaps)) {      // sans configuration : fond intégré
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(state.map);
+                return;
+            }
             const chosen = config.basemaps.find((b) => b.name === config.default) || config.basemaps[0];
             if (chosen) App.basemapLayer(chosen).addTo(state.map);
         });

@@ -337,7 +337,7 @@ def test_a_secret_needs_a_configured_allowed_destination_and_is_never_returned(a
     r = call(client, 'PUT', '/api/admin/secrets/smtp.password', {'value': 'secret-smtp-0123456789'})
     assert r.status_code == 200
     status = r.get_json()['secret']
-    assert status['configured'] and status['bound_is_effective'] and 'last4' not in status
+    assert status['configured'] and status['bound_is_effective'] and status['last4'] is None       # mot de passe : jamais de last4
     assert 'secret-smtp' not in json.dumps(call(client, 'GET', '/api/admin/secrets').get_json())
     for bad in ('', 'a\nb', 'a\x00', 'x' * 1025, None, 5):
         assert call(client, 'PUT', '/api/admin/secrets/smtp.password', {'value': bad}).status_code == 400

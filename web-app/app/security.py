@@ -163,7 +163,7 @@ def init_security(app) -> None:
         response.headers.setdefault('Content-Security-Policy', policy)
         if request.is_secure:
             response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
-        if request.path.startswith(('/api/', '/auth/')):
+        if request.path.startswith(('/api/', '/auth/', '/admin', '/profile')):
             response.headers.setdefault('Cache-Control', 'no-store')
         return response
 

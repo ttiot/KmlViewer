@@ -8,12 +8,12 @@ confirmation.
 
 import time
 
-from flask import current_app, g, jsonify, request
+from flask import current_app, g, jsonify, request, session
 
 from app import audit
 from app.api import bp
 from app.api.payload import json_body
-from app.auth import factors, passwords, second_factor
+from app.auth import factors, passwords, second_factor, users
 from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
@@ -25,6 +25,14 @@ def _password_user():
     if user['auth_method'] != 'password':
         raise ApiError('Les facteurs se gèrent dans ton fournisseur d’identité.', 404)
     return user
+
+
+def _rotate_sessions(db, user) -> str:
+    """CA-14 : tout changement de facteur ferme les AUTRES sessions du compte (jeton renouvelé dans la transaction) ; la session
+    courante est réémise par l'appelant (`_keep_current`)."""
+    token = users._new_session_token()
+    db.execute("UPDATE users SET session_token = ? WHERE id = ?", (token, user['id']))
+    return token
 
 
 def _owner(user) -> str:
@@ -111,7 +119,9 @@ def mfa_totp_confirm():
         codes = second_factor.replace_recovery_codes(db, user['id']) if first else []
         audit.record(db, 'user.factor_added', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
                      ip=request.remote_addr, details={'type': 'totp'})
+        token = _rotate_sessions(db, user)
     pending.drop_enrollment(_owner(user))
+    session['token'] = token
     security_notice(user, 'factor_added')
     return jsonify({'success': True, 'recovery_codes': codes})
 
@@ -135,6 +145,9 @@ def mfa_totp_remove():
             db.execute("DELETE FROM recovery_codes WHERE user_id = ?", (user['id'],))     # plus de facteur : codes invalidés (r6)
         audit.record(db, 'user.factor_removed', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
                      ip=request.remote_addr, details={'type': 'totp'})
+        token = _rotate_sessions(db, user)
+    session['token'] = token
+    current_app.extensions['pending'].destroy_for_user(user['id'])
     security_notice(user, 'factor_removed')
     return jsonify({'success': True})
 

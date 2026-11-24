@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet
 
 from app import create_app, db as database
 from app.audit import Actor
+from tests.conftest import force_setting
 from app.auth import factors, passwords, tokens
 from app.auth.pending import PendingStore
 from app.config import TestingConfig
@@ -261,7 +262,7 @@ def test_the_saturated_gate_429_carries_a_fixed_retry_after_T10_n1(app, conn, mo
 def test_policy_all_sends_a_plain_user_to_enrollment_and_policy_admins_does_not(app, conn):
     add(conn, 'alice')
     assert login(app.test_client(), 'alice', GOOD).get_json().get('step') is None
-    app.config['SETTINGS_STORE'].set_many(conn, {'auth.mfa_policy': 'all'}, actor=CLI)
+    force_setting(conn, app.config['SETTINGS_STORE'], 'auth.mfa_policy', 'all')
     client = app.test_client()
     r = login(client, 'alice', GOOD)
     assert r.get_json()['step'] == 'enroll' and r.get_json()['next'] == '/auth/password/enroll'

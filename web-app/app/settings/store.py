@@ -148,6 +148,7 @@ class SettingsStore:
             self._check_destination(setting, clean[key])
         self._check_smtp(clean)
         self._check_map(clean)
+        self._check_mfa_policy(conn, clean, actor, ip)
         now = _now()
         smtp_before = None
         with write_transaction(conn):
@@ -197,6 +198,25 @@ class SettingsStore:
                              details={'keys': sorted(keys), 'old': previous})
         self._after_write(conn)
         return len(keys)
+
+    def _check_mfa_policy(self, conn, clean: Mapping, actor, ip) -> None:
+        """
+        EF-2.2, CA-13b : `auth.mfa_policy = all` est REFUSÉ tant qu'un compte `password` ACTIF n'a aucun facteur actif (les
+        codes de secours n'en sont pas un) : ces comptes ne pourraient plus se connecter sans passer par l'enrôlement forcé.
+        Refus audité ; comme il précède toute écriture, un lot qui le contient est rejeté EN ENTIER.
+        """
+        if clean.get('auth.mfa_policy') != 'all':
+            return
+        from app.auth import factors
+        missing = [r['id'] for r in conn.execute("SELECT id FROM users WHERE auth_method = 'password' AND is_active = 1")
+                   if not factors.has_second_factor(conn, r['id'])]
+        if not missing:
+            return
+        with write_transaction(conn):
+            audit.record(conn, 'setting.refused', actor=actor, target_type='setting', target_id='auth.mfa_policy', ip=ip,
+                         details={'reason': 'comptes sans second facteur', 'accounts': len(missing)})
+        raise SettingsError('auth.mfa_policy', f"{len(missing)} compte(s) à mot de passe actif(s) n'ont aucun second facteur : "
+                                               "ils doivent d'abord en enrôler un (les codes de secours n'en sont pas un).")
 
     def _check_destination(self, setting: Setting, value) -> None:
         """Une destination hors OUTBOUND_ALLOWED_HOSTS est refusée à l'écriture (400, rien n'est écrit)."""
