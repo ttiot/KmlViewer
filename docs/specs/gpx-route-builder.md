@@ -79,9 +79,13 @@ Le module `routing` ne lit ni `os.environ` ni la base : sa configuration vient d
 - **RB-1.2 (M13)** Deux états distincts :
   - **non configuré** (`routing.base_url` vide, ou destination hors liste blanche) ⇒ fonction **invisible** et routes 404, même activée ; l'admin le signale ;
   - **injoignable** ⇒ fonction **visible** ; `options` renvoie `available: false` et le front affiche « service momentanément indisponible » ; `route` répond 503.
-  L'état de santé est sondé par la tâche `routing_health` de l'**ordonnanceur de fond** (admin-space §5.10, R3), qui tourne dans toute instance servie, inbox et DEM activés ou non : `health()` du provider, **premier passage au démarrage**, puis toutes les 60 s (réglage 15–600 s). Le résultat (état, emprise, date) est mis en cache ; aucune page ni requête utilisateur ne déclenche de sondage synchrone. Dernier état et date affichés dans l'onglet admin « Fonctions bêta ».
-  **Cache vide** (démarrage, moteur jamais joint, n8) ⇒ fonction traitée comme **injoignable** : `options` renvoie `available: false` et aucune emprise, le front affiche « service en cours de démarrage » et ne permet pas de générer ; `route` répond 503. Aucun contrôle d'emprise n'est donc nécessaire sans cache.
-- **RB-1.3** Couverture : `GET /api/route-builder/options` renvoie l'emprise couverte (rectangle englobant annoncé par le moteur au dernier sondage réussi). Le front l'affiche en mode édition (contour discret) et refuse localement un point hors emprise ; le serveur refait le contrôle (400, aucun appel au moteur). Un point dans le rectangle mais hors des données réelles (ex. Pays-Bas, Luxembourg, Grand Est) ⇒ 422 « hors de la zone couverte ».
+  L'état de santé est sondé par la tâche `routing_health` de l'**ordonnanceur de fond** (admin-space §5.10, R3), qui tourne dans toute instance servie, inbox et DEM activés ou non : `health()` du provider, **premier passage au démarrage**, puis toutes les 60 s (réglage 15–600 s). Le résultat (état, rectangle annoncé par `/info` pour le seul diagnostic, date) est mis en cache ; aucune page ni requête utilisateur ne déclenche de sondage synchrone. Dernier état et date affichés dans l'onglet admin « Fonctions bêta ».
+  **Cache vide** (démarrage, moteur jamais joint, n8) ⇒ fonction traitée comme **injoignable** : `options` renvoie `available: false` (la couverture configurée reste renvoyée, RB-1.3), le front affiche « service en cours de démarrage » et ne permet pas de générer ; `route` répond 503.
+- **RB-1.3 (constat du spike)** Couverture : le rectangle englobant de `/info` (ex. `[-8.32, 48.83, 6.42, 54.60]` au spike, élargi par les ferries et les bords des extraits) est **bien plus large** que la zone réellement couverte ; il n'est donc **pas** utilisé pour la couverture. La couverture est un **rectangle configuré côté appli**, réglage `routing.coverage_bbox` (§5.6) :
+  - `GET /api/route-builder/options` le renvoie ; le front l'affiche en mode édition (contour discret) et refuse localement un point hors rectangle ;
+  - le serveur refait le contrôle **avant tout appel au moteur** : un point de l'utilisateur hors du rectangle ⇒ **400** « hors de la zone couverte » ; les points techniques des détours (RB-S7) sont eux aussi rabattus dans ce rectangle ;
+  - un point dans le rectangle mais hors des données réelles (Pays-Bas, Luxembourg, Allemagne, Grand Est, Normandie…) ⇒ **422** « hors de la zone couverte », comme avant ;
+  - diagnostic : si le rectangle configuré **n'est pas contenu** dans celui de `/info` (données importées plus petites que la couverture annoncée), l'onglet admin « Fonctions bêta » le signale ; aucun effet sur le service.
 
 ### 5.2 Édition des points (front)
 
@@ -105,7 +109,7 @@ Le module `routing` ne lit ni `os.environ` ni la base : sa configuration vient d
 | Gravel | `gravel` (modèle personnalisé) | `road_bike` |
 | VTT | `mtb` | `mtb` |
 
-  Gravel = profil de routage seul ; `activity_types` inchangé. Noms de profils fixés au spike TR0. Défaut : `default_activity_type` du profil s'il correspond, sinon course à pied.
+  Gravel = profil de routage seul ; `activity_types` inchangé. Noms de profils confirmés au spike TR0 (`foot`, `hike`, `racingbike`, `gravel`, `mtb` ; `bike` disponible mais non proposé). Défaut : `default_activity_type` du profil s'il correspond, sinon course à pied.
 - **RB-3.2** **Distance approximative** : km, 1 à 300 (réglage), pas de 0,5. **Obligatoire avec 1 point** ; facultative avec ≥ 2 points (sans elle, boucle de base sans détour ; arbitré).
 - **RB-3.3** Validation serveur (liste blanche, bornes).
 
@@ -135,6 +139,16 @@ Notations : P1…Pn les points de l'utilisateur, T la distance cible, τ la tol�
 - **RB-4.8 — Sortie.** GPX 1.1, un `<trk>` / un `<trkseg>`, `<name>` « Trace planifiée du JJ/MM/AAAA » (modifiable à l'enregistrement), `<type>` = type stocké, **aucun horodatage**, P1…Pn en `<wpt>`. Altitude : DEM local si configuré, sinon celle du moteur, sinon absente. Le GPX passe par `parse_gpx_cached` et revient sous la même forme qu'un upload.
 - **RB-4.9 — `route_meta`** : distance obtenue, D+/D−, cible, écart, D0, nombre de détours, taux de recouvrement, appels consommés, graine, profil, avertissements du moteur, `result_id`.
 - **RB-4.10 — Attente.** Une génération peut durer plusieurs secondes : indicateur de progression et bouton « Annuler » (le front abandonne la requête ; le serveur respecte son budget de temps quoi qu'il arrive).
+
+### 5.4b Exigences issues du spike TR0 (décisions D2 à D4 de l'utilisateur, 2026-11-24 ; ADR-0010)
+
+Résultats détaillés dans l'ADR-0010. Ces exigences complètent RB-4.1 à RB-4.10.
+
+- **RB-4.11 (stratégie, D2)** `routing.detour_strategy = hybrid` (défaut) — S1 (points latéraux) d'abord ; si la trace reste hors tolérance et qu'il reste du budget, un pétale S2 (`round_trip` depuis un point de l'utilisateur) comble le manque restant. Valeurs permises du réglage : `s1`, `s2`, `hybrid`. Le budget RB-4.6 (15 appels, 30 s) s'applique à l'ensemble.
+- **RB-4.12 (essais de graine, D2)** Trace hors tolérance et budget restant suffisant (au moins 3 appels et 5 s) ⇒ nouvel essai avec la graine suivante, **au plus 2 essais supplémentaires** (réglage `routing.seed_retries` 0–2) ; la meilleure trace (plus faible écart, puis plus faible recouvrement) est retournée ; `route_meta` indique le nombre d'essais. « Autre proposition » (RB-4.5) part de la graine suivant la dernière essayée.
+- **RB-4.13 (seuil de recouvrement, D3)** Seuil d'avertissement **différencié** — `routing.overlap_warning_pct` (≥ 3 points, défaut 25) et `routing.overlap_warning_pct_2pts` (2 points, défaut **40**). Pour 1 point (`round_trip`), le seuil général s'applique.
+- **RB-4.14 (2 points en relief ou zone pauvre en voies, D4)** Trace à 2 points restée hors tolérance après tous les essais ⇒ avertissement d'écart (RB-4.7) **complété** de « ajoute un point de passage pour une boucle plus proche de la distance voulue » ; aucune stratégie supplémentaire en bêta.
+- **Critères associés** : CA-R30 [CI] hybride — provider factice où S1 n'atteint pas la tolérance ⇒ pétale S2 appelé, jamais plus de 15 appels au total ; CA-R31 [CI] essais de graine — provider factice qui n'entre dans la tolérance qu'à la 3e graine ⇒ trace retournée issue de la 3e graine, `route_meta.attempts = 3` ; budget restant insuffisant ⇒ pas d'essai supplémentaire ; CA-R32 [CI] recouvrement — trace à 2 points recouvrant à 35 % ⇒ pas d'avertissement, à 45 % ⇒ avertissement ; trace à 5 points à 30 % ⇒ avertissement ; CA-R33 [CI] — 2 points hors tolérance ⇒ avertissement contenant la suggestion d'ajout de point ; CA-R34 [spike/recette] hybride réel ≥ 87 % dans la tolérance à ≥ 2 points sur le jeu du spike (borne haute estimée : 95 %), max 15 appels.
 
 ### 5.5 Enregistrement (Q-R5 ; ADR-0009)
 
@@ -171,12 +185,15 @@ Notations : P1…Pn les points de l'utilisateur, T la distance cible, τ la tol�
 | `routing.timeout_s` | float 1–60 | 20 (par appel) |
 | `routing.total_budget_s` | float 5–120 | 30 |
 | `routing.max_calls` | int 1–30 | 15 |
-| `routing.detour_strategy` | enum | fixé au spike (ADR-0010) |
+| `routing.detour_strategy` | enum `s1` \| `s2` \| `hybrid` | `hybrid` (D2) |
+| `routing.seed_retries` | int 0–2 | 2 (D2) |
 | `routing.max_waypoints` | int 2–100 | 50 |
 | `routing.max_distance_km` | int 1–1000 | 300 |
+| `routing.coverage_bbox` | `[lon_min, lat_min, lon_max, lat_max]` en degrés décimaux, 4 nombres finis ; lon dans [−180, 180], lat dans [−90, 90] ; min < max ; côté du rectangle ≤ 2 000 km | `[1.35, 48.80, 6.45, 51.55]` (Hauts-de-France + Belgique, avec une marge de quelques kilomètres) |
 | `routing.distance_tolerance_pct` | int 1–100 | 15 |
 | `routing.snap_tolerance_m` | int 10–500 | 50 |
-| `routing.overlap_warning_pct` | int 1–100 | 25 |
+| `routing.overlap_warning_pct` | int 1–100 | 25 (1 point et ≥ 3 points) |
+| `routing.overlap_warning_pct_2pts` | int 1–100 | 40 (D3) |
 | `routing.rate_limit_per_user` | int 1–100 / heure | 30 |
 | `routing.max_concurrent` | int 1–4 | 2 (générations simultanées sur l'instance, M9) |
 | `routing.health_interval_s` | int 15–600 | 60 (M13) |
@@ -259,7 +276,8 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 | CA-R17 [CI] (n6) | Logs sans coordonnées ; le JS du mode n'émet **aucun fetch/XHR** hors de l'origine (les tuiles de fond de carte, hors origine par nature, ne sont pas concernées). |
 | CA-R18 [CI] | Ajouter un adaptateur ou une stratégie de détours ne modifie ni `builder.py` ni les routes. |
 | CA-R19 [CI] | UI : aucun libellé « itinéraire » ; badge « Planifiée » sur les traces `planned`. |
-| CA-R20 [CI] | Point hors du rectangle de couverture ⇒ refusé côté front et 400 côté serveur sans appel au moteur ; point dans le rectangle mais hors données ⇒ 422 « hors de la zone couverte ». |
+| CA-R20 [CI] | Point hors de `routing.coverage_bbox` ⇒ refusé côté front et 400 côté serveur sans appel au moteur ; point dans le rectangle mais hors données ⇒ 422 « hors de la zone couverte ». |
+| CA-R20b [CI] (spike) | Provider factice dont `/info` annonce `[-8.32, 48.83, 6.42, 54.60]` : un point à Londres (−0,13 ; 51,51) ou à Amsterdam (4,90 ; 52,37) ⇒ **400** sans appel au moteur (couverture configurée, pas `/info`) ; Lille (3,06 ; 50,63) et Liège (5,57 ; 50,63) acceptés. `options` renvoie `routing.coverage_bbox` même cache vide. Écriture du réglage avec min ≥ max, une latitude de 95 ou un côté de 3 000 km ⇒ 400. Rectangle configuré non contenu dans celui de `/info` ⇒ signalement dans l'admin. Point technique de détour hors rectangle ⇒ jamais envoyé au moteur. |
 | CA-R21 [spike] | Une boucle passant par un point en Hauts-de-France et un point en Belgique est générée, fermée, et franchit la frontière sans interruption de la trace. |
 | CA-R22 [CI] (M14) | Après enregistrement d'une trace planifiée puis `flask recompute-stats` : `best_efforts` de la trace = `'{}'`, agrégats du tableau de bord, records et efforts sur tronçons **inchangés**. |
 | CA-R23 [CI] (B3) | `routing.base_url` hors `OUTBOUND_ALLOWED_HOSTS` ⇒ 400 à l'écriture ; forcée en base ⇒ aucun appel sortant (serveur factice : aucune requête reçue), fonction traitée comme non configurée ; changer `routing.base_url` efface `routing.api_key`. |
@@ -269,7 +287,7 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 | CA-R26 [CI] (m12) | P2 à 3 m de P1 ⇒ retiré, erreurs et `route_meta` numérotées d'après l'envoi d'origine ; deux points confondus sans distance ⇒ 400 « distance requise » ; Pn à 3 m de P1 ⇒ retiré, avertissement. |
 | CA-R27 [CI] (m10) | 201e résultat en mémoire (tous utilisateurs) ⇒ le plus ancien est évincé ; son `save` ⇒ 404. |
 | CA-R28 (n5) | Déconnexion ⇒ points en cours absents du `localStorage` ; un autre compte ouvrant le mode sur le même navigateur ne voit pas les points du précédent. |
-| CA-R29 [CI] (n8, R3) | Instance démarrée sans aucun sondage exécuté (cache vide) ⇒ `options` : `available: false`, aucune emprise ; `route` ⇒ 503 sans appel au moteur. Après `run_task('routing_health')` réussi ⇒ `available: true` et emprise présente. Avec `INBOX_ENABLED=0` et sans `DEM_URL`, la tâche `routing_health` est bien planifiée par l'ordonnanceur (`tick(now)`). |
+| CA-R29 [CI] (n8, R3) | Instance démarrée sans aucun sondage exécuté (cache vide) ⇒ `options` : `available: false`, couverture configurée présente ; `route` ⇒ 503 sans appel au moteur. Après `run_task('routing_health')` réussi ⇒ `available: true`. Avec `INBOX_ENABLED=0` et sans `DEM_URL`, la tâche `routing_health` est bien planifiée par l'ordonnanceur (`tick(now)`). |
 
 ## 9. Cas limites et risques
 
@@ -339,13 +357,23 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 | Vocabulaire | « Trace » + badge « Planifiée », plus d'« itinéraire » | 2 |
 | Seuils | Distance facultative avec ≥ 2 points ; tolérance 15 % ; accroche 50 m ; recouvrement 25 % ; budget 15 appels / 30 s | 3 |
 | Filtre | « Toutes · Réalisées · Planifiées », défaut « Toutes » | 3 |
+| D1 | GraphHopper 11.0 validé sous condition des mesures cible ; image communautaire ou jar à trancher en TR7 | spike |
+| D2 | Stratégie hybride S1 puis pétale S2, jusqu'à 2 essais de graine supplémentaires | spike |
+| D3 | Recouvrement : avertissement à 25 % à partir de 3 points, 40 % à 2 points | spike |
+| D4 | 2 points hors tolérance : avertir et suggérer d'ajouter un point | spike |
+| — | Couverture = rectangle configuré `routing.coverage_bbox`, pas le rectangle de `/info` (constat d'ops au spike) | spike |
 | B3 | `routing.base_url` soumise à `OUTBOUND_ALLOWED_HOSTS`, clé liée à sa destination | post-review |
 | M9, M13, M14, m10–m14, n5, n6, D4 | Attendu de la review appliqué | post-review |
 | R3, n7, n8, découpage | Sondage du moteur porté par l'ordonnanceur de fond (admin-space T19), cache vide ⇒ indisponible, ré-enregistrement après suppression | re-review |
 
 ## 13. Reste ouvert
 
-1. **Résultats du spike TR0**, sur l'emprise Hauts-de-France + Belgique : levée de la réserve sur GraphHopper (critères de l'ADR-0007, dont RAM, disque et durée d'import chiffrés et fusion transfrontalière vérifiée) et choix de la stratégie de détours (ADR-0010, cible ≥ 80 % de générations dans la tolérance). **Bloquant pour TR2, TR3 et TR7** ; TR1, TR4, TR5 et TR6 peuvent avancer avec le provider factice.
+1. **Mesures sur la machine cible (« dune »)**, prévues par l'utilisateur : condition restante de l'ADR-0007 (ressources du service, limite mémoire du conteneur). Bloque TR7, pas TR2 ni TR3.
+2. **Appréciation visuelle** des traces par l'utilisateur, en particulier gravel : échantillon prêt dans `spike/detours/out/echantillon/` (`echantillon.md` et GPX S1/S2 par zone). Une remarque défavorable rouvrirait la stratégie ou le profil concerné, sans bloquer TR3.
+
+Décisions D1 à D4 prises le 2026-11-24 (§12).
+
+**Ordre pour dev** : **TR3** (adaptateur GraphHopper, profils, `health()`), **puis TR2** (`detours.py` hybride S1 → S2 + essais de graine, `builder.py`, RB-4.11 à RB-4.14, CA-R30 à CA-R33) ; TR7 (ops) après les mesures cible ; CA-R34 (hybride réel sur le jeu du spike) à mesurer une fois TR2 et TR3 livrés.
 
 La région n'est plus un point ouvert (arbitrée, vague 4). Le **périmètre belge** retenu par la spec est le **pays entier** (recommandation argumentée dans l'ADR-0007) ; s'il ne convient pas, c'est une simple variante de l'étape d'extraction de TR7, sans impact sur le code.
 
@@ -364,8 +392,8 @@ Pré-requis : spec admin **T0, T3, T4, T5, T6, T14, T18, T19** (M15, D4, R3, r2)
 
 0. **TR0 (spike, dev + ops)** GraphHopper sur l'emprise **Hauts-de-France + Belgique** (fusion des extraits, cf. TR7) : RAM, disque et durée d'import mesurés ; continuité du réseau à la frontière ; profils, modèle gravel, `round_trip` ; jeu de cas incluant au moins 2 boucles transfrontalières ; implémentation jetable des deux stratégies de détours de l'ADR-0010 sur un jeu de ~10 cas (urbain, rural, relief, littoral, transfrontalier ; 1, 2, 5 et 15 points ; T de 1,2× à 3× D0) ; mesures : écart à la cible, recouvrement, appels, latence, appréciation visuelle. Conclusions consignées dans les ADR 0007 et 0010.
 1. **TR1** `routing/base.py` + provider factice déterministe.
-2. **TR2** `routing/detours.py` (stratégie retenue) + `routing/builder.py` (boucle de base, ajustement, budget, contrôles qualité, dédoublonnage m12, GPX par l'API XML) ; tests CA-R2 à R11, R26.
-3. **TR3** Adaptateur GraphHopper + profils + `health()` ; tests sur réponses enregistrées, aucun appel réseau en CI.
+2. **TR3** Adaptateur GraphHopper + profils + `health()` ; tests sur réponses enregistrées, aucun appel réseau en CI. Débloquée par D1 ; **avant TR2**.
+3. **TR2** `routing/detours.py` (**hybride S1 → pétale S2 + essais de graine**, RB-4.11 à RB-4.14, CA-R30 à CA-R33) + `routing/builder.py` (boucle de base, ajustement, budget, contrôles qualité, dédoublonnage m12, GPX par l'API XML) ; tests CA-R2 à R11, R26. **Après TR3.**
 4. **TR4** Migration `activities.kind` + filtres (`dashboard_service`, `segment_service`, `activity_store`, `/api/users`, **`recompute_summaries`**) ; tests CA-R13, R14, R22.
 5. **TR5** `results.py` (plafond global, dédoublonnage, n7) + routes (CA-R16 sur le modèle à deux compteurs, v5-2) + sémaphore de génération + limitations + **tâche `routing_health` enregistrée dans l'ordonnanceur (T19)** ; tests CA-R1, R12, R15, R16, R17, R23, R24, R25, R25b, R27, R29. Dépend de T19.
 6. **TR6** Front `route-builder.js` (édition, progression, Annuler, effacement à la déconnexion) + badge « Planifiée » et filtre de la bibliothèque ; CA-R19, R28.

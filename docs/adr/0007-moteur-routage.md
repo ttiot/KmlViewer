@@ -1,6 +1,6 @@
 # ADR-0007 — Moteur de routage : GraphHopper auto-hébergé
 
-Statut : **Accepté sous réserve du spike TR0** (auto-hébergement : arbitrage Q-R2 ; GraphHopper : 2e vague ; emprise Hauts-de-France + Belgique : 4e vague, relayées par coord le 2026-11-24). Périmètre belge « pays entier » : recommandation de cet ADR.
+Statut : **Accepté sous condition des mesures sur la machine cible** (auto-hébergement : arbitrage Q-R2 ; GraphHopper : 2e vague ; emprise Hauts-de-France + Belgique : 4e vague ; **levée de la réserve du spike : décision D1 de l'utilisateur**, relayées par coord le 2026-11-24). Condition restante : mesures sur la machine cible (« dune »), prévues par l'utilisateur. Image communautaire ou build depuis le jar : à trancher dans TR7. Périmètre belge « pays entier » : recommandation de cet ADR.
 Spec : [gpx-route-builder](../specs/gpx-route-builder.md)
 
 ## Contexte
@@ -69,6 +69,27 @@ Recommandation : **Belgique entière**. Si le spike montre une empreinte inaccep
 6. Résultats de la stratégie de détours (ADR-0010) jugés acceptables.
 
 Réserve non levée ⇒ **plan B : BRouter**. Comme les détours sont construits par l'appli, le changement passe par un adaptateur (`RoutingProvider`). Si BRouter n'a pas de boucle native, l'appli doit construire **toute boucle** que le moteur ne sait pas produire : le cas « 1 point » **et**, si la stratégie retenue est S2 ou l'hybride (ADR-0010), les **pétales** (M15). Avec S1 seule, seul le cas « 1 point » est concerné.
+
+## Résultats du spike TR0 (poste local, 2026-11-24)
+
+Sources : `spike/detours/out/summary.md` et `results.jsonl` (1 128 exécutions, 0 erreur moteur), mesures d'ops. Moteur : GraphHopper 11.0, image `israelhikingmap/graphhopper:11.0`, données Hauts-de-France + Belgique fusionnées, 6 profils (`foot`, `hike`, `bike`, `racingbike`, `mtb`, `gravel`). Poste : 12 cœurs, 30 Go.
+
+| Critère (section précédente) | Mesure | Statut |
+|---|---|---|
+| 1. Ressources | import **303 s** ; graphe **320 Mo** ; service **~0,6 Go** au repos, **~2,5 Go** après charge (`-Xmx3g`) | atteint en local ; **à refaire sur la machine cible** (mesures prévues par l'utilisateur) |
+| 2. Fusion et frontière | 0 erreur moteur sur 1 128 exécutions ; cas transfrontaliers (Tourcoing-Mouscron…) **100 %** dans la tolérance pour S1 et S2 | atteint |
+| 3. Latence | `route` à 5 points : p50 **45-85 ms**, p95 **205-750 ms** (cible indicative ≤ 1 s au p95) ; durée médiane d'une génération complète 0,01 à 0,16 s | atteint en local |
+| 4. `round_trip` | cas 1 point : **89 %** dans la tolérance, écart médian 9,7 % | atteint |
+| 5. Profils, gravel | dans la tolérance : `foot` 91/90 %, `mtb` 87/89 %, `gravel` 86/88 %, `racingbike` 85/84 % (S1/S2) ; `hike` non mesuré dans le jeu de détours | atteint quantitativement ; **appréciation visuelle des traces gravel par l'utilisateur non faite** |
+| 6. Stratégie de détours | ≥ 80 % atteint (S1 87 %, S2 88 %, voir ADR-0010) | atteint |
+
+**Décision D1 (utilisateur, 2026-11-24)** : réserve levée, GraphHopper 11.0 retenu, **sous condition** que les mesures sur la machine cible tiennent dans ses ressources (prévoir une limite mémoire du conteneur d'au moins ~3,5 Go pour `-Xmx3g` plus le hors-tas, à confirmer par la mesure). Le plan B BRouter n'a pas lieu d'être activé.
+
+**Point annexe pour ops / l'utilisateur** : le spike utilise une image **communautaire** (`israelhikingmap/graphhopper`). La décision initiale prévoyait une release épinglée dont ops tranche la méthode de build ; garder cette image (épinglée par empreinte) ou construire depuis le jar officiel reste à décider dans TR7.
+
+## Limites connues relevées au spike
+- **Profil gravel** (avis d'ops sur l'échantillon) : il **évite surtout le bitume** — part de bitume Durbuy 62 → 29 %, Spa 85 → 60 %, Ypres 72 → 39 % — au prix de **+3 à +21 %** de distance ; la part de surface non revêtue **taguée** dans OSM reste faible (≤ 18 %), le modèle ne peut donc pas viser activement les chemins de gravier ; dans les Ardennes, il se rapproche du profil `mtb`. Limite acceptée pour la bêta ; **le jugement terrain revient à l'utilisateur** (appréciation de l'échantillon `spike/detours/out/echantillon/`).
+- **Rectangle de `/info`** (`[-8.32, 48.83, 6.42, 54.60]` au spike) bien plus large que la zone couverte (bords des extraits, ferries) : inutilisable comme couverture. La spec utilise un rectangle configuré (`routing.coverage_bbox`, RB-1.3) ; `/info` ne sert qu'au diagnostic.
 
 ## Conséquences
 - Charge **ops** nouvelle : service Java, chaîne mensuelle téléchargement → fusion → import → bascule, ressources à dimensionner.
