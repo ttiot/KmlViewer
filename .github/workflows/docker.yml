@@ -35,7 +35,6 @@ concurrency:
 
 env:
   REGISTRY_GHCR: ghcr.io
-  PYTHON_VERSION: '3.15'
 
 jobs:
   test:
@@ -47,24 +46,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configuration de Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: web-app/requirements*.txt
+      # Les tests tournent dans l'image de base du Dockerfile (même Python, même SQLite que
+      # la production) : la référence est lue dans le Dockerfile, pas dupliquée ici.
+      - name: Image de test (lue dans le Dockerfile)
+        id: pyimage
+        run: |
+          image=$(sed -n 's/^FROM \(python:[^ ]*\)\( .*\)\{0,1\}$/\1/p' web-app/Dockerfile | tail -n 1)
+          re='^python:[0-9]+\.[0-9]+(\.[0-9]+)?-slim$'
+          [[ "$image" =~ $re ]] || { echo "Image introuvable : '$image'" >&2; exit 1; }
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
 
-      - name: Installation des dépendances (verrou à empreintes)
-        working-directory: web-app
-        run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
-
-      - name: Lint (ruff)
-        working-directory: web-app
-        run: python -m ruff check .
-
-      - name: Tests et couverture
-        working-directory: web-app
-        run: python -m pytest --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=75
+      - name: Lint et tests dans l'image (verrou à empreintes)
+        env:
+          PYTEST_IMAGE: ${{ steps.pyimage.outputs.image }}
+        run: |
+          docker run --rm \
+            --volume "$PWD/web-app:/app" --workdir /app \
+            --env PIP_ROOT_USER_ACTION=ignore --env PIP_DISABLE_PIP_VERSION_CHECK=1 \
+            --env PIP_NO_CACHE_DIR=1 --env PYTHONDONTWRITEBYTECODE=1 \
+            "$PYTEST_IMAGE" bash -euo pipefail -c '
+              python --version
+              python -c "import sqlite3; print(\"SQLite\", sqlite3.sqlite_version)"
+              pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+              python -m ruff check .
+              python -m pytest --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=75
+            '
 
       - name: Vulnérabilités connues des dépendances
         run: pipx run pip-audit==2.10.1 --require-hashes --disable-pip -r web-app/requirements.txt
