@@ -31,6 +31,7 @@ from app.auth import csrf, passwords, tokens
 from app.auth.pending import PendingStore
 from app.config import TestingConfig
 from tests.fake_smtp import FakeSMTP
+from tests.pw_harness import freeze_limiters
 
 HOST = 'traces.example.com'
 KEY = Fernet.generate_key().decode()
@@ -50,8 +51,9 @@ class Prod(TestingConfig):
 
 
 def make_app(tmp_path, **extra):
-    return create_app(Prod, overrides={'DATA_DIR': str(tmp_path / 'data'), 'AUTH_MODE': 'password', 'TRUSTED_HOSTS': [HOST],
-                                       'SECRETS_KEY': KEY, 'PUBLIC_URL': ORIGIN, **extra})
+    app = create_app(Prod, overrides={'DATA_DIR': str(tmp_path / 'data'), 'AUTH_MODE': 'password', 'TRUSTED_HOSTS': [HOST],
+                                      'SECRETS_KEY': KEY, 'PUBLIC_URL': ORIGIN, **extra})
+    return freeze_limiters(app)                     # horloge figée : aucun verdict ne dépend de l'heure réelle (instabilité 1/5267)
 
 
 @pytest.fixture

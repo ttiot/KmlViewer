@@ -33,6 +33,7 @@ class Result:
     size: int
     expires: float
     saved: Optional[dict] = field(default=None)       # {'activity_id', 'user_id', 'sha256'} après un enregistrement
+    saving: bool = False                              # un enregistrement est en cours (TR5-1)
 
 
 class ResultStore:
@@ -73,6 +74,21 @@ class ResultStore:
                 return None
             self._items.move_to_end(result_id)
             return item
+
+    def begin_save(self, user_id: int, result_id: str) -> bool:
+        """Réserve l'enregistrement du résultat, ATOMIQUEMENT : un seul appel concurrent obtient True (TR5-1, RB-5.2)."""
+        with self._lock:
+            item = self._items.get(result_id)
+            if item is None or item.user_id != int(user_id) or item.saving:
+                return False
+            item.saving = True
+            return True
+
+    def end_save(self, user_id: int, result_id: str) -> None:
+        with self._lock:
+            item = self._items.get(result_id)
+            if item is not None and item.user_id == int(user_id):
+                item.saving = False
 
     def mark_saved(self, user_id: int, result_id: str, reference: dict) -> bool:
         with self._lock:

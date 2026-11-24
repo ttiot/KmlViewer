@@ -61,6 +61,8 @@ class Config:
     # Ordonnanceur de fond (EF-10.1) : démarré dans tout processus servi ; SCHEDULER_ENABLED=0 le coupe (réplique
     # secondaire, diagnostic). Les configurations de test le coupent : aucun thread ne survit à une fabrique d'application.
     SCHEDULER_ENABLED = _env_bool('SCHEDULER_ENABLED', True)
+    # Clé API du moteur : en clair (http) SEULEMENT si l'exploitant l'autorise explicitement (réseau interne du compose)
+    ROUTING_ALLOW_CLEARTEXT_KEY = _env_bool('ROUTING_ALLOW_CLEARTEXT_KEY', False)
 
     # Dossier surveillé
     # None = variable non renseignée : la valeur effective vient de la base, sinon du défaut du registre (app/settings)

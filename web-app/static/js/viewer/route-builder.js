@@ -10,7 +10,7 @@ const RouteBuilder = (() => {
     const MAX_HISTORY = 100;
     const state = {
         active: false, options: null, userId: null, points: [], markers: [], undo: [], redo: [], layer: null, coverage: null,
-        controller: null, result: null, nextSeed: null, lastRequest: null,
+        controller: null, result: null, nextSeed: null, lastRequest: null, preview: null, insertBefore: null, dirty: false,
     };
     let root = null;
 
@@ -71,7 +71,24 @@ const RouteBuilder = (() => {
         return L.divIcon({ className: 'rb-pin', html: el('span', {}, String(number)), iconSize: [26, 26], iconAnchor: [13, 13] });
     }
 
+    // Longueur à vol d'oiseau de la boucle fermée (prévisualisation locale, RB-2.5)
+    function birdLength(points) {
+        const rad = (d) => (d * Math.PI) / 180;
+        let total = 0;
+        for (let i = 0; i < points.length; i += 1) {
+            const [a, b] = [points[i], points[(i + 1) % points.length]];
+            const h = Math.sin(rad(b[0] - a[0]) / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(rad(b[1] - a[1]) / 2) ** 2;
+            total += 2 * 6371000 * Math.asin(Math.sqrt(h));
+        }
+        return total;
+    }
+
     function redraw() {
+        if (state.preview) { Viewer.map.removeLayer(state.preview); state.preview = null; }
+        if (state.points.length >= 2) {            // boucle fermée : le dernier point revient au point 1 (RB-2.3)
+            state.preview = L.polyline([...state.points, state.points[0]], { color: '#0d6efd', weight: 2, dashArray: '6 6',
+                interactive: false }).addTo(Viewer.map);
+        }
         state.markers.forEach((m) => Viewer.map.removeLayer(m));
         state.markers = state.points.map(([lat, lon], index) => {
             const marker = L.marker([lat, lon], { icon: numberedIcon(index + 1), draggable: true, keyboard: true,
@@ -83,14 +100,30 @@ const RouteBuilder = (() => {
                 state.points[index] = [at.lat, at.lng];
                 after();
             });
-            marker.on('contextmenu', () => { pushHistory(); state.points.splice(index, 1); after(); });
+            marker.on('contextmenu', () => removeAt(index));
+            marker.on('click', (event) => {                       // clic / appui : retirer ou insérer avant (RB-2.2, tactile compris)
+                L.DomEvent.stopPropagation(event);
+                const menu = el('div', { class: 'rb-menu' },
+                    el('button', { type: 'button', class: 'btn btn-sm btn-outline-danger me-1', onclick: () => { marker.closePopup(); removeAt(index); } },
+                        'Retirer ce point'),
+                    el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: () => {
+                        marker.closePopup();
+                        state.insertBefore = index;
+                        say(`Clique sur la carte pour insérer un point avant le point ${index + 1}.`, 'info');
+                    } }, 'Insérer avant'));
+                marker.bindPopup(menu).openPopup();
+            });
             return marker.addTo(Viewer.map);
         });
-        $('rbCount').textContent = `${state.points.length} point${state.points.length > 1 ? 's' : ''}`;
+        const n = state.points.length;
+        $('rbCount').textContent = `${n} point${n > 1 ? 's' : ''}`
+            + (n >= 2 ? ` · à vol d'oiseau ${(birdLength(state.points) / 1000).toFixed(1)} km` : '');
         updateButtons();
     }
 
-    function after() { redraw(); save(); say(''); }
+    function removeAt(index) { pushHistory(); state.points.splice(index, 1); after(); }
+
+    function after() { state.dirty = state.points.length > 0; redraw(); save(); say(''); }
 
     function updateButtons() {
         const ok = state.options && state.options.available;
@@ -108,7 +141,9 @@ const RouteBuilder = (() => {
         if (state.points.length >= state.options.max_waypoints) { say(`${state.options.max_waypoints} points au plus.`, 'warn'); return; }
         if (!inCoverage(lat, lng)) { say('Hors de la zone couverte.', 'warn'); return; }
         pushHistory();
-        state.points.push([Number(lat.toFixed(6)), Number(lng.toFixed(6))]);
+        const point = [Number(lat.toFixed(6)), Number(lng.toFixed(6))];
+        if (state.insertBefore !== null) { state.points.splice(state.insertBefore, 0, point); state.insertBefore = null; }
+        else state.points.push(point);
         after();
     }
 
@@ -205,6 +240,8 @@ const RouteBuilder = (() => {
         state.markers.forEach((m) => Viewer.map.removeLayer(m));
         state.markers = [];
         if (state.coverage) { Viewer.map.removeLayer(state.coverage); state.coverage = null; }
+        if (state.preview) { Viewer.map.removeLayer(state.preview); state.preview = null; }
+        state.insertBefore = null;
     }
 
     function reset() {
@@ -238,7 +275,25 @@ const RouteBuilder = (() => {
             state.points = JSON.parse(state.redo.pop());
             after();
         });
-        $('rbClear').addEventListener('click', reset);
+        $('rbClear').addEventListener('click', () => {        // confirmation DANS la page, jamais une boîte du navigateur (RB-2.2)
+            $('rbClear').hidden = true;
+            $('rbClearConfirm').hidden = false;
+        });
+        $('rbClearYes').addEventListener('click', () => { reset(); $('rbClearConfirm').hidden = true; $('rbClear').hidden = false; });
+        $('rbClearNo').addEventListener('click', () => { $('rbClearConfirm').hidden = true; $('rbClear').hidden = false; });
+        // Ctrl+Z / Ctrl+Y (ou Ctrl+Maj+Z), hors champs de saisie
+        document.addEventListener('keydown', (event) => {
+            if (!state.active || !(event.ctrlKey || event.metaKey)) return;
+            const tag = (event.target && event.target.tagName) || '';
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+            const key = event.key.toLowerCase();
+            if (key === 'z' && !event.shiftKey) { event.preventDefault(); $('rbUndo').click(); }
+            else if (key === 'y' || (key === 'z' && event.shiftKey)) { event.preventDefault(); $('rbRedo').click(); }
+        });
+        // Points non générés : avertissement avant de quitter la page (RB-2.6)
+        window.addEventListener('beforeunload', (event) => {
+            if (state.active && state.dirty && !state.result) { event.preventDefault(); event.returnValue = ''; }
+        });
         $('rbDistance').addEventListener('input', () => { save(); updateButtons(); });
         $('rbActivity').addEventListener('change', save);
     }

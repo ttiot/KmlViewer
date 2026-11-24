@@ -308,7 +308,7 @@ _ENTRIES = (
     Setting('routing.detour_strategy', 'enum', 'hybrid', 'Traces planifiées', "Stratégie de détours",
             choices=('s1', 's2', 'hybrid')),
     _int('routing.seed_retries', 2, 0, 2, 'Traces planifiées', "Essais de graine supplémentaires"),
-    Setting('routing.coverage_bbox', 'rectangle', [1.35, 48.80, 6.45, 51.55], 'Traces planifiées',
+    Setting('routing.coverage_bbox', 'rectangle', [1.35, 48.83, 6.42, 51.55], 'Traces planifiées',
             "Zone couverte (lon min, lat min, lon max, lat max)"),
     _int('routing.max_concurrent', 2, 1, 4, 'Traces planifiées', "Générations simultanées sur l'instance"),
     # Tâches de fond (EF-6.5) : relues à chaque tour de l'ordonnanceur, aucun redémarrage

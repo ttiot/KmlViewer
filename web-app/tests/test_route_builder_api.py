@@ -139,7 +139,7 @@ def test_options_carry_the_contract_even_before_the_first_health_probe_CA_R29(ap
     client = session_for(app, add(conn, 'alice'))
     body = call(client, 'get', '/api/route-builder/options').get_json()
     assert body['available'] is False and body['state'] == 'starting'                         # cache vide : injoignable (n8)
-    assert body['coverage_bbox'] == [1.35, 48.80, 6.45, 51.55]
+    assert body['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55]
     assert (body['min_km'], body['step_km'], body['max_km'], body['max_waypoints'], body['tolerance_pct']) == (1.0, 0.5, 300, 50, 15)
     assert [a['key'] for a in body['activities']] == ['run', 'trail', 'hike', 'road_bike', 'gravel', 'mtb']
     assert body['default_activity'] == 'run'
@@ -425,7 +425,7 @@ def test_coverage_bbox_validation_rejects_malformed_inverted_and_oversized_recta
 
 
 def test_coverage_bbox_default_and_a_valid_write_through_the_settings_store(app, conn):
-    assert REGISTRY['routing.coverage_bbox'].validate([1.35, 48.80, 6.45, 51.55]) == [1.35, 48.8, 6.45, 51.55]
+    assert REGISTRY['routing.coverage_bbox'].validate([1.35, 48.83, 6.42, 51.55]) == [1.35, 48.83, 6.42, 51.55]
     store = app.config['SETTINGS_STORE']
     store.set_many(conn, {'routing.coverage_bbox': [2, 49, 5, 51]}, actor=CLI)
     assert store.get('routing.coverage_bbox') == [2.0, 49.0, 5.0, 51.0]
@@ -487,3 +487,139 @@ def test_the_library_filters_planned_traces_and_shows_the_badge(app, conn):
     import pathlib
     js = (pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js' / 'dashboard.js').read_text(encoding='utf-8')
     assert "a.kind === 'planned'" in js and "params.set('kind', state.kind)" in js
+
+
+# --- TR5-1 / TR5-2 ------------------------------------------------------------------------------------------------------------------
+
+def test_eight_concurrent_saves_of_one_result_create_exactly_one_trace_TR5_1(ready, conn, app):
+    import threading
+    client, user = ready
+    rid = generate(client).get_json()['route_meta']['result_id']
+    clients = [session_for(app, user) for _ in range(8)]
+    barrier = threading.Barrier(8)
+    codes = []
+
+    def job(c):
+        barrier.wait()
+        codes.append(call(c, 'post', '/api/route-builder/save', {'result_id': rid, 'name': 'concurrent'}).status_code)
+
+    threads = [threading.Thread(target=job, args=(c,)) for c in clients]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sorted(codes) == [200] + [409] * 7, codes
+    assert conn.execute("SELECT COUNT(*) FROM activities WHERE source = 'route_builder'").fetchone()[0] == 1
+
+
+def test_the_save_reservation_is_released_after_a_failure_and_is_atomic_in_the_store():
+    store = ResultStore()
+    rid = store.put(1, b'x', {}, {})
+    assert store.begin_save(1, rid) is True and store.begin_save(1, rid) is False
+    assert store.begin_save(2, rid) is False
+    store.end_save(1, rid)
+    assert store.begin_save(1, rid) is True
+
+
+def test_an_api_key_never_travels_in_clear_unless_the_operator_allows_it_TR5_2(app, conn):
+    runtime = app.extensions['routing']
+    runtime.provider_factory = runtime._build_provider
+    c = database.connect(app.config['DB_PATH'])
+    app.config['SETTINGS_STORE'].set_many(c, {'routing.api_key_placeholder': 1} if False else {}, actor=CLI)
+    app.extensions['secrets'].set(c, 'routing.api_key', 'abcdefghijklmnop-WXYZ', 'http://graphhopper.internal:8989', actor=CLI)
+    c.close()
+    with pytest.raises(RoutingUnavailable):                                       # http + clé, sans autorisation explicite
+        runtime.provider()
+    assert runtime.run_health()['available'] is False and runtime.state() == 'unavailable'
+    app.config['ROUTING_ALLOW_CLEARTEXT_KEY'] = True
+    assert runtime.provider() is not None                                           # autorisé par l'exploitant
+    app.config['ROUTING_ALLOW_CLEARTEXT_KEY'] = False
+    c = database.connect(app.config['DB_PATH'])
+    app.extensions['secrets'].clear(c, 'routing.api_key', actor=CLI)
+    c.close()
+    assert runtime.provider() is not None                                           # sans clé : http permis (moteur interne)
+
+
+# --- Recette v3 : « Tester » le moteur, messages, saisie des réglages, RB-2.2 -----------------------------------------------------------
+
+def admin_client(app, conn):
+    admin = add(conn, 'root')
+    conn.execute("UPDATE users SET is_admin = 1, totp_secret = x'01', totp_enabled_at = '2026-01-01T00:00:00Z' WHERE id = ?", (admin['id'],))
+    conn.commit()
+    return session_for(app, conn.execute("SELECT * FROM users WHERE id = ?", (admin['id'],)).fetchone())
+
+
+def test_the_engine_test_of_the_admin_calls_the_health_probe_and_answers_ok_or_ko_only(app, conn):
+    c = database.connect(app.config['DB_PATH'])
+    app.config['SETTINGS_STORE'].set_many(c, {'routing.timeout_s': 1}, actor=CLI)
+    c.close()
+    client = admin_client(app, conn)
+    runtime = app.extensions['routing']
+    healthy_engine = FakeProvider()
+    runtime.provider_factory = lambda: healthy_engine
+    body = call(client, 'post', '/api/admin/secrets/routing.api_key/test', {}).get_json()
+    assert body == {'success': True, 'ok': True} and healthy_engine.health_calls == 1
+    runtime.provider_factory = lambda: FakeProvider(available=False)
+    assert call(client, 'post', '/api/admin/secrets/routing.api_key/test', {}).get_json() == {'success': True, 'ok': False}
+
+    def broken():
+        raise RoutingUnavailable()
+    runtime.provider_factory = broken
+    started = time.monotonic()
+    assert call(client, 'post', '/api/admin/secrets/routing.api_key/test', {}).get_json() == {'success': True, 'ok': False}
+    assert time.monotonic() - started >= 0.9                              # rendu à l'échéance du service, ok comme ko
+
+
+def test_the_422_message_is_the_specified_one_with_the_original_number_and_no_forbidden_word_CA_R19_R20(app, conn):
+    enable(conn)
+    healthy(app)
+    bad = tuple(POINTS[2])
+    app.extensions['routing'].provider_factory = lambda: FakeProvider(unroutable=lambda p: tuple(p) == bad)
+    client = session_for(app, add(conn, 'alice'))
+    message = generate(client).get_json()['error']
+    assert message == 'Le point 3 est hors de la zone couverte.'
+    app.extensions['routing'].provider_factory = lambda: FakeProvider(fail=NoRouteFound())
+    assert 'itinéraire' not in generate(client).get_json()['error'].lower()
+
+
+def test_no_user_visible_text_uses_the_word_itineraire_CA_R19():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for folder, patterns in (('templates', ('*.html',)), ('static/js', ('*.js',)), ('app/api', ('route_builder_routes.py',))):
+        for pattern in patterns:
+            for path in (root / folder).rglob(pattern):
+                if re.search(r'itin[ée]raire', path.read_text(encoding='utf-8'), re.I):
+                    offenders.append(str(path))
+    assert offenders == []
+
+
+def test_the_default_coverage_matches_the_engine_extent_and_is_reported_contained(app, conn):
+    assert REGISTRY['routing.coverage_bbox'].default == [1.35, 48.83, 6.42, 51.55]
+    runtime = app.extensions['routing']
+    runtime.provider_factory = lambda: FakeProvider(bbox=(48.83, -8.32, 54.60, 6.42))        # /info du moteur réel (lat, lon, lat, lon)
+    healthy(app)
+    assert runtime.diagnostic()['coverage_contained'] is True
+    runtime.provider_factory = lambda: FakeProvider(bbox=(49.0, 2.0, 51.6, 6.5))
+    healthy(app)
+    assert runtime.diagnostic()['coverage_contained'] is False
+
+
+def test_every_registry_type_has_an_editing_control_in_the_admin_form_Doc_16():
+    import pathlib
+    from app.settings.registry import TYPES
+    js = (pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js' / 'admin.js').read_text(encoding='utf-8')
+    mapping = dict(re.findall(r"(\w+): '(\w+)'", re.search(r'CONTROL_FOR_TYPE = \{(.*?)\};', js, re.S).group(1)))
+    assert set(TYPES) <= set(mapping), set(TYPES) - set(mapping)
+    assert mapping['rectangle'] == 'json' and {mapping[t] for t in TYPES} <= {'checkbox', 'select', 'number', 'text', 'json'}
+    assert {s.type for s in REGISTRY.values()} <= set(mapping)
+    assert 'value.length === 4' in js and "type === 'rectangle'" in js                       # contrôle côté interface du rectangle
+
+
+def test_the_builder_front_covers_rb_2_2_undo_keys_insert_before_touch_removal_and_in_page_confirmation():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    js = (root / 'static' / 'js' / 'viewer' / 'route-builder.js').read_text(encoding='utf-8')
+    html = (root / 'templates' / 'viewer' / 'toolbar.html').read_text(encoding='utf-8')
+    assert "key === 'z'" in js and "key === 'y'" in js and 'ctrlKey' in js
+    assert 'Insérer avant' in js and 'insertBefore' in js and "marker.on('click'" in js and "marker.on('contextmenu'" in js
+    assert 'rbClearConfirm' in js and 'rbClearConfirm' in html and 'confirm(' not in js.replace('Confirmer', '')
+    assert 'beforeunload' in js and 'dashArray' in js and 'birdLength' in js

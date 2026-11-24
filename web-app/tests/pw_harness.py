@@ -27,9 +27,29 @@ class Prod(TestingConfig):
     SESSION_COOKIE_SECURE = None
 
 
+# Horloge FIGÉE des limiteurs : à l'intérieur d'une fenêtre de 15 min (indice 4001,5) ET d'une heure (indice 1000,375), loin de tout bord
+# de fenêtre. Avec l'horloge réelle, une séquence de requêtes qui chevauche un bord de fenêtre (fenêtre à deux compteurs) donne des verdicts
+# différents d'un identifiant à l'autre : un échec sur ~5 000 passages (T-flaky). Les tests de comptage doivent dépendre des seuls
+# comptes, jamais de l'heure ; la glissade de fenêtre a ses propres tests, à horloge injectée (tests/test_ratelimit*.py).
+FROZEN_NOW = 3_601_350.0
+FIXED_BUCKET_SECRET = b'test-secret-fixed-for-bucket-slots'
+
+
+def freeze_limiters(app, now=FROZEN_NOW):
+    """Horloge constante et clé de compartiments fixe sur chaque limiteur de l'application (état par application, jamais partagé)."""
+    limiters = app.extensions['limiters']
+    for limiter in vars(limiters).values():
+        if hasattr(limiter, '_clock') and hasattr(limiter, 'hit'):
+            limiter._clock = lambda value=now: value
+            if hasattr(limiter, '_secret'):
+                limiter._secret = FIXED_BUCKET_SECRET
+    return app
+
+
 def make_app(tmp_path, **extra):
-    return create_app(Prod, overrides={'DATA_DIR': str(tmp_path / 'data'), 'AUTH_MODE': 'password', 'TRUSTED_HOSTS': [HOST],
-                                       'SECRETS_KEY': KEY, 'PUBLIC_URL': ORIGIN, **extra})
+    app = create_app(Prod, overrides={'DATA_DIR': str(tmp_path / 'data'), 'AUTH_MODE': 'password', 'TRUSTED_HOSTS': [HOST],
+                                      'SECRETS_KEY': KEY, 'PUBLIC_URL': ORIGIN, **extra})
+    return freeze_limiters(app)
 
 
 def connect(app):

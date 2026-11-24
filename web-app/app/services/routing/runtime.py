@@ -77,10 +77,14 @@ class RoutingRuntime:
         if destination is None or not self.configured():
             raise RoutingUnavailable()
         key = self._api_key(destination)
-        return GraphHopperProvider(effective(self.cfg, 'routing.base_url'), guard=self._guard,
-                                   timeout_s=float(effective(self.cfg, 'routing.timeout_s')), api_key=key,
-                                   # http : la liste blanche d'environnement est le choix explicite
-                                   allow_cleartext_key=True)
+        try:
+            # Une clé ne part en clair (http) que si l'exploitant l'a EXPLICITEMENT autorisé (ROUTING_ALLOW_CLEARTEXT_KEY, TR5-2)
+            return GraphHopperProvider(effective(self.cfg, 'routing.base_url'), guard=self._guard,
+                                       timeout_s=float(effective(self.cfg, 'routing.timeout_s')), api_key=key,
+                                       allow_cleartext_key=bool(self.cfg.get('ROUTING_ALLOW_CLEARTEXT_KEY')))
+        except ValueError:
+            logger.warning("Moteur de routage : une clé API est configurée pour une destination http (en clair) : refusé")
+            raise RoutingUnavailable() from None
 
     def provider(self):
         return self.provider_factory()
@@ -126,6 +130,14 @@ class RoutingRuntime:
                 'checked_at': health['checked_at'] if health else None, 'info_bbox': list(info) if info else None,
                 'coverage_contained': contained, 'profiles': list(health['profiles']) if health else []}
 
+    def neutral_test(self) -> dict:
+        """« Tester » le moteur (EF-5.6, r4) : ok ou ko SEULEMENT, rendu à l'échéance `routing.timeout_s`."""
+        def probe(_timeout):
+            if not self.configured():
+                return False
+            return bool(self.provider().health().available)             # garde de destination appliquée par le fournisseur
+        return outbound.run_neutral_test(probe, float(effective(self.cfg, 'routing.timeout_s')))
+
     # -- concurrence (P-TR5-6) -----------------------------------------------------------------------------------------------
     def acquire(self, user_id: int) -> Optional[str]:
         """Prend les places d'une génération ; None si c'est fait, sinon la raison du refus immédiat (`user` | `instance`)."""
@@ -155,5 +167,6 @@ def init_routing(app) -> RoutingRuntime:
         scheduler.register(Task('routing_health', runtime.run_health,
                                 interval=lambda cfg: effective(cfg, 'routing.health_interval_s'),
                                 enabled=lambda cfg: runtime.configured(), shared=False, long=True))
+    app.extensions['routing_test'] = runtime.neutral_test            # onglet « Clés API » de l'admin (EF-5.6)
     app.extensions.setdefault('feature_diagnostics', {})['route_builder'] = runtime.diagnostic
     return runtime

@@ -74,9 +74,9 @@ def _error(exc) -> ApiError:
     if isinstance(exc, builder.InvalidBuild):
         return ApiError(str(exc), 400)
     if isinstance(exc, builder.UnreachablePoint):
-        return ApiError(f"Le point {exc.number} ne peut pas être approché (hors réseau ou hors de la zone couverte).", 422)
+        return ApiError(f"Le point {exc.number} est hors de la zone couverte.", 422)           # CA-R20 : numéro d'ORIGINE
     if isinstance(exc, NoRouteFound):
-        return ApiError("Aucun itinéraire trouvé : essaie d'autres points.", 422)
+        return ApiError("Aucune trace possible avec ces points : essaie d'autres points.", 422)     # CA-R19
     if isinstance(exc, RoutingTimeout):
         return ApiError("Le service de routage n'a pas répondu à temps.", 504)
     if isinstance(exc, RoutingUnavailable):
@@ -175,15 +175,23 @@ def route_builder_save():
     name = _clean_name(data.get('name'), fallback)
     if result.saved is not None and _still_exists(db, result.saved):
         raise _Conflict(result.saved['activity_id'])
-    gpx = builder.rename_gpx(result.gpx, name)                         # nom écrit par l'API XML (échappement), jamais concaténé
-    with heavy_slot():
-        outcome = ingest_service.ingest_bytes(db, current_app.config, user_id, gpx, f'{name[:100]}.gpx', 'route_builder',
-                                              defer_elevation=True, kind='planned')
-    if outcome.status == 'error':
-        raise ApiError('Enregistrement impossible', 503 if outcome.retryable else 400)
-    digest = hashlib.sha256(gpx).hexdigest()
-    runtime.results.mark_saved(user_id, data.get('result_id'), {'activity_id': outcome.activity_id, 'user_id': user_id,
-                                                                'sha256': digest})
+    rid = data.get('result_id')
+    if not runtime.results.begin_save(user_id, rid):               # réservation atomique : un seul enregistrement à la fois
+        raise _Conflict(result.saved['activity_id'] if result.saved else None)
+    try:
+        fresh = runtime.results.get(user_id, rid)                  # relu SOUS la réservation (un concurrent a pu finir)
+        if fresh is not None and fresh.saved is not None and _still_exists(db, fresh.saved):
+            raise _Conflict(fresh.saved['activity_id'])
+        gpx = builder.rename_gpx(result.gpx, name)                 # nom écrit par l'API XML (échappement), jamais concaténé
+        with heavy_slot():
+            outcome = ingest_service.ingest_bytes(db, current_app.config, user_id, gpx, f'{name[:100]}.gpx', 'route_builder',
+                                                  defer_elevation=True, kind='planned')
+        if outcome.status == 'error':
+            raise ApiError('Enregistrement impossible', 503 if outcome.retryable else 400)
+        digest = hashlib.sha256(gpx).hexdigest()
+        runtime.results.mark_saved(user_id, rid, {'activity_id': outcome.activity_id, 'user_id': user_id, 'sha256': digest})
+    finally:
+        runtime.results.end_save(user_id, rid)
     if outcome.status == 'duplicate':
         raise _Conflict(outcome.activity_id)
     scheduler = current_app.extensions.get('scheduler')
@@ -202,4 +210,4 @@ def _still_exists(db, reference) -> bool:
 
 class _Conflict(ApiError):
     def __init__(self, activity_id):
-        super().__init__('Déjà enregistrée', 409, activity_id=activity_id)
+        super().__init__('Déjà enregistrée', 409, **({'activity_id': activity_id} if activity_id else {}))

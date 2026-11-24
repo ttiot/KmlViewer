@@ -214,7 +214,7 @@ BAD_BODIES = [
     {'points': POINTS, 'activity': 'bike', 'distance_km': 10}, {'points': POINTS, 'activity': 'RUN', 'distance_km': 10}, {'points': POINTS, 'activity': ['run'], 'distance_km': 10},
     {'points': POINTS, 'activity': 'run', 'distance_km': 0}, {'points': POINTS, 'activity': 'run', 'distance_km': 0.9}, {'points': POINTS, 'activity': 'run', 'distance_km': 301},
     {'points': POINTS, 'activity': 'run', 'distance_km': -5}, {'points': POINTS, 'activity': 'run', 'distance_km': '10'}, {'points': POINTS, 'activity': 'run', 'distance_km': True},
-    {'points': POINTS, 'activity': 'run', 'distance_km': [10]},
+    {'points': POINTS, 'activity': 'run', 'distance_km': [10]}, {'points': POINTS, 'activity': 'run', 'distance_km': 10 ** 30},
     {'points': POINTS, 'activity': 'run', 'distance_km': 10, 'seed': -1}, {'points': POINTS, 'activity': 'run', 'distance_km': 10, 'seed': 2 ** 31},
     {'points': POINTS, 'activity': 'run', 'distance_km': 10, 'seed': 1.5}, {'points': POINTS, 'activity': 'run', 'distance_km': 10, 'seed': '1'},
     {'points': POINTS, 'activity': 'run', 'distance_km': 10, 'seed': True}, {'points': POINTS, 'activity': 'run', 'distance_km': 10, 'seed': [1]},
@@ -235,7 +235,7 @@ def test_every_invalid_request_is_a_400_without_any_engine_call_and_is_not_count
 
 @pytest.mark.xfail(strict=True, reason="T-TR5-A (défaut) : distance_km = entier JSON de 400 chiffres => OverflowError dans math.isfinite() de "
                                        "builder._validated_target : 500 au lieu de 400 sur une route publique de la bêta (même classe que le type float du registre, déjà traitée)")
-@pytest.mark.parametrize('value', [10 ** 400, -10 ** 400, 10 ** 30, 2 ** 1030])
+@pytest.mark.parametrize('value', [10 ** 400, -10 ** 400, 2 ** 1030])
 def test_a_huge_integer_distance_is_a_400_never_a_500(world, value):
     body = {'points': POINTS, 'activity': 'run', 'distance_km': value}
     r = world.post(world.a, 'route', body, raw=json.dumps(body))

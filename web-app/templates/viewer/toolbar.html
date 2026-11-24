@@ -47,7 +47,10 @@
         <button type="button" class="btn btn-outline-secondary" id="rbCancel" hidden>Annuler</button>
         <button type="button" class="btn btn-outline-secondary" id="rbUndo" disabled>Annuler le dernier</button>
         <button type="button" class="btn btn-outline-secondary" id="rbRedo" disabled>Rétablir</button>
-        <button type="button" class="btn btn-outline-secondary" id="rbClear" disabled>Effacer</button>
+        <button type="button" class="btn btn-outline-secondary" id="rbClear" disabled>Tout effacer</button>
+        <span id="rbClearConfirm" hidden>Effacer tous les points ?
+            <button type="button" class="btn btn-sm btn-danger" id="rbClearYes">Confirmer</button>
+            <button type="button" class="btn btn-sm btn-link" id="rbClearNo">Annuler</button></span>
         <button type="button" class="btn btn-link" id="rbClose">Fermer</button>
     </div>
     <p class="hint" id="rbMessage" role="status" aria-live="polite"></p>
