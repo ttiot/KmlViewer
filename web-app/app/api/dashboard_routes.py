@@ -3,6 +3,7 @@
 from flask import current_app, jsonify, request
 
 from app.api import bp
+from app.settings import effective
 from app.api.payload import type_filter
 from app.auth import current_user_id
 from app.db import get_db
@@ -27,6 +28,6 @@ def dashboard():
         raise ApiError(f"Période invalide ({', '.join(dashboard_service.PERIODS)})")
     activity_type = type_filter()
     db, user_id = get_db(), current_user_id()
-    stats = dashboard_service.period_stats(db, user_id, period, current_app.config['APP_TIMEZONE'],
+    stats = dashboard_service.period_stats(db, user_id, period, effective(current_app.config, 'APP_TIMEZONE'),
                                            activity_type, year=_year_arg())
     return jsonify({'stats': stats, 'records': dashboard_service.records(db, user_id, activity_type)})

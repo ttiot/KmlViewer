@@ -90,8 +90,11 @@ class ThreadExecutor:
             except Exception:  # noqa: BLE001 - le thread de travail survit à tout (fn journalise déjà)
                 logger.exception("Tâche longue : erreur inattendue")
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 30.0) -> bool:
+        """Arrête le thread de travail APRÈS la tâche en cours. Retourne vrai s'il s'est arrêté dans le délai."""
         self._queue.put(None)
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
 
 
 class FileLock:
@@ -139,6 +142,12 @@ def default_tasks(wall_clock: Callable = lambda: datetime.now(timezone.utc)) -> 
     def purge_run(db, cfg):
         return audit.purge(db, effective(cfg, 'audit.retention_days'), now=wall_clock())
 
+    def dem_run(db, cfg):
+        if not dem_service.is_enabled(cfg):
+            dem_service.audit_refusal(db, cfg)      # configurée mais hors OUTBOUND_ALLOWED_HOSTS : refus audité (dédoublonné)
+            return 0
+        return ingest_service.backfill_elevation(db, cfg)
+
     def reload_run(db, cfg):
         store = cfg.get(STORE_KEY)
         if store is not None:
@@ -149,9 +158,8 @@ def default_tasks(wall_clock: Callable = lambda: datetime.now(timezone.utc)) -> 
         Task('audit_purge', purge_run, interval=lambda cfg: AUDIT_PURGE_INTERVAL, shared=True),
         Task('inbox', inbox_run, interval=lambda cfg: effective(cfg, 'INBOX_SCAN_INTERVAL'),
              enabled=lambda cfg: bool(effective(cfg, 'INBOX_ENABLED')), shared=True, long=True),
-        Task('dem_backfill', lambda db, cfg: ingest_service.backfill_elevation(db, cfg),
-             interval=lambda cfg: effective(cfg, 'DEM_BACKFILL_INTERVAL'),
-             enabled=lambda cfg: dem_service.is_enabled(cfg), shared=True, long=True),
+        Task('dem_backfill', dem_run, interval=lambda cfg: effective(cfg, 'DEM_BACKFILL_INTERVAL'),
+             enabled=lambda cfg: bool(dem_service.dem_url(cfg)), shared=True, long=True),
     ]
 
 
@@ -200,8 +208,11 @@ class Scheduler:
             if own:
                 db.close()
 
-    def _execute(self, task: Task) -> None:
-        """Corps d'une exécution : connexion propre, exception journalisée, état mis à jour."""
+    def _execute(self, task: Task, now: Optional[float] = None) -> None:
+        """
+        Corps d'une exécution : connexion propre, exception journalisée, état mis à jour. `now` : horloge du tour pour
+        une tâche courte (l'échéance se compte depuis le début du tour) ; une tâche longue date sa fin avec l'horloge.
+        """
         state = self.state[task.name]
         error = None
         try:
@@ -217,7 +228,7 @@ class Scheduler:
             state.last_error = error
             state.runs += 1
             state.running = False
-            state.last_run = None if state.rerun else self.clock()
+            state.last_run = None if state.rerun else (self.clock() if now is None else now)
             state.rerun = False
 
     def _due(self, task: Task, now: float) -> bool:
@@ -251,8 +262,7 @@ class Scheduler:
             else:
                 with self._mutex:
                     state.running = True
-                self._execute(task)
-                state.last_run = now        # l'échéance se compte depuis le début du tour (horloge injectée)
+                self._execute(task, now)
             launched.append(task.name)
         return launched
 
@@ -289,12 +299,23 @@ class Scheduler:
                 logger.exception("Ordonnanceur : tour en erreur, nouvel essai au prochain")
             self._wake.wait(TICK_SECONDS)
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 30.0) -> bool:
+        """
+        Arrêt propre. Le verrou fichier n'est libéré que si AUCUNE tâche n'est plus en cours : libérer pendant qu'une
+        tâche partagée tourne laisserait un autre processus la lancer en même temps (double exécution). Sinon il est
+        gardé jusqu'à la sortie du processus (le système le libère alors). Retourne vrai si le verrou a été libéré.
+        """
         self._stop.set()
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=10)
         stop_executor = getattr(self.executor, 'stop', None)
         if stop_executor:
-            stop_executor()
+            stop_executor(timeout)
+        with self._mutex:
+            busy = [name for name, state in self.state.items() if state.running]
+        if busy:
+            logger.warning("Arrêt de l'ordonnanceur : tâche(s) %s encore en cours, verrou conservé", ', '.join(busy))
+            return False
         self.lock.release()
+        return True

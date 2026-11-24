@@ -155,8 +155,8 @@ def test_global_time_budget_stops_a_long_trace(monkeypatch):
 def test_request_timeout_never_exceeds_what_is_left(monkeypatch):
     seen = []
     serve(monkeypatch, lambda lat, lon: 800.0, calls=seen)
-    dem_service.fetch_elevations([45.0], [6.0], {**CFG, 'DEM_TIMEOUT': 15, 'DEM_TOTAL_TIMEOUT': 5})
-    assert 0 < seen[0]['timeout'] <= 5 and seen[0]['allow_redirects'] is False
+    dem_service.fetch_elevations([45.0], [6.0], {**CFG, 'DEM_TIMEOUT': 15, 'DEM_TOTAL_TIMEOUT': 10})     # bornes du registre : 10 s au moins
+    assert 0 < seen[0]['timeout'] <= 10 and seen[0]['allow_redirects'] is False
 
 
 def test_url_must_be_http(monkeypatch):

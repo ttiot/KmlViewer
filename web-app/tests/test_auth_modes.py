@@ -211,7 +211,7 @@ def test_password_mode_without_session_closes_every_route_and_creates_no_local_a
         response = client.get(url, **kw)
         assert response.status_code in (401, 302), (url, response.status_code)
         if response.status_code == 302:
-            assert '/auth/login' in response.headers['Location'], url
+            assert '/auth/password/login' in response.headers['Location'], url
         checked += 1
     assert checked > 20
     for method, url in (('post', '/api/activities'), ('patch', '/api/users/1'), ('delete', '/api/activities/1'),
@@ -227,10 +227,11 @@ def test_password_mode_login_page_does_not_redirect_in_a_loop(tmp_path):
     app = password_app(tmp_path)
     client, kw = client_of(app)
     response = client.get('/', **kw)
-    assert response.status_code == 302 and '/auth/login' in response.headers['Location']
-    login = client.get('/auth/login', **kw)
-    assert login.status_code == 503 and 'pas encore disponible' in login.get_data(as_text=True)
-    assert client.get('/auth/callback', **kw).status_code == 302        # OIDC inactif : retour à l'accueil, jamais d'erreur
+    assert response.status_code == 302 and '/auth/password/login' in response.headers['Location']
+    entry = client.get('/auth/login', **kw)                                  # l'entrée générique renvoie vers la page du mode
+    assert entry.status_code == 302 and '/auth/password/login' in entry.headers['Location']
+    assert client.get('/auth/password/login', **kw).status_code == 200
+    assert client.get('/auth/callback', **kw).status_code == 302            # OIDC inactif : retour à l'accueil, jamais d'erreur
 
 
 def test_local_mode_is_the_only_one_that_creates_the_local_account(tmp_path):

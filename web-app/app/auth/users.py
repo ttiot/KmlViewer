@@ -6,6 +6,8 @@ import secrets
 import sqlite3
 from typing import List, Mapping, Optional
 
+from app.auth import emails
+
 logger = logging.getLogger(__name__)
 
 LOCAL_SUB = 'local'
@@ -108,11 +110,18 @@ def match_login(db: sqlite3.Connection, login: str, active_only: bool = False) -
     comparé aux emails, sinon aux usernames, jamais aux deux : un compte dont le username
     serait l'email d'un autre ne peut pas se faire passer pour lui.
     """
-    column = 'email' if '@' in login else 'username'
-    sql = f"SELECT * FROM users WHERE sub != ? AND lower({column}) = lower(?)"
+    if '@' in login:
+        # Adresse : forme canonique (NFKC + casefold) comparée à la valeur stockée telle quelle, sans lower() SQL (EF-4.10)
+        wanted = emails.canonical_or_none(login)
+        if wanted is None:
+            return []
+        clause, value = "email = ?", wanted
+    else:
+        clause, value = "lower(username) = lower(?)", login
+    sql = f"SELECT * FROM users WHERE sub != ? AND {clause}"
     if active_only:
         sql += " AND is_active = 1"
-    return db.execute(sql + " ORDER BY id", (LOCAL_SUB, login)).fetchall()
+    return db.execute(sql + " ORDER BY id", (LOCAL_SUB, value)).fetchall()
 
 
 def find_by_login(db: sqlite3.Connection, login: str) -> Optional[sqlite3.Row]:
@@ -150,7 +159,8 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
 
     # Seul un email que l'IdP déclare vérifié identifie quelqu'un (il désigne un dossier de
     # l'inbox) : sans claim email_verified à true, il n'est pas retenu
-    email = claims.get('email') if claims.get('email_verified') is True else None
+    # Forme canonique (EF-4.10) : un compte SSO ne peut pas contourner l'unicité des adresses par la casse
+    email = emails.canonical_or_none(claims.get('email')) if claims.get('email_verified') is True else None
     username = claims.get('preferred_username') or email or sub
     display_name = (claims.get('name')
                     or ' '.join(filter(None, [claims.get('given_name'), claims.get('family_name')]))
@@ -175,7 +185,25 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
             f"UPDATE users SET email = ?, username = ?, display_name = ?, is_admin = ?, last_login = {_NOW} "
             "WHERE id = ?", (email, username, display_name, int(is_admin), row['id']))
     db.commit()
-    return db.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
+    result = db.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
+    if email and (row is None or row['email'] != email):
+        _flag_email_collision(db, result)
+    return result
+
+
+def _flag_email_collision(db, user) -> None:
+    """
+    Un compte SSO prend une adresse déjà portée (ou en attente) ailleurs : tolérée côté SSO (EF-1.2, l'IdP ne se refuse pas),
+    mais signalée : WARNING et audit `identity.collision` (une fois, quand l'adresse change ou à la création).
+    """
+    others = [r['id'] for r in db.execute(
+        "SELECT id FROM users WHERE id != ? AND (email = ? OR pending_email = ?)", (user['id'], user['email'], user['email']))]
+    if not others:
+        return
+    from app import audit
+    logger.warning("Collision d'identité : le compte #%s partage son adresse avec %d autre(s) compte(s)", user['id'], len(others))
+    audit.record(db, 'identity.collision', actor=audit.Actor.system(), target_type='user', target_id=user['id'],
+                 details={'kind': 'adresse', 'accounts': [user['id'], *others][:20]})
 
 
 def to_dict(row: sqlite3.Row) -> dict:

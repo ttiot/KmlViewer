@@ -118,7 +118,7 @@ def test_no_token_in_any_exception_message_or_traceback(conn):
     import traceback
     new = tokens.create(conn, 'invite', actor=CLI)
     for call in (lambda: tokens.create(conn, 'invite', actor=CLI, email=new.token), lambda: tokens.create(conn, 'invite', actor=CLI, note=new.token * 5),
-                 lambda: tokens.create(conn, 'invite', actor=CLI, created_by=999), lambda: tokens.consume(conn, new.token, used_by=999)):
+                 lambda: tokens.create(conn, 'invite', actor=CLI, created_by=999), lambda: tokens.consume(conn, new.token, used_by=999, kind='invite')):
         with pytest.raises(Exception) as exc:      # noqa: B017 - on veut tout type d'exception
             call()
         assert new.token not in ''.join(traceback.format_exception(exc.value)) + repr(exc.value) + str(exc.value)
@@ -132,7 +132,7 @@ def test_the_token_is_never_stored_logged_or_audited_through_the_whole_life_cycl
         created.append(tokens.create(conn, 'bootstrap', actor=CLI, is_admin_grant=True, email='b@example.org'))
         for new in created:
             tokens.inspect(conn, new.token)
-        infos = [tokens.consume(conn, new.token, used_by=1) for new in created[:3]]
+        infos = [tokens.consume(conn, new.token, used_by=1, kind=kind) for new, kind in zip(created, ('invite', 'reset', 'verify_email'))]
         for new in created[3:]:
             tokens.revoke(conn, new.id, actor=CLI)
         tokens.revoke_pending_for_creator(conn, 1, actor=CLI)
@@ -151,7 +151,7 @@ def hash_of(token):
 def test_the_hash_is_the_only_trace_and_cannot_be_used_as_a_token(conn):
     new = tokens.create(conn, 'invite', actor=CLI)
     digest = tokens.hash_token(new.token)
-    assert len(digest) == 64 and tokens.inspect(conn, digest) is None and tokens.consume(conn, digest) is None
+    assert len(digest) == 64 and tokens.inspect(conn, digest) is None and tokens.consume(conn, digest, kind='invite') is None
 
 
 @pytest.mark.parametrize('ttl,ok', [(timedelta(hours=1), True), (timedelta(days=30), True), (timedelta(hours=1, seconds=1), True),
@@ -182,9 +182,9 @@ def test_expiry_is_evaluated_in_utc_whatever_the_timezone_of_now(conn):
 
 def test_a_clock_going_backwards_never_extends_a_token_that_was_used_or_revoked(conn):
     used = tokens.create(conn, 'invite', actor=CLI, now=NOW)
-    assert tokens.consume(conn, used.token, now=NOW + timedelta(hours=1))
+    assert tokens.consume(conn, used.token, now=NOW + timedelta(hours=1), kind='invite')
     assert tokens.inspect(conn, used.token, now=NOW - timedelta(days=365)) is None
-    assert tokens.consume(conn, used.token, now=NOW - timedelta(days=365)) is None
+    assert tokens.consume(conn, used.token, now=NOW - timedelta(days=365), kind='invite') is None
     revoked = tokens.create(conn, 'invite', actor=CLI, now=NOW)
     tokens.revoke(conn, revoked.id, actor=CLI, now=NOW)
     assert tokens.inspect(conn, revoked.token, now=NOW - timedelta(days=1)) is None
@@ -198,7 +198,7 @@ def test_malformed_and_enormous_tokens_get_the_unknown_answer_without_touching_t
     statements = []
     conn.set_trace_callback(statements.append)
     started = time.monotonic()
-    assert tokens.inspect(conn, bad) is None and tokens.consume(conn, bad) is None and tokens.hash_token(bad) is None
+    assert tokens.inspect(conn, bad) is None and tokens.consume(conn, bad, kind='invite') is None and tokens.hash_token(bad) is None
     assert time.monotonic() - started < 1
     conn.set_trace_callback(None)
     assert statements == []                                                     # forme invalide : aucune requête
@@ -207,7 +207,7 @@ def test_malformed_and_enormous_tokens_get_the_unknown_answer_without_touching_t
 def test_a_well_formed_but_unknown_token_costs_one_read_exactly_like_an_expired_or_used_one(conn):
     expired = tokens.create(conn, 'invite', actor=CLI, now=NOW - timedelta(days=30))
     used = tokens.create(conn, 'invite', actor=CLI)
-    tokens.consume(conn, used.token)
+    tokens.consume(conn, used.token, kind='invite')
     probes = [expired.token, used.token, 'B' * 43]
     shapes = []
     for probe in probes:
@@ -241,7 +241,7 @@ def test_consume_and_revoke_race_has_exactly_one_winner_every_time(tmp_path):
         c = database.connect(path)
         try:
             barrier.wait(10)
-            outcome.setdefault(('consume', new.id), []).append(tokens.consume(c, new.token) is not None)
+            outcome.setdefault(('consume', new.id), []).append(tokens.consume(c, new.token, kind='invite') is not None)
         finally:
             c.close()
 
@@ -280,7 +280,7 @@ def test_sixteen_simultaneous_consumptions_across_processes_threads_yield_one_su
         c = database.connect(path)
         try:
             barrier.wait(10)
-            results.append(tokens.consume(c, new.token))
+            results.append(tokens.consume(c, new.token, kind='bootstrap'))
         finally:
             c.close()
 
@@ -294,7 +294,7 @@ def test_sixteen_simultaneous_consumptions_across_processes_threads_yield_one_su
 def test_a_failed_account_creation_after_consumption_leaves_the_token_usable_and_untraced(conn):
     new = tokens.create(conn, 'invite', actor=CLI, email='a@example.org')
     with pytest.raises(sqlite3.IntegrityError), database.write_transaction(conn):
-        assert tokens.consume(conn, new.token, used_by=1)
+        assert tokens.consume(conn, new.token, used_by=1, kind='invite')
         conn.execute("INSERT INTO users (sub, username) VALUES ('s1', 'doublon')")           # sub déjà pris : échec
     assert tokens.inspect(conn, new.token) == 'choose_credentials'
 
@@ -302,7 +302,7 @@ def test_a_failed_account_creation_after_consumption_leaves_the_token_usable_and
 def test_consuming_with_an_unknown_used_by_is_atomic(conn):
     new = tokens.create(conn, 'invite', actor=CLI)
     with pytest.raises(sqlite3.IntegrityError):
-        tokens.consume(conn, new.token, used_by=999)
+        tokens.consume(conn, new.token, used_by=999, kind='invite')
     assert tokens.inspect(conn, new.token) == 'choose_credentials' and not conn.in_transaction
 
 
@@ -318,7 +318,7 @@ def test_deleting_the_target_account_takes_its_bootstrap_token_with_it(conn):
     new = tokens.create(conn, 'bootstrap', actor=CLI, is_admin_grant=True, target_user_id=1)
     conn.execute("DELETE FROM users WHERE id = 1")
     conn.commit()
-    assert tokens.inspect(conn, new.token) is None and tokens.consume(conn, new.token) is None      # pas de jeton orphelin utilisable
+    assert tokens.inspect(conn, new.token) is None and tokens.consume(conn, new.token, kind='invite') is None      # pas de jeton orphelin utilisable
 
 
 def test_many_tokens_stay_unique_and_hashes_never_collide(conn):
@@ -804,5 +804,5 @@ def test_t8_4_the_inbox_still_serves_the_local_mode_when_it_is_explicit(tmp_path
 def test_consumption_at_the_exact_expiry_second_is_refused_and_one_second_before_is_accepted(conn):
     early = tokens.create(conn, 'invite', actor=CLI, now=NOW, ttl=timedelta(hours=2))
     on_time = tokens.create(conn, 'invite', actor=CLI, now=NOW, ttl=timedelta(hours=2))
-    assert tokens.consume(conn, early.token, now=NOW + timedelta(hours=2)) is None                      # échéance : refusé
-    assert tokens.consume(conn, on_time.token, now=NOW + timedelta(hours=2) - timedelta(seconds=1)) is not None
+    assert tokens.consume(conn, early.token, now=NOW + timedelta(hours=2), kind='invite') is None                      # échéance : refusé
+    assert tokens.consume(conn, on_time.token, now=NOW + timedelta(hours=2) - timedelta(seconds=1), kind='invite') is not None

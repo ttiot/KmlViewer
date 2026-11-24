@@ -350,6 +350,56 @@ def _auth_tokens(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_tokens_creator ON auth_tokens (created_by)")
 
 
+def _users_password_accounts(conn: sqlite3.Connection) -> None:
+    """
+    0013 - comptes à mot de passe et invitations (admin-space §7, EF-1.2, EF-3.1, EF-4.3) : hash, adresse en attente
+    et validée, crédits d'invitation, émetteur, et unicité PARTIELLE (comptes `password` seulement : un compte SSO
+    ne peut pas être refusé à la connexion). Colonnes et index dépendants dans la même migration.
+    """
+    for column, definition in (
+            ('password_hash', 'TEXT'), ('password_changed_at', 'TEXT'), ('pending_email', 'TEXT'),
+            ('email_verified_at', 'TEXT'),
+            ('invite_credits', 'INTEGER NOT NULL DEFAULT 0 CHECK (invite_credits BETWEEN 0 AND 1000)'),
+            ('invited_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL')):
+        _add_column(conn, 'users', column, definition)
+    # Identifiant : ASCII [a-z0-9._-] (EF-1.2), lower() suffit. Adresse : forme canonique stockée (EF-4.10), comparée
+    # telle quelle.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_users_password_username ON users (lower(username)) "
+                 "WHERE auth_method = 'password'")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_users_password_email ON users (email) "
+                 "WHERE auth_method = 'password' AND email IS NOT NULL")
+
+
+def _emails_canonical(conn: sqlite3.Connection) -> None:
+    """
+    0014 - adresses sous forme canonique (EF-4.10, §13 n°32) : `email` et `pending_email` de TOUS les comptes (SSO compris)
+    deviennent `NFKC(strip).casefold()`. Idempotente. Si deux comptes se retrouvent avec la même adresse (ou qu'un index
+    unique partiel refuse la réécriture), la migration N'ÉCHOUE PAS : la ligne reste telle quelle, WARNING et audit
+    `identity.collision`.
+    """
+    from app.auth.emails import canonical_or_none
+    collisions = set()
+    for column in ('email', 'pending_email'):
+        for row in conn.execute(f"SELECT id, {column} AS value FROM users WHERE {column} IS NOT NULL").fetchall():
+            wanted = canonical_or_none(row['value'])
+            if wanted is None or wanted == row['value']:
+                continue
+            try:
+                conn.execute(f"UPDATE users SET {column} = ? WHERE id = ?", (wanted, row['id']))
+            except sqlite3.IntegrityError:
+                collisions.add(row['id'])           # un compte password porte déjà cette adresse : on ne réécrit pas
+    for column in ('email', 'pending_email'):
+        for row in conn.execute(f"SELECT {column} AS value, group_concat(id) AS ids FROM users WHERE {column} IS NOT NULL "
+                                f"GROUP BY {column} HAVING COUNT(*) > 1").fetchall():
+            collisions.update(int(i) for i in row['ids'].split(','))
+    if collisions:
+        logger.warning("Migration des adresses : %d compte(s) en collision d'adresse (identity.collision) : %s", len(collisions),
+                       ', '.join(f"#{i}" for i in sorted(collisions)[:20]))
+        from app import audit
+        audit.record(conn, 'identity.collision', actor=audit.Actor.system(), target_type='user', target_id='migration',
+                     details={'kind': 'adresse', 'accounts': sorted(collisions)[:50]})
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
 # dernière passée. SCHEMA décrit l'état final de ces 5 migrations positionnelles : une base neuve le reçoit
 # directement, puis chacune est un no-op. Les tables ajoutées depuis (ADR-0012) ne sont créées que par
@@ -395,6 +445,8 @@ NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ('0010_feature_flags', _feature_tables),
     ('0011_activities_kind', _activities_kind),
     ('0012_auth_tokens', _auth_tokens),
+    ('0013_users_password_accounts', _users_password_accounts),
+    ('0014_emails_canonical', _emails_canonical),
 ]
 
 _MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')

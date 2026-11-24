@@ -85,7 +85,8 @@ def test_session_cookie_is_secure_by_default_with_oidc(tmp_path, monkeypatch, ca
 # --- Comptes : rien n'est accordé par défaut ---------------------------------------------------
 
 def test_new_accounts_wait_for_activation_by_default(tmp_path, monkeypatch):
-    assert Config.OIDC_AUTO_ACTIVATE is False  # défaut de l'application, sans variable d'environnement
+    from app.settings import effective
+    assert Config.OIDC_AUTO_ACTIVATE is None and effective({'OIDC_AUTO_ACTIVATE': Config.OIDC_AUTO_ACTIVATE}, 'OIDC_AUTO_ACTIVATE') is False  # défaut de l'application, sans variable d'environnement
     app = _app(tmp_path, OIDC_AUTO_ACTIVATE=Config.OIDC_AUTO_ACTIVATE, **PROD_OIDC)
     monkeypatch.setattr(oidc.oauth.oidc, 'authorize_access_token',
                         lambda: {'userinfo': {'sub': 'first', 'preferred_username': 'first'}})
@@ -164,7 +165,7 @@ def test_watcher_starts_under_gunicorn_even_in_development_config(tmp_path, monk
     monkeypatch.delenv('FLASK_RUN_FROM_CLI', raising=False)
     app = _app(tmp_path)
     started.clear()                       # create_app a lui-même démarré l'ordonnanceur (mode servi : toujours, EF-10.1)
-    app.config.update(TESTING=False, INBOX_ENABLED=True)
+    app.config.update(TESTING=False, INBOX_ENABLED=True, SCHEDULER_ENABLED=True)
     app.debug = True
 
     monkeypatch.delenv('SERVER_SOFTWARE', raising=False)

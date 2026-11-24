@@ -1,0 +1,28 @@
+{% extends 'layout.html' %}
+{% block title %}Lien à usage unique · KmlViewer{% endblock %}
+{% block content %}
+{# Page statique : aucune donnée du jeton n'est rendue côté serveur (le jeton est dans le fragment de l'URL). #}
+<meta name="csrf-token" content="{{ csrf_token }}">
+<section class="panel auth-card" id="tokenCard" aria-live="polite">
+    <h1 class="h4 mb-0" id="tokenTitle">Vérification du lien…</h1>
+    <p class="mb-0" id="tokenMessage">Un instant.</p>
+    <form id="tokenForm" class="d-none" autocomplete="off" novalidate>
+        <div class="mb-2" id="usernameRow">
+            <label class="form-label" for="tokenUsername">Identifiant</label>
+            <input class="form-control" id="tokenUsername" name="username" autocomplete="username"
+                   minlength="3" maxlength="64" pattern="[a-z0-9._-]+" spellcheck="false">
+            <div class="hint">3 à 64 caractères : lettres minuscules, chiffres, « . », « _ » et « - ».</div>
+        </div>
+        <div class="mb-2" id="passwordRow">
+            <label class="form-label" for="tokenPassword">Mot de passe</label>
+            <input class="form-control" type="password" id="tokenPassword" name="password" autocomplete="new-password"
+                   minlength="12" maxlength="128">
+            <div class="hint">12 caractères au moins ; une phrase de passe convient très bien.</div>
+        </div>
+        <button class="btn btn-primary" type="submit" id="tokenSubmit">Valider</button>
+    </form>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/token.js') }}"></script>
+{% endblock %}

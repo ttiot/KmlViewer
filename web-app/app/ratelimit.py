@@ -27,6 +27,7 @@ remplacer par un stockage partagé.
 """
 
 import hmac
+import ipaddress
 import math
 import os
 import threading
@@ -48,6 +49,23 @@ ACCOUNT_LRU_SIZE = 100_000
 def normalize_key(value) -> str:
     """Forme de comparaison d'un identifiant ou d'une adresse saisis : NFKC, casefold, sans blancs de bord."""
     return unicodedata.normalize('NFKC', str(value)).strip().casefold()
+
+
+def ip_key(address) -> str:
+    """
+    Clé de limitation par IP (T6-1) : IPv4 telle quelle ; IPv6 ramenée à son préfixe /64 (un client en dispose de 2^64) ;
+    adresse IPv4 mappée (`::ffff:a.b.c.d`) ramenée en IPv4. Une adresse illisible partage une clé unique : jamais de
+    contournement.
+    """
+    try:
+        ip = ipaddress.ip_address(str(address).strip())
+    except ValueError:
+        return 'invalid'
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
 
 
 class RateLimiter(ABC):

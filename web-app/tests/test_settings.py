@@ -71,9 +71,11 @@ def test_registry_keeps_security_settings_out_of_the_registry():
     forbidden = ('SECRET_KEY', 'SECRETS_KEY', 'AUTH_MODE', 'OIDC', 'PUBLIC_URL', 'WEBAUTHN', 'OUTBOUND', 'TRUSTED_HOSTS',
                  'TRUST_PROXY', 'SESSION', 'DATA_DIR', 'DB_PATH', 'LOG_LEVEL')
     for key in REGISTRY:
+        if key == 'OIDC_AUTO_ACTIVATE':         # seule exception, listée par EF-6.5 (comptes et sécurité)
+            continue
         assert not any(f.lower() in key.lower() for f in forbidden), key
         env_name = REGISTRY[key].env or ''
-        assert not any(f in env_name for f in forbidden), key
+        assert key == 'OIDC_AUTO_ACTIVATE' or not any(f in env_name for f in forbidden), key
 
 
 def test_limiter_thresholds_in_the_registry_match_the_spec_bounds():
@@ -192,7 +194,7 @@ def test_write_is_validated_and_the_batch_is_all_or_nothing(store, conn):
 
 
 @pytest.mark.parametrize('changes', [{'SECRET_KEY': 'x'}, {'AUTH_MODE': 'local'}, {'OUTBOUND_ALLOWED_HOSTS': 'a'},
-                                     {'smtp.host': 'evil'}, {'': 1}])
+                                     {'smtp.bogus': 'evil'}, {'': 1}])
 def test_keys_outside_the_registry_are_refused(store, conn, changes):
     """CA-21 : aucun réglage de EF-6.6 n'est stockable."""
     with pytest.raises(SettingsError):

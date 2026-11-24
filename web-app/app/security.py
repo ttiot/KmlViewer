@@ -30,7 +30,6 @@ CSP_DIRECTIVES = (
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    "img-src 'self' data: blob: https:",
     "connect-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
@@ -50,7 +49,7 @@ class SqliteIntConverter(IntegerConverter):
             self.max = SQLITE_MAX_INT
 
 
-def content_security_policy(oidc_issuer: str = '') -> str:
+def content_security_policy(oidc_issuer: str = '', image_hosts=()) -> str:
     """
     Politique de l'application. Avec l'OIDC, le formulaire de déconnexion est redirigé vers
     l'IdP (end_session) : Chrome applique form-action aux redirections, son origine est donc
@@ -60,7 +59,10 @@ def content_security_policy(oidc_issuer: str = '') -> str:
     issuer = urlsplit(oidc_issuer or '')
     if issuer.scheme and issuer.netloc:
         form_targets.append(f"{issuer.scheme}://{issuer.netloc}")
-    return "; ".join([*CSP_DIRECTIVES, "form-action " + " ".join(form_targets)])
+    # Images (R1) : 'self', data:, blob: et EXACTEMENT les hôtes de tuiles autorisés (calculés au démarrage depuis l'env) ;
+    # plus de `https:` : un fond de carte hors liste ne peut pas faire fuiter l'IP ni les zones consultées
+    img_src = "img-src " + " ".join(["'self'", 'data:', 'blob:', *sorted(image_hosts)])
+    return "; ".join([*CSP_DIRECTIVES, img_src, "form-action " + " ".join(form_targets)])
 
 
 def _reject_untrusted_host():
@@ -83,6 +85,31 @@ def _reject_untrusted_host():
     raise request.routing_exception
 
 
+def _origin_tuple(url: str):
+    """(schéma, hôte, port effectif) d'une origine, ou None si elle est inutilisable."""
+    try:
+        parts = urlsplit(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in ('http', 'https') or not host or parts.username is not None or parts.password is not None:
+        return None                    # « https://evil@hôte » n'est pas l'origine de « hôte »
+    return parts.scheme, host.lower(), port if port is not None else (443 if parts.scheme == 'https' else 80)
+
+
+def _origin_matches(origin: str) -> bool:
+    """
+    L'Origin d'une requête modifiante doit être la NÔTRE. Avec PUBLIC_URL (obligatoire en mode password) : schéma, hôte et port
+    égaux à ceux de PUBLIC_URL, quel que soit ce que le proxy transmet (derrière un proxy TLS sans TRUST_PROXY l'application
+    voit « http » alors que le navigateur envoie « https »). Sans PUBLIC_URL : hôte et port comparés à l'en-tête Host, sans le
+    schéma (comportement antérieur, que seul un proxy de confiance permet de durcir).
+    """
+    public = current_app.config.get('PUBLIC_URL')
+    if public:
+        return _origin_tuple(origin) == _origin_tuple(public)
+    return urlsplit(origin).netloc == request.host
+
+
 def _check_same_origin():
     """
     Anti-CSRF pour une API à cookie de session : toute requête modifiante émise par un
@@ -92,7 +119,7 @@ def _check_same_origin():
         return None
     origin = request.headers.get('Origin')
     if origin:
-        if urlsplit(origin).netloc != request.host:
+        if not _origin_matches(origin):
             # %r : le chemin est décodé (%0a -> saut de ligne), il ne doit pas forger de ligne de log
             logger.warning("Requête %s %r refusée : origine %r", request.method, request.path, origin)
             return json_error('Origine de la requête refusée', 403)
@@ -122,7 +149,10 @@ def init_security(app) -> None:
     if hosts:
         logger.info("Noms d'hôte acceptés : %s", ', '.join(hosts))
 
-    policy = content_security_policy(app.config.get('OIDC_ISSUER') or '')
+    from app.outbound import Allowlist, img_src_hosts
+    allowlist = app.config.get('OUTBOUND')
+    policy = content_security_policy(app.config.get('OIDC_ISSUER') or '',
+                                     img_src_hosts(allowlist if isinstance(allowlist, Allowlist) else Allowlist()))
 
     def set_security_headers(response):
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')

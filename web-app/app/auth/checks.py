@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from werkzeug.sansio.utils import host_is_trusted
 
 from app.config import DEFAULT_SECRET_KEY
+from app.outbound import Allowlist, OutboundError
 from app.secrets_store import SecretsKeyError, parse_keys
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,12 @@ def check_startup_config(app) -> None:
     config = app.config
     mode = _auth_mode(config)
     config['AUTH_MODE'] = mode
+
+    # Liste blanche des destinations sortantes : une entrée invalide arrête le démarrage (CA-42, CA-52)
+    try:
+        config['OUTBOUND'] = Allowlist.parse(config.get('OUTBOUND_ALLOWED_HOSTS') or os.environ.get('OUTBOUND_ALLOWED_HOSTS'))
+    except OutboundError as exc:
+        raise RuntimeError(str(exc)) from None
 
     # PUBLIC_URL : validée dès qu'elle est renseignée, quel que soit le mode, et normalisée
     if config.get('PUBLIC_URL'):

@@ -19,12 +19,12 @@ import hmac
 import logging
 import re
 import secrets
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional
 
 from app import audit
+from app.auth.emails import MAX_EMAIL, canonical_email  # noqa: F401 - ré-exportés
 from app.db import write_transaction
 from app.security import SQLITE_MAX_INT
 
@@ -40,7 +40,6 @@ MIN_TTL, MAX_TTL = timedelta(hours=1), timedelta(days=30)          # EF-6.5 : va
 FORM_FOR_KIND = {'invite': 'choose_credentials', 'bootstrap': 'choose_credentials', 'reset': 'set_password',
                  'set_password': 'set_password', 'verify_email': 'verify_email'}
 MAX_NOTE = 200
-MAX_EMAIL = 254
 MAX_CREDITS = 1000
 _TOKEN_SHAPE = re.compile(r'[A-Za-z0-9_-]{43}')                  # token_urlsafe(32) : 43 caractères
 _TIME_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
@@ -91,20 +90,6 @@ def _stamp(moment: Optional[datetime]) -> str:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc).strftime(_TIME_FORMAT)
-
-
-def canonical_email(email) -> str:
-    """
-    Forme canonique d'une adresse (§13 n°32) : blancs de bord retirés, puis NFKC et casefold. TOUTE comparaison
-    d'adresses (unicité, invitation en attente) se fait sur cette forme, jamais sur la saisie brute. Lève ValueError.
-    """
-    if not isinstance(email, str) or len(email) > MAX_EMAIL * 2 or not email.strip():
-        raise ValueError("Adresse e-mail invalide")
-    value = unicodedata.normalize('NFKC', email.strip()).casefold()
-    if (len(value) > MAX_EMAIL or '@' not in value
-            or any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f for c in value)):
-        raise ValueError("Adresse e-mail invalide")
-    return value
 
 
 def _clean_email(email) -> Optional[str]:
@@ -167,28 +152,42 @@ def inspect(conn, token, now: Optional[datetime] = None) -> Optional[str]:
     return FORM_FOR_KIND[row['kind']] if row else None
 
 
-def consume(conn, token, *, used_by: Optional[int] = None, kind: Optional[str] = None,
+def peek(conn, token, now: Optional[datetime] = None):
+    """
+    (type, compte visé) INTERNES d'un jeton VALABLE, pour router la consommation, ou None. Jamais renvoyés au client :
+    `inspect` ne révèle que le type de formulaire. Ne consomme rien.
+    """
+    digest = hash_token(token)
+    row = None if digest is None else conn.execute(
+        "SELECT kind, target_user_id FROM auth_tokens WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL "
+        "AND expires_at > ?", (digest, _stamp(now))).fetchone()
+    return (row['kind'], row['target_user_id']) if row else None
+
+
+def kind_of(conn, token, now: Optional[datetime] = None) -> Optional[str]:
+    found = peek(conn, token, now)
+    return found[0] if found else None
+
+
+def consume(conn, token, *, kind: str, used_by: Optional[int] = None,
             target_user_id: Optional[int] = None, now: Optional[datetime] = None) -> Optional[TokenInfo]:
     """
     Consomme le jeton ATOMIQUEMENT (UPDATE conditionnel) et rend ce qu'il porte, ou None (même réponse que
     `inspect` pour tout jeton non valable). À appeler dans la transaction qui crée le compte : si elle échoue, le
     jeton n'est pas consommé. `used_by` : compte créé ou concerné, s'il est déjà connu.
 
-    Contraintes facultatives, dans le MÊME UPDATE conditionnel (R2, CA-17b) : `kind` exige ce type de jeton,
-    `target_user_id` exige que le jeton vise ce compte (ex. `verify_email` consommé seulement avec la session du
-    compte visé). Une contrainte non satisfaite ne consomme RIEN : le jeton reste valable, et la réponse est la même
-    que pour un jeton inconnu.
+    `kind` est OBLIGATOIRE (un oubli ne peut plus consommer un jeton d'un autre type). Dans le MÊME UPDATE conditionnel
+    (R2, CA-17b) : `kind` exige ce type de jeton, `target_user_id` (facultatif) exige que le jeton vise ce compte
+    (ex. `verify_email` consommé seulement avec la session du compte visé). Une contrainte non satisfaite ne
+    consomme RIEN : le jeton reste valable, et la réponse est la même que pour un jeton inconnu.
     """
     digest = hash_token(token)
-    if digest is None or (kind is not None and kind not in KINDS):
+    if digest is None or kind not in KINDS:
         return None
     if target_user_id is not None and (isinstance(target_user_id, bool) or not isinstance(target_user_id, int)
                                        or not 0 < target_user_id <= SQLITE_MAX_INT):
         return None
-    constraints, params = '', []
-    if kind is not None:
-        constraints += " AND kind = ?"
-        params.append(kind)
+    constraints, params = " AND kind = ?", [kind]
     if target_user_id is not None:
         constraints += " AND target_user_id = ?"
         params.append(target_user_id)
@@ -236,3 +235,9 @@ def matches(stored_hash: str, token) -> bool:
     """Comparaison en temps constant d'un jeton avec un hash déjà lu (EF-S4)."""
     digest = hash_token(token)
     return digest is not None and hmac.compare_digest(stored_hash, digest)
+
+
+def mark_sent(conn, token_id: int) -> None:
+    """Note que le lien est aussi parti par e-mail (information pour l'émetteur ; ne valide jamais l'adresse, EF-3.4)."""
+    with write_transaction(conn):
+        conn.execute("UPDATE auth_tokens SET sent_by_mail = 1 WHERE id = ?", (token_id,))

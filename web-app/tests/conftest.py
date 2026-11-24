@@ -95,3 +95,11 @@ def login_as(app, sub, admin=False, **claims):
         session['token'] = token
         session['login_at'] = int(time.time())
     return client, user['id']
+
+
+@pytest.fixture(autouse=True)
+def _fresh_outbound_refusal_log():
+    """`outbound._refusals` (dédoublonnage des refus audités) est global au processus : sans remise à zéro, un test dépend de l'ordre."""
+    from app import outbound
+    outbound._refusals = outbound.RefusalLog()
+    yield

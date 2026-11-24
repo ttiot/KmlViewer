@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 # Seuls ces endpoints sont accessibles sans session. Toute nouvelle route est protégée d'office.
 PUBLIC_ENDPOINTS = frozenset({
     'static', 'auth.login', 'auth.callback', 'auth.logout', 'auth.logged_out', 'api.health_check',
+    # Jetons à usage unique (EF-S8) : publics ; chaque route contrôle elle-même mode, limite, CSRF et session
+    'auth.token_page', 'auth.token_inspect', 'auth.token_consume',
+    # Connexion par mot de passe (EF-1.11) : publiques ; l'étape 2 vérifie elle-même son état `mfa_pending`
+    'auth.password_login', 'auth.password_mfa', 'auth.password_enroll', 'auth.password_forgot',
 })
 
 
@@ -97,7 +101,8 @@ def _load_user_and_guard():
     if g.user is None:
         if is_api_request():
             return json_error('Authentification requise', 401)
-        return redirect(url_for('auth.login', next=request.full_path.rstrip('?')))
+        endpoint = 'auth.password_login' if modes.auth_mode() == 'password' else 'auth.login'
+        return redirect(url_for(endpoint, next=request.full_path.rstrip('?')))
 
     if not g.user['is_active']:
         if is_api_request():

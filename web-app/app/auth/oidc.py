@@ -13,6 +13,7 @@ from flask import current_app, g, redirect, render_template, request, session, u
 from app.auth import bp, modes, users
 from app.auth.guard import oidc_enabled, safe_next
 from app.db import get_db
+from app.settings import effective
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +124,7 @@ def _purge_pending_logins() -> None:
 def login():
     if not oidc_enabled():
         if modes.auth_mode() == 'password':
-            # La connexion par mot de passe arrive avec T10 ; en attendant, une page claire plutôt qu'une boucle
-            # de redirections entre le garde et cette route
-            return render_template('auth_message.html', title='Connexion indisponible',
-                                   message="La connexion par mot de passe n'est pas encore disponible."), 503
+            return redirect(url_for('auth.password_login', next=request.args.get('next', '')))
         return redirect(url_for('main.index'))
     _purge_pending_logins()
     session['next'] = safe_next(request.args.get('next', ''))
@@ -142,7 +140,7 @@ def callback():
         user = users.upsert_from_claims(
             get_db(), _fetch_claims(token),
             admin_role=current_app.config['OIDC_ADMIN_ROLE'],
-            auto_activate=current_app.config['OIDC_AUTO_ACTIVATE'])
+            auto_activate=bool(effective(current_app.config, 'OIDC_AUTO_ACTIVATE')))
         token_value = users.session_token(get_db(), user['id'])
     except Exception:  # noqa: BLE001 - toute erreur OIDC => échec de login propre
         # Détail dans les logs uniquement : rien d'exploitable renvoyé au navigateur

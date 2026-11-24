@@ -21,11 +21,13 @@ from typing import Callable, Mapping, Optional
 
 from app import audit
 from app.db import write_transaction
+from app import outbound
 from app.settings.registry import REGISTRY, Setting
 
 logger = logging.getLogger(__name__)
 
 MASK = '[masqué]'
+SMTP_DESTINATION_KEYS = ('smtp.host', 'smtp.port')
 
 
 class SettingsError(ValueError):
@@ -50,6 +52,11 @@ class SettingsStore:
         self._state = _State()
         self._lock = threading.Lock()
         self._warned = set()
+        # Destinations sortantes (EF-6.8, EF-5.5), branchées par init_settings : `destination_allowed(service, destination)`
+        # valide une écriture (400 sinon) ; `secrets` (SecretsStore) efface les secrets liés quand la destination change
+        self.destination_allowed = None
+        self.tiles_allowed = None             # callable(ensemble d'hôtes) -> bool : fonds de carte contre `tiles=` (R1)
+        self.secrets = None
 
     # -- lecture ---------------------------------------------------------------------------------
     def setting(self, key: str) -> Setting:
@@ -58,17 +65,21 @@ class SettingsStore:
         except KeyError:
             raise KeyError(f"Réglage inconnu : {key!r}") from None
 
-    def get(self, key: str):
+    def get(self, key: str, env: Optional[Mapping] = None):
+        """
+        Valeur effective. `env` (facultatif) : mapping qui tient lieu de couche « environnement » (la copie de
+        configuration d'un appelant) ; par défaut, la couche du store (app.config dans l'application).
+        """
         setting = self.setting(key)
         state = self._state
         if key in state.base:
             return state.base[key]
-        value, _ = self._from_env(setting)
+        value, _ = self._from_env(setting, env)
         return setting.default if value is None else value
 
-    def _from_env(self, setting: Setting):
+    def _from_env(self, setting: Setting, env: Optional[Mapping] = None):
         """(valeur validée ou None, invalide?) pour la variable d'env du réglage."""
-        raw = self._env(setting.env) if setting.env else None
+        raw = (env.get(setting.env) if env is not None else self._env(setting.env)) if setting.env else None
         if raw is None or raw == '':
             return None, False
         try:
@@ -129,16 +140,25 @@ class SettingsStore:
                 clean[key] = setting.validate(value)
             except ValueError as exc:
                 raise SettingsError(key, str(exc)) from None
+            self._check_destination(setting, clean[key])
+        self._check_smtp(clean)
+        self._check_map(clean)
         now = _now()
+        smtp_before = None
         with write_transaction(conn):
+            if any(k in SMTP_DESTINATION_KEYS for k in clean):
+                smtp_before = self._smtp_pair_in(conn)
             for key, value in clean.items():
                 setting = self._registry[key]
                 old = self._effective_in(conn, setting)       # lu en base SOUS la transaction (T3-1), pas dans le cache
+                self._clear_secrets_if_destination_changed(conn, setting, old, value, actor, ip)
                 conn.execute(
                     "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, "
                     "updated_by = excluded.updated_by", (key, json.dumps(value), now, _updated_by(actor)))
                 audit.record_setting_change(conn, key, old, value, secret=setting.secret, actor=actor, ip=ip)
+            if smtp_before is not None:
+                self._clear_smtp_secret_if_changed(conn, smtp_before, actor, ip)
             self._bump(conn)
         self._after_write(conn)
 
@@ -148,6 +168,7 @@ class SettingsStore:
         if key is not None:
             self.setting(key)
         with write_transaction(conn):
+            smtp_before = self._smtp_pair_in(conn)
             query = "SELECT key, value FROM settings" + ("" if key is None else " WHERE key = ?")
             previous = {}
             for row in conn.execute(query, () if key is None else (key,)).fetchall():
@@ -155,12 +176,97 @@ class SettingsStore:
                 previous[row['key']] = MASK if setting is not None and setting.secret else _loads(row['value'])
             conn.execute("DELETE FROM settings" + ("" if key is None else " WHERE key = ?"), () if key is None else (key,))
             keys = list(previous)
+            for removed in keys:
+                setting = self._registry.get(removed)
+                if setting is not None and setting.destination_service:
+                    # La valeur effective redevient celle de l'env (ou le défaut) : si la destination change, les secrets
+                    # liés sont effacés dans la même transaction (settings-reset compris)
+                    env_value, _ = self._from_env(setting)
+                    new = setting.default if env_value is None else env_value
+                    self._clear_secrets_if_destination_changed(conn, setting, previous[removed], new, actor, ip)
+            if any(k in SMTP_DESTINATION_KEYS for k in keys):
+                self._clear_smtp_secret_if_changed(conn, smtp_before, actor, ip)
             if keys:
                 self._bump(conn)
                 audit.record(conn, 'setting.reset', actor=actor, target_type='setting', target_id=key or '*', ip=ip,
                              details={'keys': sorted(keys), 'old': previous})
         self._after_write(conn)
         return len(keys)
+
+    def _check_destination(self, setting: Setting, value) -> None:
+        """Une destination hors OUTBOUND_ALLOWED_HOSTS est refusée à l'écriture (400, rien n'est écrit)."""
+        if setting.type != 'url' or not setting.destination_service or value == '' or self.destination_allowed is None:
+            return
+        try:
+            destination = outbound.destination_of_url(value)
+        except outbound.OutboundError as exc:
+            raise SettingsError(setting.key, str(exc)) from None
+        if not self.destination_allowed(setting.destination_service, destination):
+            raise SettingsError(setting.key, "Destination non autorisée (OUTBOUND_ALLOWED_HOSTS)")
+
+    def _clear_secrets_if_destination_changed(self, conn, setting: Setting, old, new, actor, ip) -> None:
+        if setting.type != 'url' or not setting.destination_service or not setting.linked_secrets or self.secrets is None:
+            return
+
+        def destination(value):
+            try:
+                return outbound.destination_of_url(value) if value else None
+            except outbound.OutboundError:
+                return None
+
+        if destination(old) != destination(new):
+            self.secrets.clear_linked(conn, setting.linked_secrets, actor=actor, ip=ip)
+
+    def _check_smtp(self, clean: Mapping) -> None:
+        """
+        Cohérence du bloc SMTP à l'écriture (EF-4.1, EF-6.8) : l'hôte et le port effectifs APRÈS le lot doivent être
+        autorisés pour le service `smtp` ; `none` n'envoie aucune authentification, donc aucun identifiant avec lui.
+        """
+        if 'smtp.host' not in self._registry or not any(
+                k in clean for k in (*SMTP_DESTINATION_KEYS, 'smtp.security', 'smtp.username')):
+            return
+
+        def value(key):
+            return clean[key] if key in clean else self.get(key)
+
+        host, port, security, username = value('smtp.host'), value('smtp.port'), value('smtp.security'), value('smtp.username')
+        if host and self.destination_allowed is not None:
+            try:
+                destination = outbound.destination_of_smtp(outbound.parse_host_port(f"{host}:{port}")[0], port)
+            except outbound.OutboundError as exc:
+                raise SettingsError('smtp.host', str(exc)) from None
+            if not self.destination_allowed('smtp', destination):
+                raise SettingsError('smtp.host' if 'smtp.host' in clean else 'smtp.port',
+                                    "Destination non autorisée (OUTBOUND_ALLOWED_HOSTS)")
+        if security == 'none' and username:
+            raise SettingsError('smtp.username' if 'smtp.username' in clean else 'smtp.security',
+                                "Aucun identifiant avec la sécurité « none » (aucune authentification n'est envoyée)")
+
+    def _check_map(self, clean: Mapping) -> None:
+        """Fonds de carte (R1, CA-41) : chaque hôte effectif doit figurer dans `tiles=` ; le fond par défaut doit exister."""
+        if 'map.basemaps' not in self._registry or not any(k in clean for k in ('map.basemaps', 'map.default_basemap')):
+            return
+        basemaps = clean['map.basemaps'] if 'map.basemaps' in clean else self.get('map.basemaps')
+        if 'map.basemaps' in clean and self.tiles_allowed is not None:
+            for basemap in basemaps:
+                hosts = outbound.tile_hosts_of_template(basemap['url'], basemap['subdomains'])
+                if not self.tiles_allowed(hosts):
+                    raise SettingsError('map.basemaps', f"Fond « {basemap['name']} » : hôte non autorisé par "
+                                                        "OUTBOUND_ALLOWED_HOSTS (tiles=)")
+        default = clean['map.default_basemap'] if 'map.default_basemap' in clean else self.get('map.default_basemap')
+        if basemaps and default not in {b['name'] for b in basemaps}:
+            raise SettingsError('map.default_basemap' if 'map.default_basemap' in clean else 'map.basemaps',
+                                "Le fond par défaut doit être l'un des fonds de la liste")
+
+    def _smtp_pair_in(self, conn):
+        """(hôte, port) SMTP effectifs tels que la base les porte maintenant (même transaction)."""
+        if 'smtp.host' not in self._registry or 'smtp.port' not in self._registry:
+            return None
+        return (self._effective_in(conn, self._registry['smtp.host']), self._effective_in(conn, self._registry['smtp.port']))
+
+    def _clear_smtp_secret_if_changed(self, conn, before, actor, ip) -> None:
+        if self.secrets is not None and before is not None and self._smtp_pair_in(conn) != before:
+            self.secrets.clear_linked(conn, self._registry['smtp.host'].linked_secrets, actor=actor, ip=ip)
 
     def _effective_in(self, conn, setting: Setting):
         """Valeur effective telle que la base la porte MAINTENANT (même connexion, donc même transaction)."""

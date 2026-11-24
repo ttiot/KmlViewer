@@ -9,9 +9,9 @@ from flask import current_app, g, jsonify, request
 from app.api import bp
 from app.api.payload import json_body
 from app.audit import Actor
-from app.auth import admin_required, users
+from app.auth import admin_required, tokens, users
 from app.auth.guard import oidc_enabled
-from app.db import get_db
+from app.db import get_db, write_transaction
 from app.errors import ApiError
 
 logger = logging.getLogger(__name__)
@@ -60,19 +60,28 @@ def update_user(user_id):
     if 'is_admin' in updates and current_app.config.get('OIDC_ADMIN_ROLE'):
         raise ApiError("Le rôle admin est piloté par l'IdP (OIDC_ADMIN_ROLE)", 409)
 
-    if 'is_admin' in updates:
-        # Chemin commun avec la CLI (B5, CA-13) : un compte à mot de passe sans second facteur ne devient pas admin
-        try:
-            users.set_admin(db, user_id, bool(updates.pop('is_admin')), actor=Actor.from_user(g.user), ip=request.remote_addr)
-        except users.AdminPromotionRefused as exc:
-            raise ApiError(str(exc), 409) from exc
-    if updates:
-        assignments = ', '.join(f"{field} = ?" for field in updates)
-        db.execute(f"UPDATE users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
-        db.commit()
+    # Tout dans UNE transaction (set_admin la rejoint). Un refus B5 est attrapé DANS la transaction pour que sa ligne d'audit
+    # (`user.admin_refused`) soit validée avec elle ; rien d'autre n'est alors appliqué, et l'erreur 409 part après.
+    refused = None
+    with write_transaction(db):
+        if 'is_admin' in updates:
+            try:
+                users.set_admin(db, user_id, bool(updates.pop('is_admin')), actor=Actor.from_user(g.user),
+                                ip=request.remote_addr)
+            except users.AdminPromotionRefused as exc:
+                refused = exc
+        if refused is None and updates:
+            assignments = ', '.join(f"{field} = ?" for field in updates)
+            db.execute(f"UPDATE users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
+            if updates.get('is_active') == 0:
+                # Émetteur désactivé : ses invitations en attente sont révoquées, crédit non rendu (EF-3.7)
+                tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))
+    if refused is not None:
+        raise ApiError(str(refused), 409)
     if updates.get('is_active') == 0:
         # Un compte désactivé perd ses sessions : le réactiver ne ressuscite pas un vieux cookie
         users.revoke_sessions(db, user_id)
+    current_app.extensions['pending'].destroy_for_user(user_id)       # désactivation, droits : plus d'état intermédiaire (T10-1)
     logger.info("Utilisateur %s modifié par %s : %s", target['username'], g.user['username'], updates)
     return jsonify({'success': True, 'user': users.to_dict(users.get_by_id(db, user_id))})
 
@@ -86,8 +95,11 @@ def delete_user(user_id):
     target = users.get_by_id(db, user_id)
     if target is None:
         raise _unknown_user()
-    db.execute("DELETE FROM users WHERE id = ?", (user_id,))  # cascade : activités, tronçons, efforts
-    db.commit()
+    with write_transaction(db):
+        # Avant la suppression : la clé étrangère de l'émetteur passerait à NULL et ses invitations ne seraient plus retrouvables
+        tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))
+        db.execute("DELETE FROM users WHERE id = ?", (user_id,))  # cascade : activités, tronçons, efforts
+    current_app.extensions['pending'].destroy_for_user(user_id)
     shutil.rmtree(Path(current_app.config['DATA_DIR']) / 'files' / str(int(user_id)), ignore_errors=True)
     logger.info("Utilisateur %s supprimé par %s, données incluses", target['username'], g.user['username'])
     return jsonify({'success': True})

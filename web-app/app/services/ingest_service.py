@@ -244,6 +244,7 @@ def recompute_elevation(db: sqlite3.Connection, cfg: Mapping, user_id: int, acti
     if row is None:
         raise LookupError("Activité introuvable")
     if not dem_service.is_enabled(cfg):
+        dem_service.audit_refusal(db, cfg)         # URL configurée mais hors liste blanche : refus tracé
         raise dem_service.DemError("Correction d'altitude non configurée (DEM_URL)")
     pts = activity_store.unpack_points(row['points'])
     ele_dem = dem_service.corrected_profile(pts['lat'], pts['lon'], cfg)
@@ -309,7 +310,7 @@ def backfill_elevation(db: sqlite3.Connection, cfg: Mapping, limit: Optional[int
     """
     if not dem_service.is_enabled(cfg):
         return 0
-    limit = limit if limit is not None else int(cfg.get('DEM_BACKFILL_BATCH', 25))
+    limit = limit if limit is not None else int(effective(cfg, 'DEM_BACKFILL_BATCH'))
     corrected = failures = 0
     for row in activity_store.pending_dem(db, limit, last=sorted(_dem_failed)):
         _dem_failed.discard(row['id'])

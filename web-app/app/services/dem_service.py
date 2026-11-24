@@ -14,7 +14,9 @@ from typing import Any, List, Optional, Sequence
 import numpy as np
 import requests
 
+from app import outbound
 from app.services import geo
+from app.settings import effective
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,34 @@ class DemCoverageError(DemError):
     """Le service répond, mais n'a pas de dalle pour cette zone : réessayer ne sert à rien."""
 
 
+def dem_url(cfg) -> str:
+    """URL du service d'altitude effective (base > env, EF-6.2) ; vide : non configuré."""
+    return effective(cfg, 'DEM_URL') or ''
+
+
+def destination_allowed(cfg) -> bool:
+    """La destination effective est-elle autorisée pour le service `dem` (OUTBOUND_ALLOWED_HOSTS, EF-6.8) ?"""
+    url = dem_url(cfg)
+    try:
+        return bool(url) and outbound.allowed(cfg, 'dem', outbound.destination_of_url(url))
+    except outbound.OutboundError:
+        return False
+
+
 def is_enabled(cfg) -> bool:
-    return bool(cfg.get('DEM_URL'))
+    """Correction d'altitude utilisable : configurée ET destination autorisée. Une URL forcée en base hors liste = désactivée."""
+    return destination_allowed(cfg)
+
+
+def audit_refusal(db, cfg) -> None:
+    """Trace (dédoublonnée) le refus d'une destination DEM configurée mais hors liste blanche."""
+    url = dem_url(cfg)
+    if url and not destination_allowed(cfg):
+        try:
+            destination = outbound.destination_of_url(url)
+        except outbound.OutboundError:
+            destination = 'URL invalide'
+        outbound.refuse(db, 'dem', destination)
 
 
 def _elevation(item: Any) -> Optional[float]:
@@ -68,7 +96,7 @@ def _get_batch(http: requests.Session, url: str, locations: str, cfg, deadline: 
         status = None
         try:
             resp = http.get(url, params={'locations': locations, 'interpolation': 'bilinear'},
-                            timeout=max(0.1, min(float(cfg.get('DEM_TIMEOUT', 15)), remaining)), allow_redirects=False)
+                            timeout=max(0.1, min(float(effective(cfg, 'DEM_TIMEOUT')), remaining)), allow_redirects=False)
             status = getattr(resp, 'status_code', None)
             if status not in RETRY_STATUSES:
                 resp.raise_for_status()
@@ -93,13 +121,15 @@ def fetch_elevations(lat: Sequence[float], lon: Sequence[float], cfg,
     `deadline` : échéance time.monotonic() ; par défaut le budget DEM_TOTAL_TIMEOUT à partir
     de maintenant. Lève DemError.
     """
-    url = cfg['DEM_URL']
+    url = dem_url(cfg)
     if not isinstance(url, str) or not url.startswith(('http://', 'https://')):
         raise DemError("DEM_URL doit être une URL http(s)")
+    if not destination_allowed(cfg):          # défense en profondeur : jamais d'appel hors liste blanche
+        raise DemError("Destination du service d'altitude non autorisée")
     if deadline is None:
-        deadline = time.monotonic() + max(1.0, float(cfg.get('DEM_TOTAL_TIMEOUT', TOTAL_TIMEOUT_S)))
-    batch = max(1, int(cfg.get('DEM_BATCH_SIZE', 100)))
-    delay = max(0.0, float(cfg.get('DEM_REQUEST_DELAY') or 0))
+        deadline = time.monotonic() + max(1.0, float(effective(cfg, 'DEM_TOTAL_TIMEOUT')))
+    batch = max(1, int(effective(cfg, 'DEM_BATCH_SIZE')))
+    delay = max(0.0, float(effective(cfg, 'DEM_REQUEST_DELAY') or 0))
     results: List[Optional[float]] = []
     with requests.Session() as http:
         for start in range(0, len(lat), batch):

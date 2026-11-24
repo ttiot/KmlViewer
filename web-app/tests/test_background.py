@@ -84,6 +84,7 @@ def test_scheduler_starts_in_served_mode_whatever_inbox_and_dem_say(tmp_path, mo
 
     class Served(TestingConfig):
         TESTING = False
+        SCHEDULER_ENABLED = True
         INBOX_ENABLED = False
         DEM_URL = ''
 
@@ -99,6 +100,7 @@ def test_scheduler_does_not_start_for_a_cli_command(tmp_path, monkeypatch):
 
     class Served(TestingConfig):
         TESTING = False
+        SCHEDULER_ENABLED = True
 
     create_app(Served, overrides={'DATA_DIR': str(tmp_path / 'd'), 'AUTH_MODE': 'local'})
     assert started == []
@@ -388,3 +390,83 @@ def test_legacy_watcher_thread_and_module_wake_are_gone():
     from app.services import inbox_watcher
     assert not hasattr(inbox_watcher, 'InboxWatcher') and not hasattr(inbox_watcher, 'wake')
     assert background.LOCK_NAME == 'inbox.lock'
+
+
+# --- Relecture T19 : arrêt propre, réveil pendant une tâche courte --------------------------------------------------
+
+def test_stopping_a_scheduler_never_releases_the_lock_while_a_shared_task_still_runs(tmp_path, app):
+    """T19-1 : jamais deux exécutions simultanées de la même tâche partagée entre deux processus."""
+    lock_path = tmp_path / 'stop.lock'
+    gate, started = threading.Event(), threading.Event()
+    running, peak, lock = [0], [0], threading.Lock()
+
+    def long_task(db, cfg):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        started.set()
+        gate.wait(10)
+        with lock:
+            running[0] -= 1
+
+    def make():
+        return Scheduler(app.config, [Task('inbox', long_task, interval=lambda c: 0, shared=True, long=True)], clock=Clock(),
+                         executor=ThreadExecutor(), lock=FileLock(lock_path))
+
+    a, b = make(), make()
+    a.tick()
+    assert started.wait(5)
+    assert a.stop(timeout=0.2) is False                  # la tâche tourne encore : le verrou est conservé
+    assert not a.lock.try_acquire() or a.lock.held
+    assert b.tick() == []                                # B n'obtient pas le verrou : pas de seconde exécution
+    assert peak[0] == 1
+    gate.set()
+    b.stop(timeout=1)
+    a.executor.stop(5)
+
+
+def test_stopping_an_idle_scheduler_releases_the_lock(tmp_path, app):
+    path = tmp_path / 'idle.lock'
+    a = Scheduler(app.config, [], clock=Clock(), lock=FileLock(path))
+    a.tick()
+    assert a.lock.held and a.stop() is True and not a.lock.held
+    assert FileLock(path).try_acquire()
+
+
+def test_wake_during_a_short_task_is_not_lost(cfg):
+    clock = Clock()
+    holder = {}
+
+    def short(db, c):
+        holder['scheduler'].wake('routing_health')      # réveillée pendant son exécution
+
+    s = Scheduler(cfg, [Task('routing_health', short, interval=lambda c: 600)], clock=clock, lock=FakeLock())
+    holder['scheduler'] = s
+    assert s.tick() == ['routing_health']
+    clock.t += 1
+    assert s.tick() == ['routing_health']                # relancée aussitôt, le réveil n'a pas été écrasé
+
+
+def test_inbox_scan_command_refuses_to_run_beside_the_scheduler(app, runner, tmp_path):
+    lock = FileLock(os.path.join(app.config['DATA_DIR'], background.LOCK_NAME))
+    assert lock.try_acquire()
+    try:
+        result = runner.invoke(args=['inbox-scan'])
+        assert result.exit_code != 0 and "ordonnanceur" in result.output
+    finally:
+        lock.release()
+    assert runner.invoke(args=['inbox-scan']).exit_code == 0
+
+
+def test_scheduler_can_be_switched_off_for_a_served_process(tmp_path, monkeypatch):
+    started = []
+    monkeypatch.setattr(Scheduler, 'start', lambda self: started.append(self))
+    monkeypatch.delenv('FLASK_RUN_FROM_CLI', raising=False)
+
+    class Served(TestingConfig):
+        TESTING = False
+
+    create_app(Served, overrides={'DATA_DIR': str(tmp_path / 'd'), 'AUTH_MODE': 'local'})
+    assert started == []                                           # SCHEDULER_ENABLED=False hérité de TestingConfig
+    create_app(Served, overrides={'DATA_DIR': str(tmp_path / 'd2'), 'AUTH_MODE': 'local', 'SCHEDULER_ENABLED': True})
+    assert len(started) == 1

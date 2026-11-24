@@ -58,7 +58,13 @@ def create_app(config_class=Config, overrides=None):
     # Après le contrôle d'hôte et d'origine (une requête rejetée ne lit pas la base), avant le garde
     # (qui voit des réglages à jour)
     from app.settings import init_settings
-    init_settings(app)
+    store = init_settings(app)
+    from app.mailer import init_mailer
+    init_mailer(app)
+    from app.auth.pending import PendingStore
+    app.extensions['pending'] = PendingStore()
+    from app.ratelimit import Limiters
+    app.extensions['limiters'] = Limiters(get=store.get)      # seuils relus à chaque accès (réglages à chaud)
 
     from app.auth import init_auth
     init_auth(app)
@@ -87,8 +93,10 @@ def _start_scheduler(app) -> None:
     moteur) dans tout processus SERVI, quels que soient INBOX_ENABLED et DEM_URL (EF-10.1). Jamais en test, en CLI,
     ni dans le parent du reloader.
     """
-    if app.config.get('TESTING'):
+    if app.config.get('TESTING') or not app.config.get('SCHEDULER_ENABLED', True):
         return
+    # `flask <commande>` : jamais. Seul le serveur de développement `flask run` peut le demander (KMLVIEWER_WATCHER=1,
+    # outil de développement : en production c'est gunicorn).
     if os.environ.get('FLASK_RUN_FROM_CLI') == 'true' and os.environ.get('KMLVIEWER_WATCHER') != '1':
         return
     # Serveur de développement : le parent du reloader ne sert aucune requête, seul son
@@ -98,4 +106,6 @@ def _start_scheduler(app) -> None:
     if app.debug and not under_gunicorn and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         return
     app.extensions['scheduler'].start()
+    from app.mailer import start_queue
+    start_queue(app)                       # même thread de vie que l'ordonnanceur : processus servi seulement (EF-10.5)
     logging.getLogger(__name__).info("Ordonnanceur de fond démarré")

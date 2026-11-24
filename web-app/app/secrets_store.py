@@ -178,7 +178,7 @@ class SecretsStore:
         transaction qui change la destination : les deux sont validés ou annulés ensemble. Retourne les noms
         effacés.
         """
-        self._healthy()
+        # Pas de _healthy() : effacer n'exige aucune clé (utile à la CLI de secours quand la clé est perdue)
         cleared = []
         with write_transaction(conn):
             for name in names:

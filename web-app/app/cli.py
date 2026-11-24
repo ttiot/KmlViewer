@@ -28,15 +28,54 @@ def backup_database(db_path: str, target: Path) -> None:
     partial.replace(target)  # le fichier final n'apparaît qu'une fois complet
 
 
+def _notify(app, recipients, kind, **context) -> list:
+    """
+    Notification SYNCHRONE d'une commande CLI (EF-4.8, v5-3) : la file n'est pas traitée par un thread en CLI, chaque message
+    part avant de rendre la main. Retourne les destinataires dont l'envoi a échoué ; liste vide si tout est parti ou si l'e-mail
+    n'est pas configuré (ce n'est pas un échec : l'action est faite, l'appelant l'annonce).
+    """
+    from app.mailer import MailError, compose
+    mailer = app.extensions['mailer']
+    if not mailer.configured:
+        return []
+    subject, body = compose(kind, **context)
+    failed = []
+    for address in recipients:
+        try:
+            mailer.send(address, subject, body)
+        except MailError:
+            failed.append(address)
+    return failed
+
+
+def _admin_addresses(db) -> list:
+    return [r['email'] for r in db.execute("SELECT email FROM users WHERE is_admin = 1 AND is_active = 1 AND email IS NOT NULL")]
+
+
+def _report_notification(app, failed, what: str) -> None:
+    """Message nommant la notification non partie, puis code de sortie non nul (l'action elle-même reste faite et tracée)."""
+    if failed:
+        click.echo(f"ATTENTION : la notification « {what} » n'est PAS partie ({len(failed)} destinataire(s) sans message). "
+                   "L'action, elle, a bien été faite et tracée.", err=True)
+        raise SystemExit(1)
+
+
 def register_cli(app) -> None:
     @app.cli.command('inbox-scan')
     def inbox_scan():
         """Passe une fois sur le dossier surveillé et ingère les nouveaux fichiers."""
+        from app.background import LOCK_NAME, FileLock
+        # Même verrou que l'ordonnanceur : jamais deux passes en parallèle sur le dossier
+        lock = FileLock(Path(app.config['DATA_DIR']) / LOCK_NAME)
+        if not lock.try_acquire():
+            raise click.ClickException("Un autre processus (l'ordonnanceur de l'application) surveille déjà le dossier : "
+                                       "il le traite lui-même.")
         db = connect(app.config['DB_PATH'])
         try:
             counts = inbox_watcher.scan_once(db, app.config)
         finally:
             db.close()
+            lock.release()
         click.echo(', '.join(f"{k}={v}" for k, v in counts.items()))
 
     @app.cli.command('recompute-stats')
@@ -132,9 +171,18 @@ def register_cli(app) -> None:
                 raise click.ClickException(str(exc)) from exc
         finally:
             db.close()
+        link = tokens.link(app.config['PUBLIC_URL'], created.token)
         click.echo(f"Jeton d'amorçage créé (valable jusqu'au {created.expires_at}, usage unique). Lien, montré une seule fois :")
-        click.echo(tokens.link(app.config['PUBLIC_URL'], created.token))
-        click.echo("Envoi par e-mail : non disponible dans cette version ; transmets ce lien à la seule personne concernée.")
+        click.echo(link)
+        if not address:
+            click.echo("Aucune adresse connue pour ce compte : transmets ce lien à la seule personne concernée.")
+        elif not app.extensions['mailer'].configured:
+            click.echo("E-mail non configuré : transmets ce lien à la seule personne concernée.")
+        else:
+            failed = _notify(app, [address], 'bootstrap', link=link)
+            if not failed:
+                click.echo("Le lien est aussi parti par e-mail.")
+            _report_notification(app, failed, "lien d'amorçage par e-mail")
 
     @app.cli.command('user-mfa-reset')
     @click.argument('login')
@@ -155,6 +203,7 @@ def register_cli(app) -> None:
             if target['auth_method'] != 'password':
                 raise click.ClickException("Seuls les comptes à mot de passe ont des facteurs à réinitialiser.")
             demoted = bool(target['is_admin'])
+            holder_email = target['email']
             with write_transaction(db):
                 removed = factors.clear_factors(db, target['id'])
                 db.execute("UPDATE users SET session_token = ?, is_admin = 0 WHERE id = ?",
@@ -166,8 +215,13 @@ def register_cli(app) -> None:
             db.close()
         click.echo(f"Facteurs de #{target['id']} ({target['username']}) retirés, sessions fermées"
                    + (", compte rétrogradé (à repromouvoir après réenrôlement)" if demoted else "") + ".")
-        click.echo("Notification par e-mail : non envoyée (envoi de messages non disponible dans cette version).")
         _warn_if_no_admin(remaining)
+        if not holder_email:
+            click.echo("Aucune adresse validée pour ce compte : aucune notification envoyée.")
+        elif not app.extensions['mailer'].configured:
+            click.echo("E-mail non configuré : aucune notification envoyée.")
+        else:
+            _report_notification(app, _notify(app, [holder_email], 'factor_reset'), "facteurs réinitialisés")
 
     def _warn_if_no_admin(count):
         if count == 0:
@@ -218,7 +272,11 @@ def register_cli(app) -> None:
             raise click.UsageError("Donne une clé de réglage, ou --all (pas les deux).")
         from app.audit import Actor
         db = connect(app.config['DB_PATH'])
+        failed = []
         try:
+            touches_smtp = reset_all or (key or '').startswith('smtp.')
+            if touches_smtp:
+                failed = _notify(app, _admin_addresses(db), 'smtp_reset')          # avant : la configuration SMTP va changer
             try:
                 count = app.extensions['settings'].reset(db, None if reset_all else key, actor=Actor.cli())
             except KeyError as exc:
@@ -226,6 +284,7 @@ def register_cli(app) -> None:
         finally:
             db.close()
         click.echo(f"{count} valeur(s) en base supprimée(s)")
+        _report_notification(app, failed, "réinitialisation SMTP, aux administrateurs")
 
     @app.cli.command('secrets-rotate')
     def secrets_rotate():
@@ -256,10 +315,14 @@ def register_cli(app) -> None:
             click.confirm("Effacer TOUS les secrets chiffrés et les secrets TOTP ?", abort=True)
         db = connect(app.config['DB_PATH'])
         try:
+            admins = _admin_addresses(db)
+            # AVANT l'effacement : le mot de passe SMTP lui-même va disparaître, l'envoi doit encore pouvoir s'authentifier
+            failed = _notify(app, admins, 'secrets_reset')
             counts = app.extensions['secrets'].reset(db, actor=Actor.cli())
         finally:
             db.close()
         click.echo(f"Effacé : {counts['secrets']} secret(s), {counts['totp']} secret(s) TOTP.")
+        _report_notification(app, failed, "effacement des secrets, aux administrateurs")
         from app.auth import factors
         db = connect(app.config['DB_PATH'])
         try:

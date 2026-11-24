@@ -133,19 +133,19 @@ def test_inspect_does_not_consume(conn):
     for _ in range(3):
         assert tokens.inspect(conn, new.token) == 'choose_credentials'
     assert rows(conn)[0]['used_at'] is None
-    assert tokens.consume(conn, new.token)
+    assert tokens.consume(conn, new.token, kind='invite')
 
 
 def test_unknown_expired_used_revoked_and_malformed_tokens_are_indistinguishable(conn):
     expired = tokens.create(conn, 'invite', actor=CLI, now=NOW - timedelta(days=8))
     used = tokens.create(conn, 'invite', actor=CLI)
-    assert tokens.consume(conn, used.token)
+    assert tokens.consume(conn, used.token, kind='invite')
     revoked = tokens.create(conn, 'invite', actor=CLI)
     assert tokens.revoke(conn, revoked.id, actor=CLI)
     bad = [expired.token, used.token, revoked.token, 'A' * 43, 'x', '', None, 5, b'bytes', 'é' * 43, ' ' + 'A' * 42,
            expired.token + 'A', "' OR 1=1 --"]
     assert {repr(tokens.inspect(conn, t, now=NOW)) for t in bad} == {'None'}
-    assert {repr(tokens.consume(conn, t, now=NOW)) for t in bad} == {'None'}
+    assert {repr(tokens.consume(conn, t, now=NOW, kind='invite')) for t in bad} == {'None'}
 
 
 def test_expiry_boundary_is_exclusive(conn):
@@ -159,18 +159,18 @@ def test_expiry_boundary_is_exclusive(conn):
 def test_consume_returns_what_the_token_carries_once(conn):
     new = tokens.create(conn, 'bootstrap', actor=CLI, email='boot@example.org', is_admin_grant=True, initial_credits=5,
                         note='n', created_by=1, target_user_id=1)
-    info = tokens.consume(conn, new.token, used_by=1)
+    info = tokens.consume(conn, new.token, used_by=1, kind='bootstrap')
     assert info == tokens.TokenInfo(new.id, 'bootstrap', 1, 1, 'boot@example.org', True, 5, 'n')
     stored = rows(conn)[0]
     assert stored['used_at'] and stored['used_by'] == 1
-    assert tokens.consume(conn, new.token) is None and tokens.inspect(conn, new.token) is None
+    assert tokens.consume(conn, new.token, kind='invite') is None and tokens.inspect(conn, new.token) is None
 
 
 def test_consumption_is_rolled_back_with_the_callers_transaction(conn):
     """Compte non créé => jeton non consommé."""
     new = tokens.create(conn, 'invite', actor=CLI)
     with pytest.raises(RuntimeError), database.write_transaction(conn):
-        assert tokens.consume(conn, new.token)
+        assert tokens.consume(conn, new.token, kind='invite')
         raise RuntimeError("création du compte échouée")
     assert rows(conn)[0]['used_at'] is None and tokens.inspect(conn, new.token)
 
@@ -187,7 +187,7 @@ def test_two_concurrent_consumptions_yield_exactly_one_success(tmp_path):
         c = database.connect(path)
         try:
             barrier.wait(10)
-            results.append(tokens.consume(c, new.token))
+            results.append(tokens.consume(c, new.token, kind='invite'))
         finally:
             c.close()
 
@@ -199,7 +199,7 @@ def test_two_concurrent_consumptions_yield_exactly_one_success(tmp_path):
 
 def test_set_used_by_completes_the_consumption_record(conn):
     new = tokens.create(conn, 'invite', actor=CLI)
-    info = tokens.consume(conn, new.token)
+    info = tokens.consume(conn, new.token, kind='invite')
     tokens.set_used_by(conn, info.id, 1)
     assert rows(conn)[0]['used_by'] == 1
     other = tokens.create(conn, 'invite', actor=CLI)
@@ -214,7 +214,7 @@ def test_revoke_only_acts_on_an_unused_token_and_is_audited(conn):
     assert tokens.revoke(conn, new.id, actor=Actor.user(1, 'alice')) is True
     assert tokens.revoke(conn, new.id, actor=CLI) is False and tokens.inspect(conn, new.token) is None
     used = tokens.create(conn, 'invite', actor=CLI)
-    tokens.consume(conn, used.token)
+    tokens.consume(conn, used.token, kind='invite')
     assert tokens.revoke(conn, used.id, actor=CLI) is False
     assert [r['action'] for r in conn.execute("SELECT action FROM audit_log WHERE action = 'token.revoke'")] == ['token.revoke']
     assert new.token not in everything(conn)
@@ -224,7 +224,7 @@ def test_a_disabled_or_deleted_issuer_loses_its_pending_invitations(conn):
     mine = [tokens.create(conn, 'invite', actor=CLI, created_by=1) for _ in range(2)]
     other = tokens.create(conn, 'invite', actor=CLI, created_by=None)
     used = tokens.create(conn, 'invite', actor=CLI, created_by=1)
-    tokens.consume(conn, used.token)
+    tokens.consume(conn, used.token, kind='invite')
     assert tokens.revoke_pending_for_creator(conn, 1, actor=CLI) == 2
     assert [tokens.inspect(conn, t.token) for t in mine] == [None, None] and tokens.inspect(conn, other.token)
 
@@ -246,7 +246,7 @@ def test_no_token_ever_reaches_a_log(conn, caplog):
     with caplog.at_level(logging.DEBUG):
         new = tokens.create(conn, 'invite', actor=CLI)
         tokens.inspect(conn, new.token)
-        info = tokens.consume(conn, new.token)
+        info = tokens.consume(conn, new.token, kind='invite')
         tokens.revoke(conn, info.id, actor=CLI)
         tokens.inspect(conn, 'A' * 43)
     assert new.token not in caplog.text
@@ -364,7 +364,7 @@ def test_consume_with_a_wrong_kind_or_wrong_target_consumes_nothing_and_the_toke
     new = tokens.create(conn, 'verify_email', actor=CLI, target_user_id=1, email='a@b.c')
     for wrong in (dict(kind='invite'), dict(kind='reset'), dict(target_user_id=2), dict(kind='verify_email', target_user_id=2),
                   dict(kind='invite', target_user_id=1)):
-        assert tokens.consume(conn, new.token, **wrong) is None, wrong
+        assert tokens.consume(conn, new.token, **{'kind': 'verify_email', **wrong}) is None, wrong
         assert rows(conn)[0]['used_at'] is None and tokens.inspect(conn, new.token) == 'verify_email'
     info = tokens.consume(conn, new.token, kind='verify_email', target_user_id=1)
     assert info and info.kind == 'verify_email' and info.target_user_id == 1
@@ -375,11 +375,11 @@ def test_constraints_are_optional_and_validated(conn):
     plain = tokens.create(conn, 'invite', actor=CLI)
     assert tokens.consume(conn, plain.token, kind='invite')                                     # type seul
     untargeted = tokens.create(conn, 'invite', actor=CLI)
-    assert tokens.consume(conn, untargeted.token, target_user_id=1) is None                      # exige un compte visé
+    assert tokens.consume(conn, untargeted.token, target_user_id=1, kind='invite') is None                      # exige un compte visé
     assert tokens.consume(conn, untargeted.token, kind='inconnu') is None
     for bad in (0, -1, True, 2 ** 63, '1', 1.0):
-        assert tokens.consume(conn, untargeted.token, target_user_id=bad) is None, bad
-    assert tokens.consume(conn, untargeted.token)                                               # toujours consommable sans contrainte
+        assert tokens.consume(conn, untargeted.token, target_user_id=bad, kind='invite') is None, bad
+    assert tokens.consume(conn, untargeted.token, kind='invite')                                               # toujours consommable sans contrainte
 
 
 def test_a_constrained_consumption_is_still_atomic_under_concurrency(tmp_path):

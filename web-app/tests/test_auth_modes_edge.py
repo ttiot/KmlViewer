@@ -141,7 +141,7 @@ def test_no_route_answers_a_request_without_a_session_in_any_method(tmp_path, mo
         label = (endpoint, method, url, response.status_code)
         assert not 200 <= response.status_code < 300 or method == 'OPTIONS' and response.status_code == 200 and not response.get_data(), label
         if 300 <= response.status_code < 400:
-            assert '/auth/login' in response.headers['Location'], label
+            assert '/auth/login' in response.headers['Location'] or '/auth/password/login' in response.headers['Location'], label
         assert response.status_code != 500, label
         count += 1
     assert count > 60
@@ -150,7 +150,9 @@ def test_no_route_answers_a_request_without_a_session_in_any_method(tmp_path, mo
 
 def test_the_list_of_public_endpoints_is_exactly_the_expected_one():
     """Toute nouvelle route publique doit être décidée ici, pas ajoutée par accident."""
-    assert PUBLIC_ENDPOINTS == {'static', 'auth.login', 'auth.callback', 'auth.logout', 'auth.logged_out', 'api.health_check'}
+    assert PUBLIC_ENDPOINTS == {'static', 'auth.login', 'auth.callback', 'auth.logout', 'auth.logged_out', 'api.health_check',
+                                'auth.token_page', 'auth.token_inspect', 'auth.token_consume',
+                                'auth.password_login', 'auth.password_mfa', 'auth.password_enroll', 'auth.password_forgot'}      # jetons à usage unique (T7b, EF-S8)
 
 
 def test_unknown_and_tricky_paths_are_closed_not_enumerable(app):
@@ -164,7 +166,7 @@ def test_unknown_and_tricky_paths_are_closed_not_enumerable(app):
         assert response.status_code in (401, 302, 404, 400), (path, response.status_code)
         assert b'SECRET_KEY' not in response.get_data() and b'SQLite format' not in response.get_data(), path
         if response.status_code == 302:
-            assert '/auth/login' in response.headers['Location'], path
+            assert '/auth/login' in response.headers['Location'] or '/auth/password/login' in response.headers['Location'], path
 
 
 def test_static_serves_only_the_static_folder(app):
@@ -187,7 +189,8 @@ def test_public_endpoints_create_nothing_and_leak_nothing(app):
     client = client_of(app)
     health = get(client, '/api/health')
     assert health.status_code == 200 and set(health.get_json()) <= {'status', 'version', 'api'}
-    assert get(client, '/auth/login').status_code == 503
+    login = get(client, '/auth/login')                                            # T10 : redirige vers le formulaire (plus de 503)
+    assert login.status_code == 302 and '/auth/password/login' in login.headers['Location']
     assert get(client, '/auth/callback', query_string={'code': 'x', 'state': 'y'}).status_code == 302
     assert get(client, '/auth/callback', query_string={'error': 'access_denied'}).status_code == 302
     assert client.post('/auth/logout', base_url=f'https://{HOST}', headers={'Origin': f'https://{HOST}'}).status_code in (302, 400, 403)
@@ -515,7 +518,7 @@ def test_the_cli_refuses_promotion_without_an_active_factor_and_changes_nothing(
 
 
 def test_the_cli_promotes_with_a_webauthn_key_and_by_email_case_insensitively(app):
-    uid = add_user(app, 'pwd:wa', 'password', email='Wa@Example.org')
+    uid = add_user(app, 'pwd:wa', 'password', email='wa@example.org')     # stockée canonique (EF-4.10), la saisie varie
     add_factor_tables(app)
     conn = conn_of(app)
     conn.execute("INSERT INTO webauthn_credentials (user_id, label) VALUES (?, 'cle')", (uid,))

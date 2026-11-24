@@ -18,8 +18,9 @@ import time
 from pathlib import Path
 from typing import Dict, Iterator, Mapping, Optional, Set, Tuple
 
-from app.auth import modes, users
+from app.auth import emails, modes, users
 from app.services import file_formats, ingest_service
+from app.settings import effective
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +85,13 @@ def _resolve_owner(db: sqlite3.Connection, cfg: Mapping, folder: Optional[str]) 
     """
     if modes.auth_mode(cfg) == 'local':       # mode validé au démarrage ; absent => erreur, jamais de repli ouvert
         return users.get_or_create_local_user(db)
-    login = folder or cfg.get('INBOX_DEFAULT_USER')
+    login = folder or effective(cfg, 'INBOX_DEFAULT_USER') or None
     if not login:
         return None
+    # Adresse : forme canonique comparée à la valeur stockée telle quelle (EF-4.10), jamais lower() SQL
     rows = db.execute(
-        "SELECT * FROM users WHERE sub != ? AND (lower(username) = lower(?) OR lower(email) = lower(?)) LIMIT 2",
-        (users.LOCAL_SUB, login, login)).fetchall()
+        "SELECT * FROM users WHERE sub != ? AND (lower(username) = lower(?) OR email = ?) LIMIT 2",
+        (users.LOCAL_SUB, login, emails.canonical_or_none(login))).fetchall()
     if len(rows) > 1:
         logger.debug("Inbox : « %s » désigne plusieurs comptes, aucun n'est retenu", login)  # averti une fois par l'appelant
         return None
