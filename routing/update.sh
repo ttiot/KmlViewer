@@ -128,7 +128,13 @@ vol -e NEW="$new" 'test -s "/data/graphs/$NEW/properties"' || fail "graphe produ
 # 4. Bascule atomique (lien relatif remplacé par rename) ; mémorise l'ancien pour le retour arrière
 previous="$(vol 'readlink /data/graphs/current 2>/dev/null || true' | tr -d '\r\n')"
 [[ "$previous" =~ ^graph-[0-9]{14}$ ]] || previous=""
-vol -e NEW="$new" 'cd /data/graphs && ln -sfn "$NEW" current.tmp && mv -T current.tmp current'
+vol -e NEW="$new" '
+  cd /data/graphs
+  # Un moteur demarre avant le premier graphe (redemarrage en boucle) cree un dossier current VIDE : le retirer,
+  # sinon mv -T refuse de le remplacer par un lien. rmdir echoue si le dossier est non vide (jamais detruit).
+  if [ -d current ] && [ ! -L current ]; then rmdir current; fi
+  ln -sfn "$NEW" current.tmp && mv -T current.tmp current
+' || fail "bascule impossible (graphs/current est un dossier non vide ?), graphe $new conservé"
 log "bascule : current -> $new (précédent : ${previous:-aucun})"
 
 # 5. Le moteur relit le graphe : recréation, puis attente de santé
