@@ -210,8 +210,8 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
 - **Premier admin** : en mode `oidc`, `OIDC_ADMIN_ROLE` ou première connexion SSO puis `flask user-admin <login>` ;
   en mode `password`, `flask user-invite --admin <adresse>` puis le lien, le mot de passe et l'enrôlement TOTP
   ([pas à pas](#amorçage-du-premier-administrateur)).
-- **Moteur de routage** : service `graphhopper` du compose (profil `routing`), graphe mis à jour chaque mois par
-  `routing/update.sh` (timer ou cron posé par Ansible) : [Service de routage](#service-de-routage-graphhopper).
+- **Moteur de routage** : service `graphhopper` du compose (profil `routing`, activé par `COMPOSE_PROFILES=routing` après le
+  premier `routing/update.sh`), graphe mis à jour chaque mois par `routing/update.sh` (timer ou cron posé par Ansible) : [Service de routage](#service-de-routage-graphhopper).
 
 ### Modes d'authentification (`AUTH_MODE`)
 
@@ -570,8 +570,9 @@ qu'une fois ce constructeur livré ; il peut être préparé dès maintenant.
   service `routing` quand elle vient de l'environnement ; posée dans l'administration, elle doit figurer dans
   `OUTBOUND_ALLOWED_HOSTS` : `routing=graphhopper:8989`), puis `ROUTING_XMX` (tas du service, défaut `1536m`),
   `ROUTING_MEM_LIMIT` (défaut `2g`), `ROUTING_IMPORT_XMX` (défaut `6g`), `ROUTING_IMPORT_MEM_LIMIT` (défaut `8g`).
-- **Données** : le graphe n'est **jamais** produit au démarrage. Sans graphe, le conteneur s'arrête en erreur et redémarre :
-  **lancer d'abord `routing/update.sh`**, qui crée le volume `routing-data`, télécharge les extraits Geofabrik
+- **Données** : le graphe n'est **jamais** produit au démarrage. Sans graphe, le conteneur `graphhopper` redémarre en
+  boucle : ne pas démarrer le profil `routing` avant le premier graphe, **lancer d'abord `routing/update.sh`**, qui crée le
+  volume `routing-data`, télécharge les extraits Geofabrik
   (Nord-Pas-de-Calais, Picardie, Belgique ; sommes MD5 vérifiées), les fusionne (osmium), importe dans un dossier
   horodaté, bascule le lien `current` de façon atomique, recrée le moteur et attend sa santé. En cas d'échec de santé,
   l'ancien graphe est rétabli. Relançable sans risque (verrou : une seule exécution à la fois).
@@ -583,14 +584,17 @@ qu'une fois ce constructeur livré ; il peut être préparé dès maintenant.
 - **Dimensionnement** (mesures sur la machine cible « dune », Xeon E5-1650 v3, 12 cœurs, 64 Go, Hauts-de-France + Belgique,
   6 profils ; [ADR-0007](docs/adr/0007-moteur-routage.md)) : import **154 s** (`-Xmx6g`, pic conteneur 6,2 Go), fusion 41 s,
   graphe **320 Mo**, service prêt en **3 s**, RAM du conteneur après charge **1,2 Go** avec `-Xmx1g` (3,24 Go avec `-Xmx3g`),
-  latence d'un appel `route` à 5 points p95 **≤ 378 ms**, disque **~2,4 Go** (prévoir un graphe de plus, ~0,3 Go, pendant une
-  mise à jour). Ces mesures ont été faites avec l'image communautaire (jar `SNAPSHOT`) ; la configuration retenue
-  (`-Xmx1536m` dans 2 Go, image du projet) reste **à valider à la recette** de TR7. Prévoir ~8 Go de mémoire disponible
-  pendant l'import mensuel.
+  latence d'un appel `route` à 5 points p95 **≤ 378 ms**. Rejeu avec l'image du projet (jar de release) : **`-Xmx1536m` dans
+  2 Go validé** (1,43 Gio après 256 appels dont 8 en parallèle, aucun OOM) ; disque **2,4 Go** avec un graphe, **pic ~4 Go**
+  pendant une mise à jour : **prévoir 5 Go libres**. Prévoir ~8 Go de mémoire disponible pendant l'import mensuel.
+  Les journaux du moteur ne contiennent aucune coordonnée mais ne sont pas bornés par le compose : à limiter côté Docker
+  ([docs/exploitation.md](docs/exploitation.md#journal-du-moteur)).
 - **Profil gravel** : il évite surtout le bitume sans viser le gravier (peu de surfaces taguées dans OSM) ; le jugement
   terrain revient à l'utilisateur.
 
-Procédures : [docs/exploitation.md](docs/exploitation.md#service-de-routage).
+Activer le service avec Ansible : `COMPOSE_PROFILES=routing` (testé) plutôt que l'option `profiles` du module
+`docker_compose_v2` (non confirmée), et seulement **après** le premier `update.sh`. Retour arrière manuel, suppression d'un
+graphe rejeté, cron : [docs/exploitation.md](docs/exploitation.md#service-de-routage).
 
 ### Non livré
 
