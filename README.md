@@ -213,6 +213,7 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
   verrouillage). Une valeur saisie dans l'admin l'emporte et survit aux redéploiements ; écarts visibles avec
   `flask settings-list`, retour à la valeur d'Ansible avec `flask settings-reset <clé>`. Ne régler dans l'interface que
   ce qu'Ansible ne gère pas.
+- **Montée de version** : **sauvegarder le volume avant** (service arrêté, archive de tout `/data`, tâche Ansible avant `docker compose up -d`). Le retour arrière sûr est la **restauration** de cette archive ; une ancienne version sur la base migrée démarre mais compte les traces planifiées dans les statistiques et ignore le mode `password` : [procédure](docs/exploitation.md#montée-de-version-et-retour-arrière).
 - **Image** : une image locale `kml-viewer:local` déjà présente n'est **pas reconstruite** par `docker compose up -d` : `build:
   always` dans la tâche Ansible, ou une image publiée épinglée ; vérifier la version servie (`/api/health`) après chaque déploiement.
 - **Journaux** : aucune rotation configurée par le compose : poser `json-file` `max-size`/`max-file` (`daemon.json`) sur l'hôte.
