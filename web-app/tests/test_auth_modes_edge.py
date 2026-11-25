@@ -490,7 +490,7 @@ def test_has_second_factor_counts_only_what_the_spec_calls_a_factor(app):
     conn.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, 'h')", (uid,))
     conn.commit()
     assert factors.has_second_factor(conn, uid) is False                         # EF-2.2 : les codes de secours ne sont pas un facteur
-    conn.execute("INSERT INTO webauthn_credentials (user_id, name) VALUES (?, 'cle')", (uid,))
+    conn.execute("INSERT INTO webauthn_credentials (user_id, credential_id, public_key, name) VALUES (?, randomblob(16), x'00', 'cle')", (uid,))
     conn.commit()
     assert factors.has_second_factor(conn, uid) is True
     conn.close()
@@ -525,7 +525,7 @@ def test_the_cli_promotes_with_a_webauthn_key_and_by_email_case_insensitively(ap
     uid = add_user(app, 'pwd:wa', 'password', email='wa@example.org')     # stockée canonique (EF-4.10), la saisie varie
     add_factor_tables(app)
     conn = conn_of(app)
-    conn.execute("INSERT INTO webauthn_credentials (user_id, name) VALUES (?, 'cle')", (uid,))
+    conn.execute("INSERT INTO webauthn_credentials (user_id, credential_id, public_key, name) VALUES (?, randomblob(16), x'00', 'cle')", (uid,))
     conn.commit()
     conn.close()
     assert run_cli(app, 'user-admin', 'WA@example.ORG').exit_code == 0 and is_admin(app, uid) == 1
@@ -589,7 +589,7 @@ def test_mfa_reset_removes_every_kind_of_factor_and_only_for_that_account(app):
     give_totp(app, bystander)
     conn = conn_of(app)
     for uid in (victim, bystander):
-        conn.execute("INSERT INTO webauthn_credentials (user_id, name) VALUES (?, 'cle')", (uid,))
+        conn.execute("INSERT INTO webauthn_credentials (user_id, credential_id, public_key, name) VALUES (?, randomblob(16), x'00', 'cle')", (uid,))
         conn.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, 'h')", (uid,))
     conn.commit()
     conn.close()

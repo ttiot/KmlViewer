@@ -630,3 +630,54 @@ def test_a_401_clears_the_builder_points_stored_in_the_browser_TR6_n1():
     js = (pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js' / 'common.js').read_text(encoding='utf-8')
     block = js.split('response.status === 401')[1].split('}')[0:3]
     assert "kmlviewer.routeBuilder." in ''.join(block) and 'removeItem' in ''.join(block)
+
+
+def _trace_print(body):
+    """Empreinte de la TRACE : les points `trkpt_*` du payload (les points P1…Pn ne varient pas d'une proposition à l'autre)."""
+    track = [f['coordinates'] for f in body['features'] if str(f.get('name', '')).startswith('trkpt_')]
+    assert len(track) > 10
+    return hash(tuple((round(c[0], 5), round(c[1], 5)) for c in track[::5]))
+
+
+def test_another_proposal_with_the_next_seed_gives_a_different_trace_end_to_end(ready):
+    client, _ = ready
+    first = generate(client, distance_km=30, seed=1).get_json()
+    seen = {_trace_print(first)}
+    seed = first['route_meta']['next_seed']
+    for _ in range(4):
+        reply = generate(client, distance_km=30, seed=seed).get_json()
+        assert reply['route_meta']['seed'] >= seed and reply['route_meta']['next_seed'] > reply['route_meta']['seed']
+        seen.add(_trace_print(reply))
+        seed = reply['route_meta']['next_seed']
+    assert len(seen) == 5
+
+
+def test_a_request_whose_trace_does_not_depend_on_the_seed_says_there_is_no_other_proposal(ready):
+    client, _ = ready
+    plain = generate(client, seed=3).get_json()['route_meta']                              # pas de distance : boucle de base seule
+    assert any(w['code'] == 'no_alternative' for w in plain['warnings'])
+    assert not any(w['code'] == 'no_alternative' for w in generate(client).get_json()['route_meta']['warnings'])       # sans graine : rien
+    varied = generate(client, distance_km=30, seed=3).get_json()['route_meta']
+    assert not any(w['code'] == 'no_alternative' for w in varied['warnings'])
+
+
+def _engine_up():
+    try:
+        import urllib.request
+        return urllib.request.urlopen('http://127.0.0.1:8989/health', timeout=1).status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@pytest.mark.skipif(not _engine_up(), reason="moteur GraphHopper local absent (essai manuel de recette, jamais en CI)")
+def test_another_proposal_differs_against_the_local_engine():
+    from app.services.routing.graphhopper import GraphHopperProvider
+    engine = GraphHopperProvider('http://127.0.0.1:8989', guard=lambda d: None)
+    config = builder.BuildConfig(coverage_bbox=(48.83, 1.35, 51.55, 6.42))
+    points = [(50.6292, 3.0573), (50.6371, 3.0630), (50.6300, 3.0700)]
+    seed, seen = 1, set()
+    for _ in range(5):
+        generation = builder.generate(engine, points, 'run', 10, seed, config)
+        seen.add(tuple((round(lat, 5), round(lon, 5)) for lat, lon in generation.points[::7]))
+        seed = generation.meta['last_seed'] + 1
+    assert len(seen) == 5

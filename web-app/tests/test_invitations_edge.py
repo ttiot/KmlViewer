@@ -208,7 +208,7 @@ def test_a_member_gets_the_same_shape_for_a_taken_and_a_free_address_and_nothing
 def test_disabling_or_deleting_the_issuer_revokes_their_pending_invitations(app, conn):
     admin = add_user(conn, 'adm', admin=True)
     conn.execute("CREATE TABLE IF NOT EXISTS webauthn_credentials (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)")
-    conn.execute("INSERT INTO webauthn_credentials (user_id) VALUES (?)", (admin['id'],))          # un admin password a un second facteur (B5)
+    conn.execute("INSERT INTO webauthn_credentials (user_id, credential_id, public_key) VALUES (?, randomblob(16), x'00')", (admin['id'],))          # un admin password a un second facteur (B5)
     conn.commit()
     for name in ('left', 'gone'):
         member = add_user(conn, name, credits=2, email=f'{name}@example.org')

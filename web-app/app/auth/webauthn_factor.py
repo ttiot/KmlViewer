@@ -11,6 +11,7 @@ Clés de sécurité WebAuthn / FIDO2 comme second facteur (admin-space ADR-0004,
 Module sans Flask ; la base et le magasin d'états sont passés en paramètre.
 """
 
+import ipaddress
 import json
 import logging
 import os
@@ -30,6 +31,9 @@ from app.db import write_transaction
 
 logger = logging.getLogger(__name__)
 
+# Suffixes publics à plusieurs labels les plus courants : une surcharge qui en est un est refusée (liste minimale, T12-n1)
+PUBLIC_SUFFIXES = frozenset({'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'co.jp',
+                             'co.za', 'com.br', 'com.cn', 'com.mx', 'co.in', 'github.io', 'herokuapp.com', 'appspot.com'})
 RP_NAME = 'KmlViewer'
 MAX_KEYS = 10
 MAX_NAME = 60
@@ -52,14 +56,24 @@ def _public(cfg):
     return parts.scheme, (parts.hostname or ''), parts.port
 
 
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip('[]'))
+        return True
+    except ValueError:
+        return False
+
+
 def rp_id(cfg) -> Optional[str]:
     """RP ID : surcharge `WEBAUTHN_RP_ID` (suffixe de domaine de l'hôte) ou l'hôte de PUBLIC_URL ; None si inutilisable."""
     _scheme, host, _port = _public(cfg)
-    if not host:
+    if not host or _is_ip(host):                        # un RP ID n'est jamais une adresse IP
         return None
     override = (cfg.get('WEBAUTHN_RP_ID') or os.environ.get('WEBAUTHN_RP_ID') or '').strip().lower()
     if override:
-        if host == override or host.endswith('.' + override):
+        # Au moins deux labels (« com » ne désigne aucun site) et un suffixe de domaine de l'hôte (T12-n1)
+        if ((host == override or (host.endswith('.' + override) and '.' in override and override not in PUBLIC_SUFFIXES))
+                and override.strip('.') == override):
             return override
         logger.error("WEBAUTHN_RP_ID n'est pas un suffixe de l'hôte de PUBLIC_URL : WebAuthn indisponible")
         return None

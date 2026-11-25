@@ -525,3 +525,34 @@ def test_a_grafted_trace_never_exceeds_the_file_point_limit():
     out = quality.decimate(points, MAX_FILE_POINTS)
     assert len(out) == MAX_FILE_POINTS and out[0] == points[0] and out[-1] == points[-1]
     assert quality.decimate(points[:5], 10) == points[:5]
+
+
+# --- « Autre proposition » (RB-4.5, RB-4.12, P-TR5-4) --------------------------------------------------------------------------------
+
+def _fingerprint(points):
+    return hash(tuple((round(lat, 5), round(lon, 5)) for lat, lon in points[::5]))
+
+
+def test_consecutive_seeds_give_distinct_traces_so_another_proposal_is_never_the_same_trace():
+    d0 = d0_of()
+    traces = [generate(FakeProvider(sinuosity=0.05), POINTS, 'run', d0 * 1.6 / 1000, seed, CFG) for seed in range(1, 9)]
+    assert len({_fingerprint(g.points) for g in traces}) == 8
+    again = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', d0 * 1.6 / 1000, 3, CFG)
+    assert _fingerprint(again.points) == _fingerprint(traces[2].points)             # même graine : même trace (RB-4.4)
+
+
+def test_two_points_also_vary_with_the_seed():
+    pts = POINTS[:2]
+    d0 = d0_of(pts)
+    prints = {_fingerprint(generate(FakeProvider(sinuosity=0.05), pts, 'run', d0 * 1.8 / 1000, seed, CFG).points) for seed in range(1, 9)}
+    assert len(prints) >= 6
+
+
+def test_next_seed_follows_the_last_tried_seed_and_the_retained_seed_is_reported():
+    d0 = d0_of()
+    p = PetalOnly(POINTS, lengths={0: 10.0, 1: 10.0, 2: 10.0}, sinuosity=0.05)
+    gen = generate(p, POINTS, 'run', d0 * 1.6 / 1000, 0, BuildConfig(seed_retries=2, max_calls=30))
+    assert gen.meta['last_seed'] == 2 and gen.meta['seed_used'] in (0, 1, 2)
+    assert gen.meta['seed_dependent'] is True
+    base = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', None, 4, CFG)
+    assert base.meta['seed_dependent'] is False and base.meta['strategy'] == 'base'

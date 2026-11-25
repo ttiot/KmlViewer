@@ -111,6 +111,17 @@ def _offset_point(a, b, height_m: float, side: int):
     return (mid[0] + side * py * height_m / M_PER_DEG, mid[1] + side * px * height_m / (M_PER_DEG * cos_lat))
 
 
+def _sides(seed: int, count: int, rng) -> list:
+    """
+    Côté (gauche / droite) du décalage de chaque tronçon. Les graines CONSÉCUTIVES donnent des combinaisons DISTINCTES (chiffres
+    binaires de la graine, période 2^count) : « Autre proposition » ne retombe pas sur une trace déjà vue tant que le nombre de
+    combinaisons le permet ; même graine => mêmes côtés (reproductible, RB-4.4). Au-delà de 16 tronçons : tirage par la graine.
+    """
+    if count > 16:
+        return [rng.choice((-1, 1)) for _ in range(count)]
+    return [1 if (seed >> i) & 1 else -1 for i in range(count)]
+
+
 class DetourStrategy(ABC):
     name = ''
     needs_round_trip = False
@@ -146,12 +157,13 @@ class LateralPoints(DetourStrategy):
         chords = [_dist(a, b) for a, b in zip(seq, seq[1:])]
         total_chord = sum(chords) or 1.0
         index = ctx.base_distance_m / total_chord                  # routé / vol d'oiseau
-        sides = [rng.choice((-1, 1)) for _ in chords]
+        sides = _sides(ctx.seed, len(chords), rng)
         heights = []
         for chord in chords:
             extra = delta * chord / total_chord / max(index, 1.0)
             heights.append(math.sqrt(((chord + extra) / 2) ** 2 - (chord / 2) ** 2))
-        best, scale, previous = out, 1.0, None
+        # Ampleur initiale variée avec la graine (au-delà des côtés) : plus de variantes distinctes pour peu de tronçons
+        best, scale, previous = out, (1.0, 0.8, 1.25)[(ctx.seed >> len(chords)) % 3] if len(chords) <= 16 else 1.0, None
         for iteration in range(1, MAX_ITERATIONS + 1):
             waypoints, techs = [], []
             for i, (a, b) in enumerate(zip(seq, seq[1:])):

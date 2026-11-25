@@ -400,3 +400,22 @@ def test_the_front_script_is_served_by_the_application_without_external_library_
     assert 'innerHTML' not in js and 'eval(' not in js and 'http' not in js.replace('https', '')
     assert 'navigator.credentials.create' in js and 'navigator.credentials.get' in js and 'X-CSRF-Token' in js
     assert tokens                                                                                  # import utilisé
+
+
+def test_the_rp_id_override_needs_at_least_two_labels_T12_n1():
+    cfg = {'PUBLIC_URL': 'https://app.traces.example.com'}
+    for bad in ('com', 'example', '.com', 'com.', '.example.com', ''):
+        assert webauthn_factor.rp_id({**cfg, 'WEBAUTHN_RP_ID': bad}) in (None, 'app.traces.example.com'), bad
+    assert webauthn_factor.rp_id({**cfg, 'WEBAUTHN_RP_ID': 'com'}) is None
+    assert webauthn_factor.rp_id({**cfg, 'WEBAUTHN_RP_ID': 'example.com'}) == 'example.com'
+    assert webauthn_factor.rp_id({'PUBLIC_URL': 'http://localhost:5000', 'WEBAUTHN_RP_ID': 'localhost'}) == 'localhost'
+
+
+def test_the_key_columns_are_not_null_T12_n3(conn):
+    import sqlite3
+    user = add(conn, 'alice')
+    for columns in ("(user_id)", "(user_id, credential_id)", "(user_id, public_key)"):
+        values = "(?)" if columns == "(user_id)" else ("(?, x'01')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(f"INSERT INTO webauthn_credentials {columns} VALUES {values}", (user['id'],))
+    conn.rollback()

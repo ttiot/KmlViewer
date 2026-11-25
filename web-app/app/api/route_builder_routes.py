@@ -136,7 +136,11 @@ def route_builder_route_generate():
     meta = dict(generation.meta)
     meta['warnings'] = list(generation.warnings)
     meta['next_seed'] = (meta.get('last_seed', seed) + 1) % (MAX_SEED + 1)
-    meta['seed'] = meta.get('last_seed', seed)
+    meta['seed'] = meta.get('seed_used', meta.get('last_seed', seed))         # graine de la trace RETENUE (P-TR5-4)
+    if data.get('seed') is not None and not meta.get('seed_dependent', True):
+        # « Autre proposition » demandée mais la graine ne change rien (boucle de base, distance déjà dans la tolérance)
+        meta['warnings'].append({'code': 'no_alternative',
+                                 'message': "Aucune autre proposition : ces points ne laissent pas de variante."})
     payload = {**parsed, 'filename': generation.name, 'success': True}
     result_id = runtime.results.put(user_id, generation.gpx, payload, meta)
     meta['result_id'] = result_id

@@ -462,7 +462,7 @@ def test_secrets_reset_announces_an_instance_left_without_admin(cli_app):
     uid = add_user(cli_app, 'pwd:13', 'password', admin=True)
     conn = database.connect(cli_app.config['DB_PATH'])
     conn.execute("CREATE TABLE IF NOT EXISTS webauthn_credentials (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)")
-    conn.execute("INSERT INTO webauthn_credentials (user_id) VALUES (?)", (uid,))        # une clé WebAuthn survit à la remise à zéro
+    conn.execute("INSERT INTO webauthn_credentials (user_id, credential_id, public_key) VALUES (?, randomblob(16), x'00')", (uid,))        # une clé WebAuthn survit à la remise à zéro
     conn.commit()
     conn.close()
     assert 'aucun administrateur' not in cli_app.test_cli_runner().invoke(args=['secrets-reset', '--yes']).output
@@ -548,7 +548,7 @@ def test_has_second_factor_requires_a_confirmed_totp_or_a_webauthn_key(tmp_path)
     conn.execute("CREATE TABLE IF NOT EXISTS webauthn_credentials (id INTEGER PRIMARY KEY, user_id INTEGER)")
     conn.commit()
     assert not factors.has_second_factor(conn, uid)
-    conn.execute("INSERT INTO webauthn_credentials (user_id) VALUES (?)", (uid,))
+    conn.execute("INSERT INTO webauthn_credentials (user_id, credential_id, public_key) VALUES (?, randomblob(16), x'00')", (uid,))
     conn.commit()
     assert factors.has_second_factor(conn, uid)
     conn.close()

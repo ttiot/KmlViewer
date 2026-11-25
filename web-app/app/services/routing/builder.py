@@ -215,7 +215,7 @@ def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, 
     if len(kept) == 1:
         trace, elevations, tried, last_seed = _single_point(provider, kept[0], entry.profile, target_m, tolerance, seed,
                                                             budget, config, meta, notes, numbers[0])
-        meta.update(d0_m=None, detours=0, strategy='round_trip')
+        meta.update(d0_m=None, detours=0, strategy='round_trip', seed_dependent=True)
     else:
         trace, elevations, tried, last_seed = _loop(provider, kept, numbers, entry.profile, target_m, tolerance, seed, budget,
                                                     config, meta, warnings, notes)
@@ -282,6 +282,7 @@ def _single_point(provider, start, profile, target_m, tolerance, seed, budget, c
         candidate = (abs(quality.length_m(trace) - target_m), quality.overlap_rate(trace), trace, result.elevations_m)
         if best is None or candidate[:2] < best[:2]:
             best = candidate
+            meta['seed_used'] = last_seed
         if candidate[0] <= tolerance * target_m:
             break
     if best is None:
@@ -312,7 +313,7 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
         if gap_m > config.snap_tolerance_m:
             raise UnreachablePoint(number)
     d0 = quality.length_m(base_points)
-    meta.update(d0_m=d0, detours=0, strategy='base')
+    meta.update(d0_m=d0, detours=0, strategy='base', seed_dependent=False)      # la graine n'y change rien
     notes.extend(base.warnings)
     if not target_m or abs(d0 - target_m) <= tolerance * target_m:
         return base_points, base.elevations_m, 1, seed
@@ -340,9 +341,10 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
         key = (abs(outcome.distance_m - target_m), quality.overlap_rate(outcome.points))
         if best is None or key < best_key:
             best, best_key = outcome, key
+            meta['seed_used'] = last_seed
         if ctx.in_tolerance(outcome.distance_m):
             break
-    meta.update(detours=best.detours, strategy=strategy.name, iterations=best.iterations)
+    meta.update(detours=best.detours, strategy=strategy.name, iterations=best.iterations, seed_dependent=True)
     notes.extend(best.engine_warnings)
     for code in dict.fromkeys(best.warnings):
         if code == 'user_point_unreachable':

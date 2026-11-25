@@ -399,8 +399,8 @@ def _webauthn_credentials(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS webauthn_credentials (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            credential_id BLOB UNIQUE,
-            public_key    BLOB,
+            credential_id BLOB NOT NULL UNIQUE,
+            public_key    BLOB NOT NULL,
             sign_count    INTEGER NOT NULL DEFAULT 0,
             transports    TEXT,
             name          TEXT,
