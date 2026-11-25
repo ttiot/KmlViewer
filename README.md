@@ -100,7 +100,7 @@ Commandes d'exploitation (`docker compose exec kml-viewer flask <commande>`) :
 | `inbox-scan` | Passe une fois sur le dossier surveillé. Refuse de tourner (« Un autre processus… ») tant que l'application servie détient le verrou du dossier, c'est-à-dire en temps normal : le dossier est déjà scruté toutes les `INBOX_SCAN_INTERVAL` secondes |
 | `recompute-stats` | Recalcule distance, durées et records des activités déjà stockées (à lancer après une mise à jour qui corrige ces calculs) |
 | `user-admin <login>` | Donne le rôle admin et active le compte (c'est ainsi que se désigne le premier admin) ; `--revoke` retire le rôle. Sur un compte à mot de passe sans second facteur : refusé |
-| `user-invite --admin <e-mail>` | Amorçage du premier admin d'une instance à comptes à mot de passe : émet un jeton de 24 h à usage unique et affiche son lien une seule fois ([pas à pas](#amorçage-du-premier-administrateur)). `--account <login>` reprend l'amorçage d'un compte existant sans facteur ; avec `--reset-password` (qui exige `--account`), le lien fait **choisir un nouveau mot de passe** (mot de passe oublié) avant l'enrôlement |
+| `user-invite --admin <e-mail>` | Amorçage du premier admin d'une instance à comptes à mot de passe : émet un jeton de 24 h à usage unique et affiche son lien une seule fois ([pas à pas](#amorçage-du-premier-administrateur)). `--account <login>` reprend l'amorçage d'un compte existant sans facteur ; avec `--reset-password` (qui exige `--account`), le lien fait **choisir un nouveau mot de passe** (mot de passe oublié) avant l'enrôlement. Un compte **désactivé** est refusé (« Ce compte est désactivé : réactive-le d'abord »), refus tracé |
 | `user-mfa-reset <login>` | Perte de tous les seconds facteurs d'un compte à mot de passe : retire ses facteurs (TOTP, codes de secours), ferme ses sessions, le rétrograde s'il est admin. Annonce « dernier administrateur » **avant** d'agir si c'est le cas |
 | `secrets-rotate` | Rechiffre les secrets avec la première clé de `SECRETS_KEY` (rotation) |
 | `secrets-reset [--yes]` | Clé `SECRETS_KEY` perdue : efface tous les secrets chiffrés (à ressaisir) et les secrets TOTP ; rétrograde les admins qui n'ont plus aucun facteur |
@@ -186,7 +186,16 @@ motif dans les logs (`./logs.sh`).
 > (liste récapitulative : [Non livré](#non-livré)). Les trois modes d'authentification sont utilisables ;
 > le mode `password` (comptes sur invitation, second facteur TOTP) se met en route avec
 > [l'amorçage du premier administrateur](#amorçage-du-premier-administrateur). Le constructeur de traces
-> ([bêta](#constructeur-de-traces-bêta)) est livré. Reste non livré : WebAuthn.
+> ([bêta](#constructeur-de-traces-bêta)) et WebAuthn sont livrés ; les restes éventuels sont listés dans [Non livré](#non-livré).
+
+### Essayer la version de test (image publiée par la CI)
+
+La CI publie l'image de la branche `ghcr.io/ttiot/kmlviewer:unstable-feature-admin-space-and-route-builder` (aussi sur Docker
+Hub), qui contient tout : modes `oidc` / `local` / `password`, TOTP, codes de secours, WebAuthn, invitations, `/admin`,
+constructeur de traces. **Instance de test, base neuve, jamais en production.** Variables obligatoires du mode `password` :
+`AUTH_MODE`, `PUBLIC_URL`, `TRUSTED_HOSTS`, `SECRET_KEY`, `SECRETS_KEY` (et `SESSION_COOKIE_SECURE=0` pour un test local en HTTP
+seulement). Déploiement avec le compose, amorçage du premier admin, moteur de routage et **checklist « avant de tester »** :
+[docs/exploitation.md](docs/exploitation.md#déployer-limage-publiée-pour-tester).
 
 ### Déploiement géré par Ansible
 
@@ -219,7 +228,7 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
 |------|-----------|------------------------|------|
 | `oidc` | SSO obligatoire (FusionAuth ou autre IdP OIDC) ; en plus, comptes à mot de passe **sur invitation** si `SECRETS_KEY` **et** `PUBLIC_URL` sont renseignées | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS` | livré (SSO) ; comptes à mot de passe sur invitation (connexion avec second facteur TOTP) livrés |
 | `local` | aucune : mono-utilisateur, **chaque visiteur est administrateur** | aucune ; interdit avec `OIDC_ISSUER` | livré |
-| `password` | identifiant + mot de passe + second facteur, sans SSO | `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS`, `SECRETS_KEY`, `PUBLIC_URL` couverte par `TRUSTED_HOSTS` ; interdit avec `OIDC_ISSUER` | livré (second facteur : TOTP ; WebAuthn **non livré**) |
+| `password` | identifiant + mot de passe + second facteur, sans SSO | `SECRET_KEY` (32 caractères au moins), `TRUSTED_HOSTS`, `SECRETS_KEY`, `PUBLIC_URL` couverte par `TRUSTED_HOSTS` ; interdit avec `OIDC_ISSUER` | livré (second facteur : TOTP ou clé de sécurité WebAuthn) |
 
 - `AUTH_MODE=password` s'écrit toujours explicitement : un `AUTH_MODE` vide ne le choisit jamais
   (il donne `oidc` si `OIDC_ISSUER` est renseigné, sinon `local`).
@@ -289,14 +298,18 @@ Le lien affiché (24 h, usage unique) ne demande plus le mot de passe actuel mai
 de politique), qui **remplace** l'ancien (les sessions du compte sont fermées, action tracée), puis mène à l'enrôlement du TOTP
 et à l'octroi du rôle admin comme à l'amorçage. Refusé si le compte est inconnu, désactivé, SSO, ou s'il a déjà un second
 facteur (utiliser alors `flask user-mfa-reset` ou `flask user-admin`) ; `--reset-password` sans `--account` est une erreur
-d'usage.
+d'usage. Un compte **désactivé** est refusé aussi, avec ou sans `--reset-password` (aucun jeton émis, refus tracé) : le
+réactiver d'abord (onglet Utilisateurs).
 
 ### Second facteur (TOTP) et codes de secours
 
 - **TOTP** (RFC 6238, SHA-1, 6 chiffres, 30 s, tolérance ±1 pas ; **l'horloge du serveur doit être juste**, voir
   [docs/exploitation.md](docs/exploitation.md#horloge-et-ntp)). Secret de 160 bits chiffré au repos par `SECRETS_KEY`. Un code
-  n'est accepté qu'**une fois** (le même code rejoué est refusé : « Code invalide ou déjà utilisé »). 5 essais par connexion
-  puis il faut ressaisir le mot de passe, et un limiteur par compte (`ratelimit.mfa_per_account`).
+  n'est accepté qu'**une fois** (le même code rejoué est refusé : « Code invalide ou déjà utilisé »). **Seuls les échecs
+  comptent** : 5 essais ratés par connexion (puis il faut ressaisir le mot de passe) et, par compte, 5 échecs par
+  15 minutes (`ratelimit.mfa_per_account`, 3 à 10) avant un 429 ; un code juste ne consomme rien, et une connexion réussie ne
+  bloque jamais le compte, quel que soit le nombre de connexions. Le mot de passe reste limité **avant** le hachage
+  (`ratelimit.password_per_identifier`, `ratelimit.password_per_ip`), mais une connexion réussie rend son accès.
 - **Obligatoire pour les admins** (un admin à mot de passe a toujours un facteur actif, à tout instant) ; pour tous si
   `auth.mfa_policy` vaut `all`. Passer le réglage à `all` est **refusé** (erreur 409 indiquant le nombre de comptes) tant qu'un
   compte à mot de passe actif n'a pas de facteur ; un compte créé ensuite sans facteur est conduit à l'enrôlement à sa première
@@ -304,7 +317,7 @@ d'usage.
 - **Codes de secours** : 10 codes de 16 caractères, générés avec le **premier** facteur, montrés une seule fois, à usage
   unique ; leur utilisation envoie une notification par e-mail. Ils servent à se connecter quand le TOTP est perdu mais ne
   comptent **pas** comme un facteur. Régénérables depuis le profil (les anciens sont invalidés).
-- **Profil › Second facteur** : ajouter ou retirer le TOTP, régénérer les codes ; toute modification exige le mot de passe
+- **Profil › Second facteur** : ajouter ou retirer le TOTP ou une clé, régénérer les codes ; toute modification exige le mot de passe
   actuel, et retirer le TOTP ou régénérer les codes exige en plus un code TOTP valide. Le dernier facteur d'un admin ne
   peut pas être retiré. Changer son mot de passe ou son adresse e-mail (profil) exige le mot de passe actuel **et** un code
   du second facteur ; l'ancienne adresse est notifiée.
@@ -313,7 +326,18 @@ d'usage.
   sessions fermées, le compte est **rétrogradé** s'il était admin ; le titulaire se reconnecte avec son mot de passe, enrôle
   un nouveau facteur, puis un admin le repromeut (`flask user-admin` est **refusé** tant que le compte n'a pas de
   facteur). Procédure : [docs/exploitation.md](docs/exploitation.md#perte-dun-second-facteur).
-- **WebAuthn** (clés de sécurité) : **non livré** (T12) ; seul le TOTP est proposé.
+- **Clés de sécurité WebAuthn** (FIDO2, ou authentificateur de l'appareil) : second facteur au même titre que le TOTP, à
+  l'enrôlement (« Enregistrer une clé de sécurité »), à la connexion (« Utiliser une clé de sécurité » quand le compte en a
+  une) et dans le profil. Un compte peut cumuler TOTP et jusqu'à 10 clés. **Exigences** : `PUBLIC_URL` en **HTTPS**
+  (`http://localhost` n'est accepté qu'en test ou en mode debug : sans HTTPS le bouton n'apparaît pas) ; l'identifiant de
+  partie de confiance (RP ID) est l'hôte de `PUBLIC_URL`, qui ne doit pas être une adresse IP ; `WEBAUTHN_RP_ID` peut le figer sur
+  un domaine parent (au moins **deux libellés**, suffixe de l'hôte, jamais un suffixe public comme `com`, `co.uk` ou
+  `github.io`) ; une valeur refusée désactive WebAuthn (message dans les journaux). **Changer `PUBLIC_URL` (ou le RP ID)
+  rend les clés déjà enregistrées inutilisables** : fixer `WEBAUTHN_RP_ID` sur le domaine parent avant d'enrôler pour s'en
+  protéger. Défi de 32 octets gardé côté serveur (2 minutes, à usage unique) ; un compteur de signatures qui régresse est
+  refusé et audité. **Ajouter une clé** (profil) : mot de passe actuel ; **retirer une clé** : mot de passe actuel **et** code
+  TOTP ou de secours. Le dernier facteur d'un admin ne peut pas être retiré. Une clé enregistrée en premier facteur génère
+  les 10 codes de secours.
 
 ### Espace d'administration (`/admin`)
 
@@ -326,7 +350,7 @@ Réservé aux admins (un admin à mot de passe doit avoir un second facteur acti
 | Invitations | toutes les invitations ; créer (note libre réservée aux admins), révoquer ; lien affiché une seule fois |
 | Fonctions bêta | état de chaque fonction : désactivée, liste d'utilisateurs, ou tous (aujourd'hui `route_builder`, le [constructeur de traces](#constructeur-de-traces-bêta)), avec le diagnostic du moteur |
 | Réglages | valeur, source (base / env / défaut), surcharge, retour au défaut ; bornes validées, lot tout ou rien |
-| Clés API et e-mail | SMTP (hôte, port, sécurité, identifiant, expéditeur), secrets en écriture seule, e-mail de test (réponse « ok » ou « ko » sans détail) |
+| Clés API et e-mail | SMTP (hôte, port, sécurité, identifiant, expéditeur), secrets en écriture seule, e-mail de test et « Tester » du moteur de routage (réponse « ok » ou « ko » sans détail, rendue à l'échéance du service) |
 | Journal | journal d'audit paginé et filtrable ; l'origine se lit sur le type d'acteur (compte, ligne de commande, système) |
 
 L'API correspondante est sous `/api/admin/*` (utilisateurs, invitations, réglages et `settings/diagnostic`, secrets
@@ -348,7 +372,8 @@ la date, l'auteur et la destination liée.
 | `SESSION_LIFETIME_HOURS` | Durée absolue d'une session, depuis la connexion | `12` |
 | `OUTBOUND_ALLOWED_HOSTS` | Liste blanche des destinations sortantes. Voir ci-dessous | vide |
 | `SCHEDULER_ENABLED` | `0` coupe l'ordonnanceur de fond (réplique secondaire, diagnostic). Par défaut il démarre dans tout processus servi, jamais en ligne de commande | `1` |
-| `WEBAUTHN_RP_ID` | Identifiant de partie de confiance WebAuthn. **Non lue** (WebAuthn : T12, **non livré**) | — |
+| `WEBAUTHN_RP_ID` | Identifiant de partie de confiance WebAuthn : domaine parent de l'hôte de `PUBLIC_URL`, au moins deux libellés, ni suffixe public ni adresse IP ([détail](#second-facteur-totp-et-codes-de-secours)) | hôte de `PUBLIC_URL` |
+| `ROUTING_ALLOW_CLEARTEXT_KEY` | `1` autorise l'envoi d'une clé API du moteur (`routing.api_key`) en **clair** (URL `http://`). Sans lui, une clé configurée pour une destination `http` fait déclarer le moteur indisponible (avertissement dans les journaux). Le moteur du compose n'a **pas besoin de clé** : ne pas saisir de `routing.api_key` et laisser à `0` | `0` |
 | `ROUTING_BASE_URL` | URL du moteur de routage (`http://graphhopper:8989` avec le service du compose). Valeur initiale du réglage `routing.base_url` ; autorisée d'office pour le service `routing` quand elle vient de l'environnement. Voir [Service de routage](#service-de-routage-graphhopper) | vide |
 | `ROUTING_XMX`, `ROUTING_MEM_LIMIT`, `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT` | Mémoire du moteur (tas Java, limite du conteneur) et de l'import mensuel ; lues par `docker-compose.yml` et `routing/update.sh`, pas par l'appli | `1536m`, `2g`, `6g`, `8g` |
 | `ROUTING_EXTRACT_URLS`, `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS`, `ROUTING_HEALTH_TIMEOUT`, `ROUTING_MAX_DOWNLOAD_BYTES`, `ROUTING_LOCK` | Lues par `routing/update.sh` seulement (voir [Service de routage](#service-de-routage-graphhopper)) | voir le script |
@@ -461,13 +486,13 @@ facultative qui donne sa valeur initiale.
 | `smtp.host`, `smtp.port`, `smtp.security`, `smtp.username`, `smtp.sender`, `smtp.timeout_s` | — | vide, 587, `starttls`, vide, vide, 10 | voir [E-mail](#e-mail-et-notifications) |
 | `ratelimit.password_per_identifier` (tentatives / 15 min / identifiant) | — | 5 | 3 – 20 |
 | `ratelimit.password_per_ip` (/ 15 min / IP) | — | 20 | 10 – 100 |
-| `ratelimit.mfa_per_account` (second facteur, / 15 min / compte) | — | 5 | 3 – 10 |
+| `ratelimit.mfa_per_account` (**échecs** de second facteur / 15 min / compte) | — | 5 | 3 – 10 |
 | `ratelimit.forgot_per_identifier` (mot de passe oublié, / h / identifiant) | — | 3 | 1 – 10 |
 | `ratelimit.forgot_per_ip` (/ h / IP) | — | 10 | 10 – 100 |
 | `ratelimit.token_per_ip` (essais de jeton, / 15 min / IP) | — | 10 | 5 – 30 |
 | `map.basemaps`, `map.default_basemap`, `map.center_lat`, `map.center_lon`, `map.zoom` | — | 5 fonds embarqués, `osm`, 46,603354 / 1,888334, zoom 6 | ≤ 10 fonds ; lat −85 – 85, lon −180 – 180, zoom 1 – 22 |
 | `routing.*` (traces planifiées : délais, budgets, appels, points, distance, tolérances, recouvrement, stratégie de détours `s1` / `s2` / `hybrid` (défaut `hybrid`), essais de graine 0 – 2, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | voir [Constructeur de traces](#constructeur-de-traces-bêta) | bornées dans le registre |
-| `routing.coverage_bbox` (zone couverte : `[lon min, lat min, lon max, lat max]`) | — | `[1.35, 48.80, 6.45, 51.55]` | 4 nombres, lon −180 – 180, lat −90 – 90, min < max, côtés ≤ 2 000 km |
+| `routing.coverage_bbox` (zone couverte : `[lon min, lat min, lon max, lat max]`) | — | `[1.35, 48.83, 6.42, 51.55]` | 4 nombres, lon −180 – 180, lat −90 – 90, min < max, côtés ≤ 2 000 km |
 
 Les seuils du limiteur s'appliquent à chaud, sans remettre les compteurs à zéro. Ne sont **pas**
 administrables (environnement ou code seulement) : tout ce qui figure dans « Variables d'amorçage et de
@@ -631,9 +656,15 @@ l'enregistrer dans la bibliothèque. Fonction **bêta**, fermée par défaut.
 
 **Utiliser** (visualiseur › « Créer une trace ») :
 
-1. **Poser des points** : cliquer sur la carte (points numérotés, 1 à `routing.max_waypoints` = 50) ; glisser un point pour le
-   déplacer, clic droit pour le retirer ; « Annuler le dernier », « Rétablir » (100 états), « Effacer ». Le contour en
-   pointillé est la **zone couverte** ; un point hors de la zone est refusé (« Hors de la zone couverte »).
+1. **Poser des points** : cliquer sur la carte (points numérotés, 1 à `routing.max_waypoints` = 50). **Cliquer SUR un chemin
+   ou une route** : le moteur rattache chaque point à la voie la plus proche, et un point à plus de
+   `routing.snap_tolerance_m` (50 m par défaut) d'une voie praticable est refusé (voir les erreurs plus bas). Glisser un point
+   pour le déplacer ; cliquer ou appuyer sur un point ouvre un menu **Retirer ce point** / **Insérer avant** (clic droit pour
+   retirer directement) ; « Annuler le dernier » et « Rétablir » (100 états, aussi `Ctrl+Z` / `Ctrl+Y` ou `Ctrl+Maj+Z` hors des
+   champs de saisie) ; « Tout effacer » demande une confirmation dans la page. Une ligne en pointillé relie les points en
+   boucle fermée et la longueur à vol d'oiseau s'affiche ; le navigateur prévient avant de quitter la page tant que des
+   points n'ont pas été transformés en trace. Le contour en pointillé est la **zone couverte** ; un point hors de la zone est
+   refusé (« Hors de la zone couverte. »).
 2. **Choisir l'activité** : Course à pied (profil `foot`), Trail et Randonnée (`hike`), Vélo de route (`racingbike`), Gravel
    (`gravel`, stocké comme vélo de route), VTT (`mtb`) ; la valeur par défaut suit l'activité par défaut du profil.
 3. **Distance voulue** (km, 1 à `routing.max_distance_km` = 300, pas de 0,5 dans le formulaire). **Obligatoire avec un seul
@@ -643,7 +674,10 @@ l'enregistrer dans la bibliothèque. Fonction **bêta**, fermée par défaut.
    détours pour s'approcher de la distance voulue (tolérance `routing.distance_tolerance_pct` = ±15 %, stratégie
    `routing.detour_strategy`, essais de graine `routing.seed_retries`). Le résultat s'affiche sur la carte avec sa distance, le
    D+ quand il est connu et l'écart à la distance voulue. « Annuler » abandonne l'attente (le serveur termine dans son budget).
-5. **Autre proposition** (même points, nouvelle graine), **Modifier les points** (revenir aux points), ou donner un **nom**
+5. **Autre proposition** (mêmes points, graine suivante) : le serveur écarte toute trace identique à celles déjà proposées
+   dans la série (même géométrie) en essayant les graines suivantes dans la limite de `routing.seed_retries` ; s'il n'en trouve
+   pas d'autre, il rend la meilleure avec l'avertissement « Aucune autre proposition différente trouvée pour ces points. »
+   (ajouter ou déplacer un point en donne de nouvelles). **Modifier les points** (revenir aux points), ou donner un **nom**
    puis **Enregistrer**. Un second « Enregistrer » du même résultat répond « Déjà enregistrée ». Un résultat non enregistré est
    gardé 30 minutes côté serveur (20 par utilisateur au plus) : au-delà, « Résultat introuvable ou expiré » (404).
 6. **Bibliothèque** : la trace enregistrée porte le badge **Planifiée** ; le filtre « Nature des traces » propose **Toutes**
@@ -660,23 +694,25 @@ l'enregistrer dans la bibliothèque. Fonction **bêta**, fermée par défaut.
 | « Distance minimale passant par tes points : X km. » | les points imposent déjà plus que la distance voulue (+ tolérance) |
 | « Distance obtenue : X km pour Y km voulus (±Z %). » | hors tolérance après les essais ; avec **2 points** s'ajoute « Ajoute un point de passage pour une boucle plus proche de la distance voulue. » |
 | « La trace emprunte plusieurs fois les mêmes voies. » | recouvrement au-dessus de `routing.overlap_warning_pct` (25 %), de `routing.overlap_warning_pct_2pts` (40 %) avec 2 points |
+| « Aucune autre proposition différente trouvée pour ces points. » | « Autre proposition » n'a rien trouvé de différent des traces déjà vues |
 | avertissements du moteur | repris tels quels |
 
-**Erreurs** (message fixe, jamais de coordonnée ni d'adresse du moteur) : 400 entrée invalide (points, activité, distance,
-« Un point est hors de la zone couverte », « Distance requise avec un seul point », « Points trop éloignés les uns des
-autres ») sans appel au moteur ; 422 « Le point N ne peut pas être approché » (numéro d'origine) ou « Aucun itinéraire trouvé » ;
+**Erreurs** (message fixe, jamais de coordonnée ni d'adresse du moteur ; N est le numéro du point **tel que posé**) : 400 entrée
+invalide, sans appel au moteur : points, activité, distance (« Distance : de 1 à 300 km »), **« Le point N est hors de la zone
+couverte. »** (hors `routing.coverage_bbox`), « Distance requise avec un seul point », « Points trop éloignés les uns des
+autres » ; 422 **« Le point N est trop loin d'une voie praticable : rapproche-le d'un chemin. »** (le point est dans la zone
+mais à plus de `routing.snap_tolerance_m` d'une voie : le **déplacer sur un chemin**) ou « Aucune trace possible avec ces
+points : essaie d'autres points. » ;
 429 « Une génération est encore en cours » (une par utilisateur), « Service occupé » (`routing.max_concurrent` = 2 pour l'instance),
 « Trop de générations » (`routing.rate_limit_per_user` = 30 par heure et par utilisateur) ; 502 réponse invalide, 503 moteur
 indisponible, 504 délai dépassé (`routing.timeout_s`, budget `routing.total_budget_s`, appels `routing.max_calls`).
 
 **Zone couverte (`routing.coverage_bbox`)** : rectangle `[lon min, lat min, lon max, lat max]`, défaut
-`[1.35, 48.80, 6.45, 51.55]` (Hauts-de-France et Belgique). Le serveur refuse (400) toute demande dont un point en sort, avant
-tout appel au moteur ; le rectangle annoncé par le moteur (`/info`) est trop large pour servir de zone. Valeur refusée à
-l'écriture si les bornes sont incohérentes (min ≥ max, hors limites, côté > 2 000 km). **Limite actuelle** : le formulaire
-« Réglages » de l'administration ne sait pas saisir ce rectangle (il envoie du texte au lieu d'une liste) : l'écrire par
-l'API, par exemple
-`PATCH /api/admin/settings` avec `{"routing.coverage_bbox": [1.35, 48.8, 6.45, 51.55]}` ; `flask settings-reset
-routing.coverage_bbox` revient au défaut.
+`[1.35, 48.83, 6.42, 51.55]` (Hauts-de-France et Belgique, resserré sur l'emprise réelle du moteur : le diagnostic de la
+fonction indique si le rectangle tient dans la zone annoncée par le moteur). Le serveur refuse (400) toute demande dont un point
+en sort, avant tout appel au moteur ; le rectangle annoncé par le moteur (`/info`) est trop large pour servir de zone. Saisie :
+onglet Réglages, en JSON (`[1.35, 48.83, 6.42, 51.55]`), valeur refusée si les bornes sont incohérentes (min ≥ max, hors
+limites, côté > 2 000 km) ; `flask settings-reset routing.coverage_bbox` revient au défaut.
 
 **Altitude** : le moteur n'est **pas** interrogé pour l'altitude (aucun fournisseur d'altitude dans `routing/config.yml`) ; la
 trace générée n'a donc **ni profil d'altitude ni D+ avant l'enregistrement**. À l'enregistrement, la correction d'altitude par
@@ -685,13 +721,16 @@ couvrent la zone (`DEM_BBOX` à élargir aux Hauts-de-France et à la Belgique) 
 
 ### Non livré
 
-Mis à jour le 2026-11-25 d'après le code et [docs/specs/admin-space.md](docs/specs/admin-space.md) §14.
-Ce tableau est la liste de référence ; chaque mention **non livré** ci-dessus y renvoie.
+Mis à jour le 2026-11-25 d'après le code (HEAD `37ad93c`) et `STATUS.md`. Les fonctions prévues par
+[docs/specs/admin-space.md](docs/specs/admin-space.md) et [docs/specs/gpx-route-builder.md](docs/specs/gpx-route-builder.md)
+sont **toutes livrées**, WebAuthn et constructeur de traces compris. Restent, par ordre d'importance pour l'exploitant :
 
-| Fonction | Conséquence aujourd'hui |
-|----------|-------------------------|
-| **WebAuthn** (clés de sécurité, T12) | Seul le TOTP est proposé ; `WEBAUTHN_RP_ID` n'est pas lue |
-| Mot de passe oublié de bout en bout sans SMTP | Sans SMTP aucun mail ne part : un admin génère un lien de réinitialisation et le transmet |
+| Point | Conséquence aujourd'hui |
+|-------|-------------------------|
+| Appréciation visuelle des traces **gravel** | À faire par l'utilisateur sur l'échantillon du spike (`spike/detours/out/echantillon/`) ; la qualité terrain du profil `gravel` (il évite surtout le bitume sans viser le gravier) n'est pas jugée |
+| Mot de passe oublié sans SMTP | Aucun mail ne part : un admin génère un lien de réinitialisation (onglet Utilisateurs) et le transmet |
+| `./restart.sh` ne relit pas `.env` | Outil de développement local ; en déploiement, recréer le conteneur (`docker compose up -d`). Modification du script en attente de décision |
+| Diagnostic « fond par défaut indisponible » (nit T16-n3) | Si le fond de carte par défaut devient non autorisé, la carte retombe sur le premier fond autorisé sans le signaler dans l'administration |
 
 ## 🐛 Dépannage
 
