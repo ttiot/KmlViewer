@@ -24,6 +24,8 @@
                 if (typeof data.next === 'string' && data.next.startsWith('/')) { nextUrl = data.next; }
                 document.getElementById('recoveryCodes').textContent = (data.recovery_codes || []).join('\n');
                 document.getElementById('enrollStep1').hidden = true;
+                    const keyBox = document.getElementById('enrollKeyBox');
+                    if (keyBox) keyBox.hidden = true;
                 document.getElementById('enrollStep2').hidden = false;
                 return;
             }
@@ -48,4 +50,34 @@
         }
     });
     document.getElementById('codesNoted').addEventListener('click', () => { window.location.assign(nextUrl); });
+
+    // Clé de sécurité (T12) : mêmes étapes finales que le TOTP (codes de secours montrés une fois, puis connexion)
+    const keyButton = document.getElementById('enrollKey');
+    if (keyButton) {
+        if (!Webauthn.supported()) { document.getElementById('enrollKeyBox').hidden = true; }
+        keyButton.addEventListener('click', async () => {
+            message.textContent = '';
+            keyButton.disabled = true;
+            try {
+                const result = await Webauthn.register('/auth/password/enroll/webauthn/options',
+                    '/auth/password/enroll/webauthn/verify', csrf, { name: document.getElementById('enrollKeyName').value });
+                const data = result.data;
+                if (result.ok && data.success) {
+                    if (typeof data.next === 'string' && data.next.startsWith('/')) { nextUrl = data.next; }
+                    document.getElementById('recoveryCodes').textContent = (data.recovery_codes || []).join('\n');
+                    document.getElementById('enrollStep1').hidden = true;
+                    const keyBox = document.getElementById('enrollKeyBox');
+                    if (keyBox) keyBox.hidden = true;
+                    document.getElementById('enrollStep2').hidden = false;
+                    return;
+                }
+                message.textContent = data.error || "L'enregistrement de la clé a échoué.";
+                if (data.restart) { window.setTimeout(() => window.location.assign('/auth/password/login'), 1500); }
+            } catch (_) {
+                message.textContent = 'Clé refusée ou opération annulée.';
+            } finally {
+                keyButton.disabled = false;
+            }
+        });
+    }
 })();

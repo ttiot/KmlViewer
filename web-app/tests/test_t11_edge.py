@@ -745,7 +745,8 @@ def test_the_mfa_state_never_returns_the_secret_or_codes(app, conn):
     row, secret, client = enrolled_profile(app, conn)
     body = call(client, 'get', '/api/me/mfa').get_data(as_text=True)
     assert secret not in body and 'recovery' in body and 'KmlViewer' not in body
-    assert json.loads(body) == {'success': True, 'totp': True, 'keys': 0, 'recovery_codes_remaining': 10}
+    assert json.loads(body) == {'success': True, 'totp': True, 'keys': 0, 'key_list': [], 'webauthn_available': True,
+                                    'recovery_codes_remaining': 10}
 
 
 def test_the_mfa_routes_are_for_password_accounts_with_a_full_session_only(app, conn):

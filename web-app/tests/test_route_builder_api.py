@@ -623,3 +623,10 @@ def test_the_builder_front_covers_rb_2_2_undo_keys_insert_before_touch_removal_a
     assert 'Insérer avant' in js and 'insertBefore' in js and "marker.on('click'" in js and "marker.on('contextmenu'" in js
     assert 'rbClearConfirm' in js and 'rbClearConfirm' in html and 'confirm(' not in js.replace('Confirmer', '')
     assert 'beforeunload' in js and 'dashArray' in js and 'birdLength' in js
+
+
+def test_a_401_clears_the_builder_points_stored_in_the_browser_TR6_n1():
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js' / 'common.js').read_text(encoding='utf-8')
+    block = js.split('response.status === 401')[1].split('}')[0:3]
+    assert "kmlviewer.routeBuilder." in ''.join(block) and 'removeItem' in ''.join(block)

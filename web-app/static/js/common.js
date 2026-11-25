@@ -14,6 +14,11 @@ const App = (() => {
         }
         const response = await fetch(path, init);
         if (response.status === 401) {
+            // Session terminée sans passer par la déconnexion : les points du constructeur de traces sont effacés (TR6-n1)
+            try {
+                Object.keys(window.localStorage).filter((k) => k.startsWith('kmlviewer.routeBuilder.'))
+                    .forEach((k) => window.localStorage.removeItem(k));
+            } catch (_) { /* stockage indisponible */ }
             const here = window.location.pathname + window.location.search;
             window.location.assign('/auth/login?next=' + encodeURIComponent(here));
             throw new Error('Session expirée');

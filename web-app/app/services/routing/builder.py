@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence
 
+import numpy as np
+
 from app.services import geo
 from app.services.file_formats import MAX_FILE_POINTS
 from app.services.routing import detours, profiles, quality
@@ -24,6 +26,7 @@ from app.services.routing.base import (InvalidRequest, InvalidResponse, NoRouteF
 
 logger = logging.getLogger(__name__)
 
+ELEVATION_THRESHOLD_M = 3.0         # hystérésis du dénivelé (altitude du moteur, comme un GPS : lissage et seuil)
 MIN_DISTANCE_KM = 1.0               # RB-3.2 : 1 à 300 km (réglage)
 DUPLICATE_M = 5.0                   # RB-S1 : doublons consécutifs et Pn proche de P1
 MIN_SEED_CALLS = 3                  # RB-4.12 : un essai de graine supplémentaire exige au moins 3 appels et 5 s restants
@@ -108,9 +111,14 @@ def _validated_points(raw_points, config: BuildConfig):
 def _validated_target(distance_km, config: BuildConfig) -> Optional[float]:
     if distance_km is None:
         return None
-    if (isinstance(distance_km, bool) or not isinstance(distance_km, (int, float)) or not math.isfinite(distance_km)
-            or not MIN_DISTANCE_KM <= distance_km <= config.max_distance_km):
-        raise InvalidBuild(f"Distance : de {MIN_DISTANCE_KM:g} à {config.max_distance_km:g} km")
+    message = f"Distance : de {MIN_DISTANCE_KM:g} à {config.max_distance_km:g} km"
+    if isinstance(distance_km, bool) or not isinstance(distance_km, (int, float)):
+        raise InvalidBuild(message)
+    # Un entier JSON démesuré n'est JAMAIS converti en float (OverflowError) : il est borné tel quel (T-TR5-A)
+    if isinstance(distance_km, float) and not math.isfinite(distance_km):
+        raise InvalidBuild(message)
+    if not MIN_DISTANCE_KM <= distance_km <= config.max_distance_km:
+        raise InvalidBuild(message)
     return float(distance_km) * 1000.0
 
 
@@ -214,6 +222,8 @@ def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, 
 
     for note in dict.fromkeys(notes):
         warnings.append(_warning('engine', note))
+    if elevations is not None and len(elevations) == len(trace):
+        elevations = quality.decimate(list(elevations), MAX_FILE_POINTS)     # mêmes indices que la trace
     trace = quality.decimate(trace, MAX_FILE_POINTS)  # borne des fichiers (TR2-2)
     distance = quality.length_m(trace)
     overlap = quality.overlap_rate(trace)
@@ -227,7 +237,8 @@ def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, 
         if len(kept) == 2:                                      # RB-4.14 : suggestion distincte, à code stable
             warnings.append(_warning('add_waypoint',
                                      "Ajoute un point de passage pour une boucle plus proche de la distance voulue."))
-    meta.update(distance_m=distance, gap_pct=None if gap is None else round(gap * 100, 1),
+    ascent, descent = _elevation_gain(elevations, len(trace))
+    meta.update(ascent_m=ascent, descent_m=descent, distance_m=distance, gap_pct=None if gap is None else round(gap * 100, 1),
                 gap_m=None if not target_m else distance - target_m, overlap_pct=round(overlap * 100, 1),
                 closure_m=quality.closure_m(trace), calls=budget.calls, attempts=tried, last_seed=last_seed,
                 warnings=[w['message'] for w in warnings])
@@ -236,6 +247,14 @@ def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, 
     name = default_name(today)
     return Generation(gpx=build_gpx(trace, kept, entry.stored_type, elevations, today), points=trace, meta=meta,
                       warnings=warnings, name=name)
+
+
+def _elevation_gain(elevations, count: int):
+    """D+ / D− de la trace si le moteur a fourni l'altitude de CHAQUE point (RB-4.9, P-TR5-4), sinon (None, None)."""
+    if elevations is None or len(elevations) != count or count < 2:
+        return None, None
+    ascent, descent = geo.ascent_descent(np.asarray(elevations, dtype=float), ELEVATION_THRESHOLD_M)
+    return round(ascent, 1), round(descent, 1)
 
 
 def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta, notes, number=1):

@@ -139,6 +139,12 @@
                 <button type="button" class="btn btn-outline-danger" id="mfaRemove">Retirer le TOTP</button>
             </div>
         </form>
+        <div id="mfaKeys">
+            <h3 class="h6 mt-3">Clés de sécurité</h3>
+            <ul id="mfaKeyList" class="list-unstyled mb-2"></ul>
+            <button type="button" class="btn btn-outline-secondary" id="mfaKeyAdd" hidden>Ajouter une clé de sécurité</button>
+            <p class="hint">Ajouter ou retirer une clé demande ton mot de passe (et un code pour retirer).</p>
+        </div>
         <div id="mfaEnroll" hidden>
             <div id="mfaQr" class="qr" aria-label="QR code d'enrôlement"></div>
             <p>Clé : <code id="mfaSecret"></code></p>
@@ -164,5 +170,5 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/profile.js') }}"></script>
-{% if current_user['auth_method'] == 'password' %}<script src="{{ url_for('static', filename='js/profile-security.js') }}"></script>{% endif %}
+{% if current_user['auth_method'] == 'password' %}<script src="{{ url_for('static', filename='js/webauthn.js') }}"></script><script src="{{ url_for('static', filename='js/profile-security.js') }}"></script>{% endif %}
 {% endblock %}

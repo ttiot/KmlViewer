@@ -21,6 +21,9 @@ PUBLIC_ENDPOINTS = frozenset({
     'auth.token_page', 'auth.token_inspect', 'auth.token_consume',
     # Connexion par mot de passe (EF-1.11) : publiques ; l'étape 2 vérifie elle-même son état `mfa_pending`
     'auth.password_login', 'auth.password_mfa', 'auth.password_enroll', 'auth.password_forgot',
+    # Clés de sécurité (T12) : même contrat, état `mfa_pending` exigé par chaque route
+    'auth.password_mfa_webauthn_options', 'auth.password_mfa_webauthn_verify',
+    'auth.password_enroll_webauthn_options', 'auth.password_enroll_webauthn_verify',
 })
 
 

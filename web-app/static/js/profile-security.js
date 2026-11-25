@@ -52,9 +52,36 @@
         $('mfaSetup').disabled = data.totp;
         $('mfaRemove').disabled = !data.totp;
         $('mfaRegen').disabled = !(data.totp || data.keys);
+        $('mfaKeyAdd').hidden = !(data.webauthn_available && Webauthn.supported());
+        $('mfaKeyList').replaceChildren(...data.key_list.map((key) => el('li', { class: 'd-flex gap-2 align-items-center' },
+            el('span', {}, key.name || 'Clé de sécurité'), el('span', { class: 'hint' }, key.last_used_at ? `utilisée le ${key.last_used_at}` : 'jamais utilisée'),
+            el('button', { type: 'button', class: 'btn btn-sm btn-outline-danger', onclick: async () => {
+                if (await act(post(`/api/me/mfa/webauthn/${key.id}`, creds(), 'DELETE'), () => notify('Clé retirée.'))) loadMfa();
+            } }, 'Retirer'))));
     }
     const creds = () => ({ password: $('mfaPassword').value, code: $('mfaCode').value.trim() });
 
+    $('mfaKeyAdd').addEventListener('click', async () => {
+        try {
+            const first = await fetch('/api/me/mfa/webauthn/options', { method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('mfaPassword').value }) });
+            const options = await first.json();
+            if (!first.ok) { notify(options.error || 'Impossible de démarrer.', 'danger'); return; }
+            options.challenge = Webauthn.toBytes(options.challenge);
+            options.user.id = Webauthn.toBytes(options.user.id);
+            (options.excludeCredentials || []).forEach((c) => { c.id = Webauthn.toBytes(c.id); });
+            const created = await navigator.credentials.create({ publicKey: options });
+            const credential = { id: created.id, rawId: Webauthn.toText(created.rawId), type: created.type,
+                response: { clientDataJSON: Webauthn.toText(created.response.clientDataJSON),
+                    attestationObject: Webauthn.toText(created.response.attestationObject),
+                    transports: created.response.getTransports ? created.response.getTransports() : [] },
+                clientExtensionResults: created.getClientExtensionResults ? created.getClientExtensionResults() : {} };
+            const reply = await post('/api/me/mfa/webauthn/verify', { credential, name: 'Clé de sécurité' });
+            if (reply.recovery_codes && reply.recovery_codes.length) showOnce('Codes de secours (affichés une seule fois) :', reply.recovery_codes.join('\n'));
+            $('mfaPassword').value = '';
+            loadMfa();
+        } catch (error) { notify(error.message && !error.name ? error.message : 'Clé refusée ou opération annulée.', 'danger'); }
+    });
     $('mfaSetup').addEventListener('click', async () => {
         const r = await act(post('/api/me/mfa/totp/setup', { password: $('mfaPassword').value }));
         if (!r) return;

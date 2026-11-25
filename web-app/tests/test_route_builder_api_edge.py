@@ -18,6 +18,7 @@ import logging
 import re
 import threading
 import time
+from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -36,7 +37,6 @@ ENGINE = 'http://engine.test:8989'
 POINTS = [[50.63, 3.05], [50.66, 3.10], [50.64, 3.15]]
 BASE = '/api/route-builder'
 DEFAULT_COVERAGE = REGISTRY['routing.coverage_bbox'].default          # la valeur par défaut du registre (voir le test de conformité à la spec)
-SPEC_DEFAULT_COVERAGE = [1.35, 48.80, 6.45, 51.55]               # gpx-route-builder §5.6 et RB-1.3 (choix de spec, demande d'ops)
 
 
 class World:
@@ -684,11 +684,15 @@ def test_a_huge_integer_in_a_rectangle_is_a_400_never_a_500(world, value):
     assert r.status_code == 400
 
 
-@pytest.mark.xfail(strict=True, reason="écart spec / code (décision à prendre) : la spec (§5.6, RB-1.3, recette) fixe le défaut [1.35, 48.80, 6.45, 51.55] "
-                                       "(choix d'ops) ; le registre livre [1.35, 48.83, 6.42, 51.55] (proposition du 2026-11-25 : rectangle contenu dans /info). "
-                                       "Quand l'une des deux est alignée sur l'autre, retirer ce xfail")
 def test_the_default_coverage_is_the_one_written_in_the_spec():
-    assert DEFAULT_COVERAGE == SPEC_DEFAULT_COVERAGE
+    """Lit la valeur dans le tableau §5.6 de la spec (ligne routing.coverage_bbox), pas une copie en dur : spec et registre ne divergent plus."""
+    path = Path(__file__).resolve().parents[2] / 'docs' / 'specs' / 'gpx-route-builder.md'
+    if not path.is_file():
+        pytest.skip("spec absente : la CI ne monte que web-app dans le conteneur (le test protège en local et en développement)")
+    spec = path.read_text(encoding='utf-8')
+    row = next(line for line in spec.splitlines() if line.startswith('| `routing.coverage_bbox`'))
+    written = [json.loads(m) for m in re.findall(r'\[[-0-9., ]+\]', row)]
+    assert written and written[-1] == DEFAULT_COVERAGE, (written, DEFAULT_COVERAGE)
 
 
 def test_a_forged_coverage_in_the_database_falls_back_to_the_default_not_to_no_limit(world):

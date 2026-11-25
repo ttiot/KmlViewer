@@ -389,6 +389,27 @@ def _second_factors(conn: sqlite3.Connection) -> None:
         )""")
 
 
+def _webauthn_credentials(conn: sqlite3.Connection) -> None:
+    """
+    0016 - clés de sécurité WebAuthn (admin-space ADR-0004, EF-2.1, EF-2.4 ; T12) : identifiant et clé publique de la clé,
+    compteur de signatures (la régression d'un compteur non nul est refusée), transports, nom donné par l'utilisateur.
+    Supprimées avec le compte (CASCADE). Aucune donnée secrète : la clé privée ne quitte jamais l'authentificateur.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS webauthn_credentials (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            credential_id BLOB UNIQUE,
+            public_key    BLOB,
+            sign_count    INTEGER NOT NULL DEFAULT 0,
+            transports    TEXT,
+            name          TEXT,
+            created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            last_used_at  TEXT
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_webauthn_user ON webauthn_credentials (user_id)")
+
+
 def _emails_canonical(conn: sqlite3.Connection) -> None:
     """
     0014 - adresses sous forme canonique (EF-4.10, §13 n°32) : `email` et `pending_email` de TOUS les comptes (SSO compris)
@@ -467,6 +488,7 @@ NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ('0013_users_password_accounts', _users_password_accounts),
     ('0014_emails_canonical', _emails_canonical),
     ('0015_second_factors', _second_factors),
+    ('0016_webauthn_credentials', _webauthn_credentials),
 ]
 
 _MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')

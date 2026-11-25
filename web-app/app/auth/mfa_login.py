@@ -17,7 +17,7 @@ import time
 from flask import current_app, jsonify, redirect, render_template, request, session, url_for
 
 from app import audit
-from app.auth import bodies, bp, csrf, factors, modes, second_factor, users
+from app.auth import bodies, bp, csrf, factors, modes, second_factor, users, webauthn_factor
 from app.auth.notify import security_notice
 from app.auth.password_login import PENDING_COOKIE_KEY, _full_session, current_pending, pending_store
 from app.db import get_db, write_transaction
@@ -67,6 +67,23 @@ def _failure(pid):
     return jsonify(INVALID), 401
 
 
+def _open_session(db, pid, *, recovery: bool = False):
+    """Fin de la seconde étape : l'état est consommé atomiquement, sa liaison revérifiée, puis la session COMPLÈTE s'ouvre."""
+    done = pending_store().consume(pid, step='mfa')            # atomique : un cookie rejoué ne passe pas deux fois
+    if done is None:
+        return jsonify(RESTART), 401
+    user = db.execute("SELECT * FROM users WHERE id = ? AND is_active = 1", (done.user_id,)).fetchone()
+    bound = tuple(done.binding) == (user['session_token'], user['password_changed_at']) if user is not None else False
+    if user is None or user['auth_method'] != 'password' or not bound:
+        return jsonify(RESTART), 401                  # liaison revérifiée au moment d'ouvrir la session (T11-n2)
+    if recovery:
+        audit.record(db, 'user.recovery_used', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
+                     ip=request.remote_addr, details={'remaining': second_factor.remaining_recovery(db, user['id'])})
+        db.commit()
+        security_notice(user, 'recovery_used')
+    return _full_session(user, done.next_url)
+
+
 # -- Vérification à la connexion ----------------------------------------------------------------------------------------------
 
 @bp.route('/auth/password/mfa', methods=['GET', 'POST'])
@@ -78,7 +95,8 @@ def password_mfa():
     if state is None:
         return redirect(url_for('auth.password_login'))
     if request.method == 'GET':
-        return render_template('password_mfa.html', csrf_token=csrf.issue())
+        has_keys = webauthn_factor.available(current_app.config) and bool(webauthn_factor.keys_of(get_db(), state.user_id))
+        return render_template('password_mfa.html', csrf_token=csrf.issue(), has_keys=has_keys)
     refused, code = _code_request()
     if refused:
         return refused
@@ -95,19 +113,7 @@ def password_mfa():
         ok = second_factor.consume_recovery(db, state.user_id, code)
     if not ok:
         return _failure(pid)
-    done = pending_store().consume(pid, step='mfa')            # atomique : un cookie rejoué ne passe pas deux fois
-    if done is None:
-        return jsonify(RESTART), 401
-    user = db.execute("SELECT * FROM users WHERE id = ? AND is_active = 1", (done.user_id,)).fetchone()
-    bound = tuple(done.binding) == (user['session_token'], user['password_changed_at']) if user is not None else False
-    if user is None or user['auth_method'] != 'password' or not bound:
-        return jsonify(RESTART), 401                  # liaison revérifiée au moment d'ouvrir la session (T11-n2)
-    if kind == 'recovery':
-        audit.record(db, 'user.recovery_used', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
-                     ip=request.remote_addr, details={'remaining': second_factor.remaining_recovery(db, user['id'])})
-        db.commit()
-        security_notice(user, 'recovery_used')
-    return _full_session(user, done.next_url)
+    return _open_session(db, pid, recovery=(kind == 'recovery'))
 
 
 # -- Enrôlement ---------------------------------------------------------------------------------------------------------------
@@ -134,7 +140,8 @@ def password_enroll():
         secret = _enrollment_secret(state)
         uri = second_factor.provisioning_uri(secret, user['username'])
         return render_template('password_enroll.html', csrf_token=csrf.issue(), qr_svg=second_factor.qr_svg(uri),
-                               secret=second_factor.grouped(secret), grant=state.admin_grant)
+                               secret=second_factor.grouped(secret), grant=state.admin_grant,
+                               webauthn=webauthn_factor.available(current_app.config))
     refused, code = _code_request()
     if refused:
         return refused
@@ -147,26 +154,151 @@ def password_enroll():
     step = second_factor.matching_step(secret, normalized) if secret and normalized else None
     if step is None:
         return _failure(pid)
-    if pending_store().consume(pid, step='enroll') is None:     # atomique : une seule confirmation aboutit
-        return jsonify(RESTART), 401
     store = current_app.extensions['secrets']
-    actor = audit.Actor.from_user(user)
-    with write_transaction(db):
-        first = not factors.has_second_factor(db, user['id'])
+
+    def write(db, user):
         # Écriture CONDITIONNELLE à la liaison de l'état (session, mot de passe, compte actif) et à l'absence de TOTP (T11-n2/n3)
         written = db.execute(
             "UPDATE users SET totp_secret = ?, totp_enabled_at = ?, totp_last_step = ? WHERE id = ? AND is_active = 1 "
             "AND auth_method = 'password' AND session_token IS ? AND password_changed_at IS ? AND totp_enabled_at IS NULL",
             (store.encrypt_value(secret.encode('ascii')), time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), step,
              user['id'], *state.binding)).rowcount
-        if not written:
+        return bool(written)
+
+    return _finish_enrollment(db, state, user, pid, 'totp', write)
+
+
+def _finish_enrollment(db, state, user, pid, factor_type: str, write_factor):
+    """
+    Fin d'un enrôlement (TOTP ou clé de sécurité) : l'état est consommé atomiquement, puis UNE transaction écrit le facteur
+    (`write_factor(db, user)` -> écrit-il ?), les codes de secours (premier facteur) et l'octroi d'admin porté par l'état (B5).
+    """
+    if pending_store().consume(pid, step='enroll') is None:     # atomique : une seule confirmation aboutit
+        return jsonify(RESTART), 401
+    actor = audit.Actor.from_user(user)
+    with write_transaction(db):
+        first = not factors.has_second_factor(db, user['id'])
+        if not write_factor(db, user):
             db.rollback()
             return jsonify(RESTART), 401
         codes = second_factor.replace_recovery_codes(db, user['id']) if first else []
         audit.record(db, 'user.factor_added', actor=actor, target_type='user', target_id=user['id'], ip=request.remote_addr,
-                     details={'type': 'totp'})
+                     details={'type': factor_type})
         if state.admin_grant:
             users.set_admin(db, user['id'], True, actor=actor, ip=request.remote_addr)   # B5 : après le facteur
     session.pop(PENDING_COOKIE_KEY, None)
     security_notice(user, 'factor_added')
     return jsonify({'success': True, 'recovery_codes': codes, 'next': url_for('auth.password_login')})
+
+
+# -- Clés de sécurité WebAuthn (T12) -------------------------------------------------------------------------------------------
+
+def _webauthn_request():
+    """(réponse d'erreur, corps) d'un POST WebAuthn : mode, corps borné, CSRF."""
+    refused = _guard()
+    if refused:
+        return refused, None
+    data = bodies.small_json(limit=bodies.MAX_BODY * 4)
+    if data is None or not csrf.verify(request.headers.get('X-CSRF-Token')):
+        return (jsonify({'success': False, 'error': 'Requête invalide ou formulaire expiré : recharge la page.'}), 400), None
+    return None, data
+
+
+def _webauthn_unavailable():
+    return jsonify({'success': False, 'error': "Les clés de sécurité ne sont pas disponibles."}), 400
+
+
+@bp.route('/auth/password/mfa/webauthn/options', methods=['POST'])
+def password_mfa_webauthn_options():
+    refused, _data = _webauthn_request()
+    if refused:
+        return refused
+    state = current_pending('mfa')
+    if state is None:
+        return jsonify(RESTART), 401
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (state.user_id,)).fetchone()
+    try:
+        options = webauthn_factor.authentication_options(current_app.config, pending_store(),
+                                                          f"login:{session.get(PENDING_COOKIE_KEY)}",
+                                                          webauthn_factor.keys_of(db, user['id']))
+    except webauthn_factor.WebAuthnError:
+        return _webauthn_unavailable()
+    return current_app.response_class(options, mimetype='application/json')
+
+
+@bp.route('/auth/password/mfa/webauthn/verify', methods=['POST'])
+def password_mfa_webauthn_verify():
+    refused, data = _webauthn_request()
+    if refused:
+        return refused
+    state = current_pending('mfa')
+    if state is None:
+        return jsonify(RESTART), 401
+    pid = session.get(PENDING_COOKIE_KEY)
+    limited = _account_limited(state.user_id)
+    if limited:
+        return limited
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (state.user_id,)).fetchone()
+    try:
+        webauthn_factor.verify_authentication(db, current_app.config, pending_store(), f"login:{pid}", user,
+                                              data.get('credential'))
+    except webauthn_factor.WebAuthnError:
+        return _failure(pid)
+    return _open_session(db, pid)
+
+
+@bp.route('/auth/password/enroll/webauthn/options', methods=['POST'])
+def password_enroll_webauthn_options():
+    refused, _data = _webauthn_request()
+    if refused:
+        return refused
+    state = current_pending('enroll')
+    if state is None:
+        return jsonify(RESTART), 401
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (state.user_id,)).fetchone()
+    try:
+        options = webauthn_factor.registration_options(current_app.config, pending_store(),
+                                                        f"enroll:{session.get(PENDING_COOKIE_KEY)}", user,
+                                                        webauthn_factor.keys_of(db, user['id']))
+    except webauthn_factor.WebAuthnError:
+        return _webauthn_unavailable()
+    return current_app.response_class(options, mimetype='application/json')
+
+
+@bp.route('/auth/password/enroll/webauthn/verify', methods=['POST'])
+def password_enroll_webauthn_verify():
+    refused, data = _webauthn_request()
+    if refused:
+        return refused
+    state = current_pending('enroll')
+    if state is None:
+        return jsonify(RESTART), 401
+    pid = session.get(PENDING_COOKIE_KEY)
+    limited = _account_limited(state.user_id)
+    if limited:
+        return limited
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (state.user_id,)).fetchone()
+    try:
+        credential_id, public_key, sign_count, transports = webauthn_factor.verify_registration(
+            current_app.config, pending_store(), f"enroll:{pid}", data.get('credential'))
+        name = webauthn_factor.clean_name(data.get('name'), 'Clé de sécurité')
+    except webauthn_factor.WebAuthnError:
+        return _failure(pid)
+
+    def write(conn, account):
+        bound = conn.execute(
+            "SELECT 1 FROM users WHERE id = ? AND is_active = 1 AND auth_method = 'password' AND session_token IS ? "
+            "AND password_changed_at IS ?", (account['id'], *state.binding)).fetchone()
+        if not bound:
+            return False
+        try:
+            webauthn_factor.add_credential(conn, account['id'], credential_id, public_key, sign_count, transports, name)
+        except webauthn_factor.WebAuthnError:
+            return False
+        return True
+
+    return _finish_enrollment(db, state, user, pid, 'webauthn', write)

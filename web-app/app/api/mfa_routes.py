@@ -13,7 +13,7 @@ from flask import current_app, g, jsonify, request, session
 from app import audit
 from app.api import bp
 from app.api.payload import json_body
-from app.auth import factors, passwords, second_factor, users
+from app.auth import factors, passwords, second_factor, users, webauthn_factor
 from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
@@ -69,10 +69,11 @@ def _check_totp(user, data) -> None:
 def _state(user) -> dict:
     db = get_db()
     row = db.execute("SELECT totp_enabled_at FROM users WHERE id = ?", (user['id'],)).fetchone()
-    keys = 0
-    if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'webauthn_credentials'").fetchone():
-        keys = db.execute("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?", (user['id'],)).fetchone()[0]
-    return {'totp': bool(row and row['totp_enabled_at']), 'keys': keys,
+    keys = webauthn_factor.keys_of(db, user['id'])
+    return {'totp': bool(row and row['totp_enabled_at']), 'keys': len(keys),
+            'key_list': [{'id': k['id'], 'name': k['name'], 'created_at': k['created_at'], 'last_used_at': k['last_used_at']}
+                         for k in keys],
+            'webauthn_available': webauthn_factor.available(current_app.config),
             'recovery_codes_remaining': second_factor.remaining_recovery(db, user['id'])}
 
 
@@ -166,3 +167,91 @@ def mfa_recovery_codes():
         audit.record(db, 'user.recovery_regenerated', actor=audit.Actor.from_user(user), target_type='user',
                      target_id=user['id'], ip=request.remote_addr)
     return jsonify({'success': True, 'recovery_codes': codes})
+
+
+# -- Clés de sécurité WebAuthn (T12) ---------------------------------------------------------------------------------------------
+
+@bp.route('/me/mfa/webauthn/options', methods=['POST'])
+def mfa_webauthn_options():
+    """Ajoute une clé depuis le profil : mot de passe actuel exigé (une session volée ne suffit pas), défi lié à la session."""
+    user = _password_user()
+    data = json_body()
+    _check_password(user, data)
+    try:
+        options = webauthn_factor.registration_options(current_app.config, current_app.extensions['pending'],
+                                                        f"profile:{user['id']}:{user['session_token']}", user,
+                                                        webauthn_factor.keys_of(get_db(), user['id']))
+    except webauthn_factor.WebAuthnError as exc:
+        raise ApiError(str(exc), 409) from None
+    return current_app.response_class(options, mimetype='application/json')
+
+
+@bp.route('/me/mfa/webauthn/verify', methods=['POST'])
+def mfa_webauthn_verify():
+    user = _password_user()
+    data = json_body(large=False)
+    allowed, _retry = current_app.extensions['limiters'].mfa_account.hit(int(user['id']))
+    if not allowed:
+        raise ApiError('Trop de tentatives, réessaie plus tard.', 429)
+    pending = current_app.extensions['pending']
+    try:
+        credential_id, public_key, sign_count, transports = webauthn_factor.verify_registration(
+            current_app.config, pending, f"profile:{user['id']}:{user['session_token']}", data.get('credential'))
+        name = webauthn_factor.clean_name(data.get('name'), 'Clé de sécurité')
+    except webauthn_factor.WebAuthnError as exc:
+        raise ApiError(str(exc), 403) from None
+    db = get_db()
+    with write_transaction(db):
+        first = not factors.has_second_factor(db, user['id'])
+        try:
+            key_id = webauthn_factor.add_credential(db, user['id'], credential_id, public_key, sign_count, transports,
+                                                    name)
+        except webauthn_factor.WebAuthnError as exc:
+            raise ApiError(str(exc), 409) from None
+        codes = second_factor.replace_recovery_codes(db, user['id']) if first else []
+        audit.record(db, 'user.factor_added', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
+                     ip=request.remote_addr, details={'type': 'webauthn'})
+        token = _rotate_sessions(db, user)
+    session['token'] = token
+    security_notice(user, 'factor_added')
+    return jsonify({'success': True, 'id': key_id, 'recovery_codes': codes})
+
+
+@bp.route('/me/mfa/webauthn/<int:key_id>', methods=['DELETE'])
+def mfa_webauthn_remove(key_id):
+    """Retire une clé : mot de passe + code ; jamais le dernier facteur d'un admin (EF-2.2, B5)."""
+    user = _password_user()
+    data = json_body()
+    _check_password(user, data)
+    _check_totp_or_recovery(user, data)
+    db = get_db()
+    with write_transaction(db):
+        state = _state(user)
+        if not any(k['id'] == key_id for k in state['key_list']):
+            raise ApiError('Clé introuvable', 404)
+        if user['is_admin'] and not state['totp'] and state['keys'] <= 1:
+            raise ApiError('Un administrateur garde au moins un second facteur.', 409)
+        webauthn_factor.remove_credential(db, user['id'], key_id)
+        if not state['totp'] and state['keys'] <= 1:
+            db.execute("DELETE FROM recovery_codes WHERE user_id = ?", (user['id'],))     # plus de facteur : codes invalidés
+        audit.record(db, 'user.factor_removed', actor=audit.Actor.from_user(user), target_type='user', target_id=user['id'],
+                     ip=request.remote_addr, details={'type': 'webauthn'})
+        token = _rotate_sessions(db, user)
+    session['token'] = token
+    current_app.extensions['pending'].destroy_for_user(user['id'])
+    security_notice(user, 'factor_removed')
+    return jsonify({'success': True})
+
+
+def _check_totp_or_recovery(user, data) -> None:
+    """Second facteur exigé pour une suppression : code TOTP ou de secours (le compte peut n'avoir que des clés)."""
+    allowed, _retry = current_app.extensions['limiters'].mfa_account.hit(int(user['id']))
+    if not allowed:
+        raise ApiError('Trop de tentatives, réessaie plus tard.', 429)
+    code = data.get('code')
+    kind = second_factor.kind_of(code)
+    db = get_db()
+    ok = (second_factor.verify_totp(db, current_app.extensions['secrets'], user['id'], code) if kind == 'totp'
+          else second_factor.consume_recovery(db, user['id'], code) if kind == 'recovery' else False)
+    if not ok:
+        raise ApiError('Code invalide ou déjà utilisé.', 403)

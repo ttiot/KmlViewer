@@ -137,18 +137,10 @@ def route_builder_route_generate():
     meta['warnings'] = list(generation.warnings)
     meta['next_seed'] = (meta.get('last_seed', seed) + 1) % (MAX_SEED + 1)
     meta['seed'] = meta.get('last_seed', seed)
-    meta['ascent_m'], meta['descent_m'] = _elevation_gain(parsed)
     payload = {**parsed, 'filename': generation.name, 'success': True}
     result_id = runtime.results.put(user_id, generation.gpx, payload, meta)
     meta['result_id'] = result_id
     return jsonify({**payload, 'route_meta': meta})
-
-
-def _elevation_gain(parsed):
-    stats = parsed.get('stats') or parsed.get('elevation') or {}
-    ascent = stats.get('ascent_m', stats.get('ascent')) if isinstance(stats, dict) else None
-    descent = stats.get('descent_m', stats.get('descent')) if isinstance(stats, dict) else None
-    return (ascent, descent)
 
 
 def _clean_name(value, fallback: str) -> str:

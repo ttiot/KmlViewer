@@ -193,11 +193,14 @@ class Setting:
         if not isinstance(value, (list, tuple)) or len(value) != 4:
             raise ValueError("Rectangle : [lon_min, lat_min, lon_max, lat_max]")
         for number in value:
-            if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number):
+            # Un entier démesuré n'est jamais converti en float (OverflowError) : il est borné tel quel (T-TR5-B)
+            if isinstance(number, bool) or not isinstance(number, (int, float)) or (isinstance(number, float)
+                                                                                    and not math.isfinite(number)):
                 raise ValueError("Rectangle : quatre nombres finis")
-        lon_min, lat_min, lon_max, lat_max = (float(v) for v in value)
+        lon_min, lat_min, lon_max, lat_max = value
         if not (-180 <= lon_min < lon_max <= 180 and -90 <= lat_min < lat_max <= 90):
             raise ValueError("Rectangle : longitudes dans [-180, 180], latitudes dans [-90, 90], minimum < maximum")
+        lon_min, lat_min, lon_max, lat_max = (float(v) for v in value)
         from app.services import geo
         parallel = 0.0 if lat_min <= 0 <= lat_max else min(abs(lat_min), abs(lat_max))
         width = float(geo.haversine(parallel, lon_min, parallel, lon_max))

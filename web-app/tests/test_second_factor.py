@@ -507,7 +507,8 @@ def api(client, method, path, payload=None):
 def test_profile_setup_requires_the_current_password_and_confirmation_activates_totp(app, conn):
     user = add(conn, 'alice')
     client = session_client(app, conn, user)
-    assert api(client, 'GET', '/api/me/mfa').get_json() == {'success': True, 'totp': False, 'keys': 0, 'recovery_codes_remaining': 0}
+    assert api(client, 'GET', '/api/me/mfa').get_json() == {'success': True, 'totp': False, 'keys': 0, 'key_list': [], 'webauthn_available': True,
+                                                                       'recovery_codes_remaining': 0}
     assert api(client, 'POST', '/api/me/mfa/totp/setup', {}).status_code == 400
     assert api(client, 'POST', '/api/me/mfa/totp/setup', {'password': 'mauvais-mot-de-passe-1'}).status_code == 403
     setup = api(client, 'POST', '/api/me/mfa/totp/setup', {'password': GOOD}).get_json()
