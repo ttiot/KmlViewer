@@ -1108,3 +1108,121 @@ input[type="range"] {
         animation: none !important;
     }
 }
+
+/* ------------------------------------------------------ Réglages de l'administration (EF-6.9 à EF-6.15) */
+.settings-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px 20px;
+    margin-bottom: 12px;
+}
+
+.settings-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+}
+
+.settings-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 0.875rem;
+}
+
+.settings-tab[aria-selected="true"] {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--text);
+    font-weight: 600;
+}
+
+.settings-tab.is-dim {
+    opacity: 0.45;
+}
+
+.tab-count {
+    color: var(--text-3);
+    font-size: 0.75rem;
+    font-weight: 400;
+}
+
+.setting-row {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.setting-row.is-dirty {
+    border-left: 3px solid var(--warn);
+    padding-left: 10px;
+}
+
+.setting-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin-bottom: 4px;
+}
+
+.setting-label {
+    font-weight: 600;
+}
+
+.setting-hint {
+    margin: 2px 0 0;
+    font-size: 0.75rem;
+}
+
+.setting-help summary {
+    cursor: pointer;
+    color: var(--info);
+    list-style: none;
+}
+
+.setting-error {
+    margin: 4px 0 0;
+    color: var(--bad);
+    font-size: 0.8125rem;
+}
+
+.basemap-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 8px;
+}
+
+.rect-preview {
+    height: 180px;
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.chip-remove {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-weight: 700;
+}
+
+.settings-footer {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.settings-toolbar .field {
+    flex: 1 1 280px;
+    max-width: 420px;
+}

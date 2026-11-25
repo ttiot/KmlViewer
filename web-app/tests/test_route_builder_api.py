@@ -604,17 +604,6 @@ def test_the_default_coverage_matches_the_engine_extent_and_is_reported_containe
     assert runtime.diagnostic()['coverage_contained'] is False
 
 
-def test_every_registry_type_has_an_editing_control_in_the_admin_form_Doc_16():
-    import pathlib
-    from app.settings.registry import TYPES
-    js = (pathlib.Path(__file__).resolve().parent.parent / 'static' / 'js' / 'admin.js').read_text(encoding='utf-8')
-    mapping = dict(re.findall(r"(\w+): '(\w+)'", re.search(r'CONTROL_FOR_TYPE = \{(.*?)\};', js, re.S).group(1)))
-    assert set(TYPES) <= set(mapping), set(TYPES) - set(mapping)
-    assert mapping['rectangle'] == 'json' and {mapping[t] for t in TYPES} <= {'checkbox', 'select', 'number', 'text', 'json'}
-    assert {s.type for s in REGISTRY.values()} <= set(mapping)
-    assert 'value.length === 4' in js and "type === 'rectangle'" in js                       # contrôle côté interface du rectangle
-
-
 def test_the_builder_front_covers_rb_2_2_undo_keys_insert_before_touch_removal_and_in_page_confirmation():
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent

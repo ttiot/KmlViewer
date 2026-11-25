@@ -322,7 +322,8 @@ def test_a_destination_outside_the_allow_list_is_refused_and_delete_returns_to_t
     assert call(client, 'PATCH', '/api/admin/settings', {'smtp.host': 'evil.example', 'smtp.security': 'none'}).status_code == 400
     store = app.config['SETTINGS_STORE']
     call(client, 'PATCH', '/api/admin/settings', {'routing.max_calls': 7})
-    assert call(client, 'DELETE', '/api/admin/settings/routing.max_calls').get_json() == {'success': True, 'reset': True}
+    deleted = call(client, 'DELETE', '/api/admin/settings/routing.max_calls').get_json()
+    assert deleted['success'] is True and deleted['reset'] is True and isinstance(deleted['version'], int)
     assert store.get('routing.max_calls') == 15
     assert call(client, 'DELETE', '/api/admin/settings/routing.max_calls').get_json()['reset'] is False
     assert call(client, 'DELETE', '/api/admin/settings/inconnu').status_code == 404

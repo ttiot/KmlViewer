@@ -379,16 +379,22 @@ def test_the_tiles_list_default_applies_when_no_tiles_entry_exists(tmp_path):
     conn2.close()
 
 
-def test_the_default_basemap_reference_is_exact(conn_app):
+def test_the_default_basemap_reference_is_no_longer_checked_by_the_server_but_stays_an_exact_name(conn_app):
+    """Décision 6 (EF-6.12) : le contrôle du fond par défaut est celui de la page d'admin ; le serveur l'écrit tel quel, la
+    référence reste une chaîne EXACTE (casse, espaces), et le bandeau d'usage signale un fond absent de la liste."""
     app, conn = conn_app
     store = app.config['SETTINGS_STORE']
-    for bad in ('FOND', ' fond', 'fond ', 'fon', '', 'fond\n'):
-        with pytest.raises(SettingsError):
-            write_maps(conn, store, [basemap()], bad)
+    with pytest.raises(SettingsError):                                              # caractères de contrôle : toujours refusés
+        write_maps(conn, store, [basemap()], 'fond\n')
+    for bad in ('FOND', ' fond', 'fon'):
+        write_maps(conn, store, [basemap()], bad)                                   # accepté : plus de 400 côté serveur
+        assert effective(app.config, 'map.default_basemap') == bad
+        from app.api.map_routes import default_basemap_alert
+        assert default_basemap_alert(app.config) is not None, bad                   # mais le bandeau d'usage le signale
     write_maps(conn, store, [basemap(), basemap(name='autre')], 'autre')
-    with pytest.raises(SettingsError):                      # retirer le fond par défaut de la liste sans changer le défaut
-        write_maps(conn, store, [basemap()])
-    assert effective(app.config, 'map.default_basemap') == 'autre'
+    assert default_basemap_alert(app.config) is None
+    write_maps(conn, store, [basemap()])                                            # fond par défaut retiré de la liste
+    assert effective(app.config, 'map.default_basemap') == 'autre' and default_basemap_alert(app.config) is not None
 
 
 def test_an_empty_basemap_list_is_handled_end_to_end(conn_app):

@@ -1,5 +1,7 @@
-# Client Playwright pour le banc navigateur : image officielle (navigateurs + dépendances système) ÉPINGLÉE par version ET digest ;
-# le paquet Python playwright est installé à la même version que les navigateurs de l'image (1.65.2), une seule fois.
-FROM mcr.microsoft.com/playwright/python:v1.65.2-noble@sha256:38dd67fc654b56b3cba611e4c8eb71cd33750e1cd29eea2a5dc00b484817a75f
+# Client Playwright pour le banc navigateur : image officielle (navigateurs + dépendances système) ÉPINGLÉE par version ET digest
+# (mcr.microsoft.com/playwright/python:v1.64.1-noble, publiée le 2026-10-22 : plus de deux semaines, EF-6.17) ; le paquet Python
+# playwright est installé à la MÊME version (requirements.txt, avec empreintes, --require-hashes).
+FROM mcr.microsoft.com/playwright/python:v1.64.1-noble@sha256:330d401ae23c905896a0c26c66c36fc971b621519e7b11b435a8328d7bf6e031
 ENV PIP_ROOT_USER_ACTION=ignore PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 PIP_BREAK_SYSTEM_PACKAGES=1
-RUN pip install playwright==1.65.2
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --require-hashes -r /tmp/requirements.txt

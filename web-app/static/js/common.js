@@ -26,7 +26,10 @@ const App = (() => {
         if (!response.ok) {
             let data = null;
             try { data = await response.json(); } catch (_) { /* réponse non JSON */ }
-            throw new Error((data && data.error) || `Erreur ${response.status}`);
+            const failure = new Error((data && data.error) || `Erreur ${response.status}`);
+            failure.status = response.status;           // lus par la page Réglages : `code`, `field`, `index`, `version` (EF-6.13)
+            failure.data = data;
+            throw failure;
         }
         return response;
     }

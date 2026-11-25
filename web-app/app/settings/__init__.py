@@ -7,10 +7,11 @@ par `effective(cfg, clé)` ou par le store.
 
 import logging
 
-from app.settings.registry import REGISTRY
-from app.settings.store import SettingsError, SettingsStore
+from app.settings.registry import REGISTRY, SECTIONS
+from app.settings.store import SettingsConflict, SettingsError, SettingsStore
 
-__all__ = ['REGISTRY', 'SettingsError', 'SettingsStore', 'STORE_KEY', 'effective', 'init_settings']
+__all__ = ['REGISTRY', 'SECTIONS', 'SettingsConflict', 'SettingsError', 'SettingsStore', 'STORE_KEY', 'effective',
+           'init_settings']
 
 logger = logging.getLogger(__name__)
 

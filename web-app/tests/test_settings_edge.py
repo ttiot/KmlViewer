@@ -184,7 +184,8 @@ def test_invalid_env_is_ignored_signalled_by_name_and_never_fatal(store, env, ca
             assert value == s.default
             continue
         assert value == s.default and store.source(key) == 'défaut', raw
-        assert s.env in caplog.text and raw not in caplog.text.replace(s.env, ''), raw
+        messages = ' '.join(caplog.messages)            # le message seul : `caplog.text` porte aussi `store.py:105`
+        assert s.env in messages and raw not in messages.replace(s.env, ''), raw
         diag = {d['key']: d for d in store.diagnostic()}[key]
         assert diag['env_invalid'] is True
 
@@ -450,7 +451,7 @@ def test_the_application_boots_with_a_poisoned_settings_row(tmp_path):
 
 
 def test_float_setting_with_an_oversized_integer_is_a_value_error():
-    f = Setting('a.f', 'float', 1.0, 's', 'l', min=0, max=2)
+    f = Setting('a.f', 'float', 1.0, 'Général', 'l', min=0, max=2, unit='')
     with pytest.raises(ValueError):
         f.validate(HUGE)
 
@@ -587,13 +588,13 @@ def test_a_threshold_changed_by_another_process_applies_after_the_next_refresh(a
 
 # --- Aucune valeur secrète nulle part (EF-9.2, EF-6.3c, EF-S5) ---------------------------------------
 
-SECRET = Setting('svc.token', 'str', '', 'Test', 'Jeton', max_length=40, secret=True, env='SVC_TOKEN')
+SECRET = Setting('svc.token', 'str', '', 'Général', 'Jeton', max_length=40, secret=True, env='SVC_TOKEN')
 S3CRET = ('valeur-base-S3CRET', 'valeur-env-S3CRET', 'defaut-S3CRET', 'autre-S3CRET')
 
 
 @pytest.fixture
 def secret_store(conn, env):
-    registry = {'svc.token': Setting('svc.token', 'str', S3CRET[2], 'Test', 'Jeton', max_length=40, secret=True, env='SVC_TOKEN')}
+    registry = {'svc.token': Setting('svc.token', 'str', S3CRET[2], 'Général', 'Jeton', max_length=40, secret=True, env='SVC_TOKEN')}
     s = SettingsStore(registry=registry, env=env.get)
     env['SVC_TOKEN'] = S3CRET[1]
     s.refresh(conn, force=True)
@@ -633,7 +634,7 @@ def test_a_secret_with_an_invalid_env_reports_the_variable_name_only(secret_stor
 
 
 def test_settings_list_cli_masks_secret_values(app, db):
-    registry = {'svc.token': Setting('svc.token', 'str', S3CRET[2], 'Test', 'Jeton', max_length=40, secret=True, env='SVC_TOKEN')}
+    registry = {'svc.token': Setting('svc.token', 'str', S3CRET[2], 'Général', 'Jeton', max_length=40, secret=True, env='SVC_TOKEN')}
     store = SettingsStore(registry=registry, env={'SVC_TOKEN': S3CRET[1]}.get)
     app.extensions['settings'] = store
     store.refresh(db, force=True)

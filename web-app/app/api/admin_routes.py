@@ -6,7 +6,6 @@ second facteur actif n'ouvre rien). Les lectures ne renvoient jamais un secret ;
 """
 
 import logging
-import os
 from datetime import timedelta
 
 from flask import current_app, g, jsonify, request
@@ -19,7 +18,7 @@ from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
 from app.secrets_store import SECRET_KINDS, SecretsError
-from app.settings import REGISTRY, SettingsError, effective
+from app.settings import REGISTRY, SECTIONS, SettingsConflict, SettingsError, effective
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +166,16 @@ def _setting_view(store, setting, conn_overrides) -> dict:
     if setting.destination_service:
         allowed = current_app.config['OUTBOUND'].servers.get(setting.destination_service, ())
         allowlist = sorted(f'{host}:{port}' for host, port in allowed)
+    elif setting.type == 'basemaps':
+        allowlist = sorted(outbound.allowlist_of(current_app.config).tile_hosts())       # hôtes de tuiles effectifs (EF-6.12)
+    fallback, fallback_source = store.fallback(key)
     view = {'key': key, 'section': setting.section, 'label': setting.label, 'help': setting.help, 'type': setting.type,
             'min': setting.min, 'max': setting.max, 'max_length': setting.max_length, 'choices': setting.choices,
             'max_items': setting.max_items, 'default': setting.default, 'env': setting.env,
             'secret': setting.secret, 'requires_restart': setting.requires_restart, 'source': source,
             'destination_service': setting.destination_service, 'allowlist': allowlist,
+            'unit': setting.unit, 'fallback': None if setting.secret else fallback, 'fallback_source': fallback_source,
+            'env_invalid': store.env_invalid(key), 'restart_pending': store.restart_pending(key),
             'value': None if setting.secret else value}
     if setting.env and source == 'base' and conn_overrides.get(setting.env):
         view['env_overridden'] = True                                   # la base surcharge une variable d'environnement
@@ -220,8 +224,8 @@ def _setting_alerts() -> list:
 def admin_settings():
     store = current_app.config['SETTINGS_STORE']
     store.refresh(get_db(), force=True)
-    env = {name: bool(os.environ.get(name)) for name in (s.env for s in REGISTRY.values() if s.env)}
-    return jsonify({'success': True, 'version': store.version, 'alerts': _setting_alerts(),
+    env = {name: bool(store.env_value(name)) for name in (s.env for s in REGISTRY.values() if s.env)}
+    return jsonify({'success': True, 'version': store.version, 'alerts': _setting_alerts(), 'sections': list(SECTIONS),
                     'settings': [_setting_view(store, s, env) for s in REGISTRY.values()]})
 
 
@@ -229,16 +233,27 @@ def admin_settings():
 @admin_required
 def admin_settings_patch():
     data = json_body()
-    changes = data.get('settings', data)
+    version = None
+    if 'settings' in data:
+        changes, version = data['settings'], data.get('version')
+        if version is not None and (isinstance(version, bool) or not isinstance(version, int)):
+            raise ApiError('version : entier attendu.')
+    else:
+        changes = data                                                # sans `version` : accepté sans contrôle (autres clients)
     if not isinstance(changes, dict) or not changes or len(changes) > 50:
         raise ApiError('Un objet {clé: valeur} (50 au plus) est attendu.')
     store = current_app.config['SETTINGS_STORE']
     try:
-        store.set_many(get_db(), changes, actor=_actor(), ip=request.remote_addr)
+        store.set_many(get_db(), changes, actor=_actor(), ip=request.remote_addr, expected_version=version)
+    except SettingsConflict as exc:                                   # EF-6.13 : rien n'est écrit
+        raise ApiError(str(exc), 409, code='settings_version_conflict', version=exc.version) from None
     except SettingsError as exc:
         refused_policy = exc.field == 'auth.mfa_policy' and 'second facteur' in str(exc)       # CA-13b
-        raise ApiError(f"{exc.field} : {exc}", 409 if refused_policy else 400) from None
-    return jsonify({'success': True, 'changed': sorted(changes)})
+        extra = {'field': exc.field}
+        if exc.index is not None:
+            extra['index'] = exc.index
+        raise ApiError(f"{exc.field} : {exc}", 409 if refused_policy else 400, **extra) from None
+    return jsonify({'success': True, 'changed': sorted(changes), 'version': store.last_write_version})
 
 
 @bp.route('/admin/settings/<path:key>')
@@ -265,7 +280,7 @@ def admin_settings_reset(key):
     if key not in REGISTRY:
         raise ApiError('Réglage inconnu', 404)
     removed = store.reset(get_db(), key, actor=_actor(), ip=request.remote_addr)
-    return jsonify({'success': True, 'reset': bool(removed)})
+    return jsonify({'success': True, 'reset': bool(removed), 'version': store.last_write_version if removed else store.version})
 
 
 # -- Secrets (P-T14-7) --------------------------------------------------------------------------------------------------------

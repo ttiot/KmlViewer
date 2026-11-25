@@ -188,15 +188,15 @@ def test_a_basemap_with_a_host_outside_tiles_is_refused_on_write_and_nothing_is_
     conn.close()
 
 
-def test_the_default_basemap_must_belong_to_the_list(tiles_app):
+def test_a_default_basemap_outside_the_list_is_no_longer_refused_by_the_server(tiles_app):
+    """EF-6.12 (refonte Réglages) : le fond par défaut inexistant est contrôlé par la page d'admin ; le serveur l'accepte
+    (le bandeau d'usage `default_basemap_alert` et le repli de /api/map-config s'appliquent)."""
     conn = database.connect(tiles_app.config['DB_PATH'])
     store = tiles_app.config['SETTINGS_STORE']
-    with pytest.raises(SettingsError) as exc:
-        store.set_many(conn, {'map.basemaps': [basemap()], 'map.default_basemap': 'osm'}, actor=CLI)
-    assert exc.value.field == 'map.default_basemap'
-    store.set_many(conn, {'map.basemaps': [basemap()], 'map.default_basemap': 'fond'}, actor=CLI)
-    with pytest.raises(SettingsError):
-        store.set_many(conn, {'map.default_basemap': 'inconnu'}, actor=CLI)
+    store.set_many(conn, {'map.basemaps': [basemap()], 'map.default_basemap': 'osm'}, actor=CLI)
+    assert store.get('map.default_basemap') == 'osm'
+    store.set_many(conn, {'map.default_basemap': 'fond'}, actor=CLI)
+    assert store.get('map.default_basemap') == 'fond'
     conn.close()
 
 

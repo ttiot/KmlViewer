@@ -63,7 +63,7 @@ def test_every_registry_entry_has_explicit_bounds():
 ])
 def test_an_entry_without_bounds_or_with_a_bad_default_cannot_be_built(kwargs):
     with pytest.raises(ValueError):
-        Setting('some.key', section='s', label='l', **kwargs)
+        Setting('some.key', section='Général', label='l', **{'unit': '', **kwargs})
 
 
 def test_registry_keeps_security_settings_out_of_the_registry():
@@ -112,26 +112,26 @@ def test_int_setting_accepts_the_bounds():
 
 
 def test_other_types():
-    f = Setting('a.f', 'float', 1.0, 's', 'l', min=0, max=2)
+    f = Setting('a.f', 'float', 1.0, 'Général', 'l', min=0, max=2, unit='')
     assert f.validate(1) == 1.0 and f.validate(2.0) == 2.0
     for bad in (True, math.inf, math.nan, '1', 2.1):
         with pytest.raises(ValueError):
             f.validate(bad)
-    e = Setting('a.e', 'enum', 'x', 's', 'l', choices=('x', 'y'))
+    e = Setting('a.e', 'enum', 'x', 'Général', 'l', choices=('x', 'y'))
     assert e.validate('y') == 'y'
     with pytest.raises(ValueError):
         e.validate('z')
-    t = Setting('a.t', 'str', '', 's', 'l', max_length=5)
+    t = Setting('a.t', 'str', '', 'Général', 'l', max_length=5)
     assert t.validate('abcde') == 'abcde'
     for bad in ('abcdef', 'a\nb', 5, None):
         with pytest.raises(ValueError):
             t.validate(bad)
-    li = Setting('a.l', 'list', [], 's', 'l', max_items=2, max_length=3)
+    li = Setting('a.l', 'list', [], 'Général', 'l', max_items=2, max_length=3)
     assert li.validate(['a', 'b']) == ['a', 'b']
     for bad in (['a', 'b', 'c'], ['abcd'], 'a,b', [1]):
         with pytest.raises(ValueError):
             li.validate(bad)
-    b = Setting('a.b', 'bool', False, 's', 'l')
+    b = Setting('a.b', 'bool', False, 'Général', 'l')
     assert b.validate(True) is True
     for bad in (1, 'true', None):
         with pytest.raises(ValueError):
@@ -227,7 +227,7 @@ def test_write_and_audit_commit_or_roll_back_together(store, conn, monkeypatch):
 
 def test_secret_typed_setting_never_leaks_its_value_into_audit_or_diagnostic(conn, env):
     """CA-24 / T2-1 : le type du registre, pas le nom, décide du masquage."""
-    secret = Setting('svc.token', 'str', '', 'Test', 'Jeton', max_length=50, secret=True, env='SVC_TOKEN')
+    secret = Setting('svc.token', 'str', '', 'Général', 'Jeton', max_length=50, secret=True, env='SVC_TOKEN')
     s = SettingsStore(registry={'svc.token': secret}, env=env.get)
     env['SVC_TOKEN'] = 'valeur-env-secrete'
     s.refresh(conn, force=True)
@@ -437,7 +437,7 @@ def test_old_value_falls_back_to_env_then_default_when_nothing_is_in_the_databas
 
 
 def test_reset_traces_the_replaced_values_masking_secrets(conn, env):
-    secret = Setting('svc.token', 'str', '', 'Test', 'Jeton', max_length=50, secret=True)
+    secret = Setting('svc.token', 'str', '', 'Général', 'Jeton', max_length=50, secret=True)
     s = SettingsStore(registry={**REGISTRY, 'svc.token': secret}, env=env.get)
     s.refresh(conn, force=True)
     s.set_many(conn, {'USER_QUOTA_MB': 10, 'svc.token': 'valeur-secrete'}, actor=Actor.user(1, 'alice'))

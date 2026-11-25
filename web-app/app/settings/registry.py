@@ -18,6 +18,9 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 TYPES = ('int', 'float', 'bool', 'str', 'enum', 'list', 'url', 'email', 'timezone', 'basemaps', 'rectangle')
+BASEMAP_KEYS = frozenset({'name', 'url', 'subdomains', 'attribution', 'max_zoom'})
+# Sections du registre, dans l'ordre d'affichage des sous-onglets de l'admin (EF-6.9)
+SECTIONS = ('Sécurité', 'E-mail', 'Carte', 'Traces planifiées', 'Altitude', 'Dossier surveillé', 'Stockage', 'Général')
 _BOOL_TRUE, _BOOL_FALSE = {'1', 'true', 'yes', 'on'}, {'0', 'false', 'no', 'off'}
 _KEY = re.compile(r'[A-Za-z][A-Za-z0-9_.]{0,63}')
 
@@ -41,10 +44,15 @@ class Setting:
     schemes: Optional[tuple] = None    # url : schémas permis (obligatoire)
     destination_service: Optional[str] = None   # url : service sortant (outbound.SERVER_SERVICES) dont c'est la destination
     linked_secrets: tuple = ()         # secrets effacés quand cette destination change (EF-5.5)
+    unit: Optional[str] = None         # int / float : obligatoire (chaîne vide permise) ; absent du libellé (EF-6.11)
 
     def __post_init__(self):
         if not _KEY.fullmatch(self.key) or self.type not in TYPES:
             raise ValueError(f"Réglage mal déclaré : {self.key!r}")
+        if self.section not in SECTIONS:
+            raise ValueError(f"Réglage {self.key!r} : section {self.section!r} absente de SECTIONS")
+        if self.type in ('int', 'float') and self.unit is None:
+            raise ValueError(f"Réglage {self.key!r} : unité obligatoire (chaîne vide permise)")
         missing = {
             'int': self.min is None or self.max is None, 'float': self.min is None or self.max is None,
             'str': not self.max_length, 'enum': not self.choices,
@@ -161,28 +169,33 @@ class Setting:
         from app import outbound
         if not isinstance(value, (list, tuple)) or len(value) > self.max_items:
             raise ValueError(f"{self.max_items} fonds au plus")
-        allowed = {'name', 'url', 'subdomains', 'attribution', 'max_zoom'}
         seen, out = set(), []
-        for item in value:
-            if not isinstance(item, dict) or set(item) - allowed or not {'name', 'url'} <= set(item):
-                raise ValueError("Fond de carte : name et url obligatoires, avec subdomains, attribution, max_zoom en option")
-            name = self._no_markup(self._string(item['name'], 40)).strip()
-            if not name or name.casefold() in seen:
-                raise ValueError("Nom de fond vide ou en double")
-            seen.add(name.casefold())
-            subdomains = self._string(item.get('subdomains', 'abc'), 4)
-            zoom = item.get('max_zoom', 19)
-            if isinstance(zoom, bool) or not isinstance(zoom, int) or not 1 <= zoom <= 22:
-                raise ValueError("Zoom maximal : 1 à 22")
-            url = self._string(item['url'], 500)
+        for index, item in enumerate(value):
             try:
-                outbound.tile_hosts_of_template(url, subdomains)
-            except outbound.OutboundError as exc:
-                raise ValueError(str(exc)) from None
-            out.append({'name': name, 'url': url, 'subdomains': subdomains,
-                        'attribution': self._no_markup(self._string(item.get('attribution', ''), 200)),
-                        'max_zoom': zoom})
+                out.append(self._basemap(item, seen, outbound))
+            except ValueError as exc:
+                exc.index = index                      # rang du fond en cause : l'admin place l'erreur sur sa carte (EF-6.13)
+                raise
         return out
+
+    def _basemap(self, item, seen, outbound):
+        if not isinstance(item, dict) or set(item) - BASEMAP_KEYS or not {'name', 'url'} <= set(item):
+            raise ValueError("Fond de carte : name et url obligatoires, avec subdomains, attribution, max_zoom en option")
+        name = self._no_markup(self._string(item['name'], 40)).strip()
+        if not name or name.casefold() in seen:
+            raise ValueError("Nom de fond vide ou en double")
+        seen.add(name.casefold())
+        subdomains = self._string(item.get('subdomains', 'abc'), 4)
+        zoom = item.get('max_zoom', 19)
+        if isinstance(zoom, bool) or not isinstance(zoom, int) or not 1 <= zoom <= 22:
+            raise ValueError("Zoom maximal : 1 à 22")
+        url = self._string(item['url'], 500)
+        try:
+            outbound.tile_hosts_of_template(url, subdomains)
+        except outbound.OutboundError as exc:
+            raise ValueError(str(exc)) from None
+        return {'name': name, 'url': url, 'subdomains': subdomains,
+                'attribution': self._no_markup(self._string(item.get('attribution', ''), 200)), 'max_zoom': zoom}
 
     def _rectangle(self, value):
         """
@@ -269,68 +282,68 @@ def _int(key, default, low, high, section, label, **kw):
 
 
 _ENTRIES = (
-    _int('USER_QUOTA_MB', 2048, 0, 102_400, 'Stockage', "Quota de stockage par utilisateur (Mo)", env='USER_QUOTA_MB',
+    _int('USER_QUOTA_MB', 2048, 0, 102_400, 'Stockage', "Quota de stockage par utilisateur", unit='Mo', env='USER_QUOTA_MB',
          help="0 = illimité (conservé pour compatibilité)."),
-    _int('audit.retention_days', 90, 30, 3650, 'Sécurité', "Rétention du journal d'audit (jours)"),
+    _int('audit.retention_days', 90, 30, 3650, 'Sécurité', "Rétention du journal d'audit", unit='jours'),
     # Comptes et sécurité (EF-6.5) : revue sécurité exigée pour tout ajout (EF-6.6)
     Setting('OIDC_AUTO_ACTIVATE', 'bool', False, 'Sécurité', "Activer d'office les nouveaux comptes SSO",
             env='OIDC_AUTO_ACTIVATE'),
-    _int('auth.invite_ttl_hours', 168, 1, 720, 'Sécurité', "Validité d'une invitation (heures)", help="1 h à 30 j."),
+    _int('auth.invite_ttl_hours', 168, 1, 720, 'Sécurité', "Validité d'une invitation", unit='h', help="1 h à 30 j."),
     Setting('auth.mfa_policy', 'enum', 'admins', 'Sécurité', "Second facteur obligatoire pour", choices=('admins', 'all'),
             help="Jamais en dessous de « admins »."),
     Setting('auth.forgot_enabled', 'bool', True, 'Sécurité', "Mot de passe oublié (nécessite le SMTP)"),
     # Dossier surveillé, altitude, général
     Setting('INBOX_DEFAULT_USER', 'str', '', 'Dossier surveillé', "Propriétaire des fichiers à la racine",
             env='INBOX_DEFAULT_USER', max_length=254),
-    _int('DEM_BATCH_SIZE', 100, 1, 1000, 'Altitude', "Points par requête MNT", env='DEM_BATCH_SIZE'),
-    Setting('DEM_TIMEOUT', 'float', 15.0, 'Altitude', "Délai d'une requête MNT (s)", env='DEM_TIMEOUT', min=1, max=120),
-    Setting('DEM_TOTAL_TIMEOUT', 'float', 90.0, 'Altitude', "Budget d'une correction complète (s)",
+    _int('DEM_BATCH_SIZE', 100, 1, 1000, 'Altitude', "Points par requête MNT", unit='points', env='DEM_BATCH_SIZE'),
+    Setting('DEM_TIMEOUT', 'float', 15.0, 'Altitude', "Délai d'une requête MNT", unit='s', env='DEM_TIMEOUT', min=1, max=120),
+    Setting('DEM_TOTAL_TIMEOUT', 'float', 90.0, 'Altitude', "Budget d'une correction complète", unit='s',
             env='DEM_TOTAL_TIMEOUT', min=10, max=600),
-    Setting('DEM_REQUEST_DELAY', 'float', 0.0, 'Altitude', "Pause entre deux requêtes MNT (s)",
+    Setting('DEM_REQUEST_DELAY', 'float', 0.0, 'Altitude', "Pause entre deux requêtes MNT", unit='s',
             env='DEM_REQUEST_DELAY', min=0, max=10),
-    _int('DEM_BACKFILL_BATCH', 25, 1, 1000, 'Altitude', "Activités corrigées par passage", env='DEM_BACKFILL_BATCH'),
+    _int('DEM_BACKFILL_BATCH', 25, 1, 1000, 'Altitude', "Activités corrigées par passage", unit='', env='DEM_BACKFILL_BATCH'),
     Setting('APP_TIMEZONE', 'timezone', 'Europe/Paris', 'Général', "Fuseau des regroupements par semaine et mois",
             env='APP_TIMEZONE', max_length=64),
     # Carte (R1) : les hôtes de chaque fond doivent figurer dans OUTBOUND_ALLOWED_HOSTS (tiles=), sinon 400
     Setting('map.basemaps', 'basemaps', list(DEFAULT_BASEMAPS), 'Carte', "Fonds de carte", max_items=10,
             help="Pas de clé privée dans l'URL : elle part au navigateur de chaque utilisateur."),
     Setting('map.default_basemap', 'str', 'osm', 'Carte', "Fond par défaut", max_length=40),
-    Setting('map.center_lat', 'float', 46.603354, 'Carte', "Latitude initiale", min=-85, max=85),
-    Setting('map.center_lon', 'float', 1.888334, 'Carte', "Longitude initiale", min=-180, max=180),
-    _int('map.zoom', 6, 1, 22, 'Carte', "Zoom initial"),
+    Setting('map.center_lat', 'float', 46.603354, 'Carte', "Latitude initiale", unit='°', min=-85, max=85),
+    Setting('map.center_lon', 'float', 1.888334, 'Carte', "Longitude initiale", unit='°', min=-180, max=180),
+    _int('map.zoom', 6, 1, 22, 'Carte', "Zoom initial", unit=''),
     # Traces planifiées (gpx-route-builder §5.6) : bornes basse et haute
-    Setting('routing.timeout_s', 'float', 20.0, 'Traces planifiées', "Délai d'un appel au moteur (s)", min=1, max=60),
-    Setting('routing.total_budget_s', 'float', 30.0, 'Traces planifiées', "Budget d'une génération (s)", min=5, max=120),
-    _int('routing.max_calls', 15, 1, 30, 'Traces planifiées', "Appels au moteur par génération"),
-    _int('routing.max_waypoints', 50, 2, 100, 'Traces planifiées', "Points au plus"),
-    _int('routing.max_distance_km', 300, 1, 1000, 'Traces planifiées', "Distance maximale (km)"),
-    _int('routing.distance_tolerance_pct', 15, 1, 100, 'Traces planifiées', "Tolérance sur la distance cible (%)"),
-    _int('routing.snap_tolerance_m', 50, 10, 500, 'Traces planifiées', "Accroche des points au réseau (m)"),
-    _int('routing.overlap_warning_pct', 25, 1, 100, 'Traces planifiées', "Seuil d'avertissement de recouvrement (%)"),
-    _int('routing.overlap_warning_pct_2pts', 40, 1, 100, 'Traces planifiées', "Seuil de recouvrement à 2 points (%)"),
+    Setting('routing.timeout_s', 'float', 20.0, 'Traces planifiées', "Délai d'un appel au moteur", unit='s', min=1, max=60),
+    Setting('routing.total_budget_s', 'float', 30.0, 'Traces planifiées', "Budget d'une génération", unit='s', min=5, max=120),
+    _int('routing.max_calls', 15, 1, 30, 'Traces planifiées', "Appels au moteur par génération", unit=''),
+    _int('routing.max_waypoints', 50, 2, 100, 'Traces planifiées', "Points au plus", unit=''),
+    _int('routing.max_distance_km', 300, 1, 1000, 'Traces planifiées', "Distance maximale", unit='km'),
+    _int('routing.distance_tolerance_pct', 15, 1, 100, 'Traces planifiées', "Tolérance sur la distance cible", unit='%'),
+    _int('routing.snap_tolerance_m', 50, 10, 500, 'Traces planifiées', "Accroche des points au réseau", unit='m'),
+    _int('routing.overlap_warning_pct', 25, 1, 100, 'Traces planifiées', "Seuil d'avertissement de recouvrement", unit='%'),
+    _int('routing.overlap_warning_pct_2pts', 40, 1, 100, 'Traces planifiées', "Seuil de recouvrement à 2 points", unit='%'),
     Setting('routing.detour_strategy', 'enum', 'hybrid', 'Traces planifiées', "Stratégie de détours",
             choices=('s1', 's2', 'hybrid')),
-    _int('routing.seed_retries', 2, 0, 2, 'Traces planifiées', "Essais de graine supplémentaires"),
+    _int('routing.seed_retries', 2, 0, 2, 'Traces planifiées', "Essais de graine supplémentaires", unit=''),
     Setting('routing.coverage_bbox', 'rectangle', [1.35, 48.83, 6.42, 51.55], 'Traces planifiées',
             "Zone couverte (lon min, lat min, lon max, lat max)"),
-    _int('routing.max_concurrent', 2, 1, 4, 'Traces planifiées', "Générations simultanées sur l'instance"),
+    _int('routing.max_concurrent', 2, 1, 4, 'Traces planifiées', "Générations simultanées sur l'instance", unit=''),
     # Tâches de fond (EF-6.5) : relues à chaque tour de l'ordonnanceur, aucun redémarrage
     Setting('INBOX_ENABLED', 'bool', True, 'Dossier surveillé', "Surveiller le dossier d'import", env='INBOX_ENABLED'),
-    _int('INBOX_SCAN_INTERVAL', 30, 5, 3600, 'Dossier surveillé', "Intervalle de scrutation du dossier (s)",
+    _int('INBOX_SCAN_INTERVAL', 30, 5, 3600, 'Dossier surveillé', "Intervalle de scrutation du dossier", unit='s',
          env='INBOX_SCAN_INTERVAL'),
-    _int('DEM_BACKFILL_INTERVAL', 300, 30, 3600, 'Altitude', "Intervalle du balayage de correction d'altitude (s)",
+    _int('DEM_BACKFILL_INTERVAL', 300, 30, 3600, 'Altitude', "Intervalle du balayage de correction d'altitude", unit='s',
          env='DEM_BACKFILL_INTERVAL'),
-    _int('routing.health_interval_s', 60, 15, 600, 'Traces planifiées', "Intervalle du sondage du moteur (s)"),
+    _int('routing.health_interval_s', 60, 15, 600, 'Traces planifiées', "Intervalle du sondage du moteur", unit='s'),
     # E-mail (EF-4.1, ADR-0005) : le mot de passe SMTP est un SECRET (app/secrets_store.py), lié à `smtp.host:port`
     Setting('smtp.host', 'str', '', 'E-mail', "Serveur SMTP", max_length=253, destination_service='smtp',
             linked_secrets=('smtp.password',),
             help="Vide : aucun e-mail. Hôte et port doivent figurer dans OUTBOUND_ALLOWED_HOSTS (smtp=)."),
-    _int('smtp.port', 587, 1, 65535, 'E-mail', "Port SMTP"),
+    _int('smtp.port', 587, 1, 65535, 'E-mail', "Port SMTP", unit=''),
     Setting('smtp.security', 'enum', 'starttls', 'E-mail', "Sécurité SMTP", choices=('starttls', 'tls', 'none'),
             help="« none » : aucune authentification n'est envoyée. Jamais de repli en clair."),
     Setting('smtp.username', 'str', '', 'E-mail', "Identifiant SMTP", max_length=254),
     Setting('smtp.sender', 'email', '', 'E-mail', "Adresse d'expédition", max_length=254),
-    _int('smtp.timeout_s', 10, 1, 60, 'E-mail', "Délai SMTP (s)"),
+    _int('smtp.timeout_s', 10, 1, 60, 'E-mail', "Délai SMTP", unit='s'),
     # Destinations sortantes (EF-6.8, B3) : soumises à OUTBOUND_ALLOWED_HOSTS à l'écriture ET à l'usage ; changer
     # la destination efface les secrets liés (EF-5.5)
     Setting('DEM_URL', 'url', '', 'Altitude', "URL du service d'altitude (MNT)", env='DEM_URL', max_length=500,
@@ -340,13 +353,14 @@ _ENTRIES = (
             max_length=500, schemes=('http', 'https'), destination_service='routing', linked_secrets=('routing.api_key',),
             help="Hôte et port doivent figurer dans OUTBOUND_ALLOWED_HOSTS (routing=)."),
     # Seuils du limiteur (ADR-0006, EF-6.5) : lus à chaud, sans remise à zéro des compteurs
-    _int('ratelimit.password_per_identifier', 5, 3, 20, 'Sécurité', "Tentatives de mot de passe / 15 min / identifiant"),
-    _int('ratelimit.password_per_ip', 20, 10, 100, 'Sécurité', "Tentatives de mot de passe / 15 min / IP"),
-    _int('ratelimit.mfa_per_account', 5, 3, 10, 'Sécurité', "Essais de second facteur / 15 min / compte"),
-    _int('ratelimit.forgot_per_identifier', 3, 1, 10, 'Sécurité', "Mots de passe oubliés / h / identifiant"),
-    _int('ratelimit.forgot_per_ip', 10, 10, 100, 'Sécurité', "Mots de passe oubliés / h / IP"),
-    _int('ratelimit.token_per_ip', 10, 5, 30, 'Sécurité', "Essais de jeton / 15 min / IP"),
-    _int('routing.rate_limit_per_user', 30, 1, 100, 'Traces planifiées', "Générations / h / utilisateur"),
+    _int('ratelimit.password_per_identifier', 5, 3, 20, 'Sécurité', "Tentatives de mot de passe par identifiant",
+         unit='/ 15 min'),
+    _int('ratelimit.password_per_ip', 20, 10, 100, 'Sécurité', "Tentatives de mot de passe par IP", unit='/ 15 min'),
+    _int('ratelimit.mfa_per_account', 5, 3, 10, 'Sécurité', "Essais de second facteur par compte", unit='/ 15 min'),
+    _int('ratelimit.forgot_per_identifier', 3, 1, 10, 'Sécurité', "Mots de passe oubliés par identifiant", unit='/ h'),
+    _int('ratelimit.forgot_per_ip', 10, 10, 100, 'Sécurité', "Mots de passe oubliés par IP", unit='/ h'),
+    _int('ratelimit.token_per_ip', 10, 5, 30, 'Sécurité', "Essais de jeton par IP", unit='/ 15 min'),
+    _int('routing.rate_limit_per_user', 30, 1, 100, 'Traces planifiées', "Générations par utilisateur", unit='/ h'),
 )
 
 REGISTRY = {s.key: s for s in _ENTRIES}

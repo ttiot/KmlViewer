@@ -237,6 +237,7 @@ def test_the_empty_state_is_rendered_by_the_viewer_page_with_its_choose_button()
 ADMIN_HARNESS = PRELUDE + r"""
 const [commonPath, adminPath] = process.argv.slice(2, 4);
 const scenario = JSON.parse(process.argv[4]);
+const settingsPath = process.argv[5];                    // admin-settings.js (page Réglages, chargé avant admin.js) ; vide si absent
 const elements = {};
 const featuresListeners = [];
 const ids = new Proxy({}, { get(_, id) {
@@ -262,6 +263,7 @@ sandbox.window.document = sandbox.document;
 Date.now = () => scenario.now * 1000;
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(commonPath, 'utf8'), sandbox);
+if (settingsPath) vm.runInContext(fs.readFileSync(settingsPath, 'utf8'), sandbox);
 vm.runInContext(fs.readFileSync(adminPath, 'utf8'), sandbox);
 (async () => {
   for (const f of (listeners.DOMContentLoaded || [])) await f();
@@ -276,8 +278,10 @@ BASE = {'configured': True, 'available': True, 'checked_at': NOW - 5 * 60, 'info
 
 
 def render_diagnostic(diagnostic, timezone='Europe/Paris'):
+    settings_js = STATIC / 'js' / 'admin-settings.js'
     done = subprocess.run(['node', '-', str(STATIC / 'js' / 'common.js'), str(STATIC / 'js' / 'admin.js'),
-                           json.dumps({'diagnostic': diagnostic, 'now': NOW, 'timezone': timezone})], input=ADMIN_HARNESS, capture_output=True, text=True,
+                           json.dumps({'diagnostic': diagnostic, 'now': NOW, 'timezone': timezone}),
+                           str(settings_js) if settings_js.exists() else ''], input=ADMIN_HARNESS, capture_output=True, text=True,
                           timeout=60, env={**os.environ, 'TZ': 'UTC'})
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout.strip().splitlines()[-1])

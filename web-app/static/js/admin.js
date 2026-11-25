@@ -40,8 +40,9 @@
         secrets: loadSecrets, journal: () => loadAudit(true) };
 
     function openTab() {
-        const wanted = (window.location.hash || '#utilisateurs').slice(1);
+        const wanted = (window.location.hash || '#utilisateurs').slice(1).split('/')[0];        // `#reglages/<section>`
         const tab = loaders[wanted] ? wanted : 'utilisateurs';
+        if (tab !== 'reglages') AdminSettings.leave();             // à la reprise, les valeurs sont relues ; les saisies sont gardées
         document.querySelectorAll('[data-panel]').forEach((panel) => { panel.hidden = panel.dataset.panel !== tab; });
         document.querySelectorAll('#adminTabs a').forEach((link) => {
             if (link.dataset.tab === tab) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
@@ -219,101 +220,8 @@
         }));
     }
 
-    // -- réglages (formulaire générique, le serveur reste l'autorité) -------------------------------------------------------
-    // Contrôle de saisie de CHAQUE type du registre (un test vérifie qu'aucun type n'est inéditable dans l'interface)
-    const CONTROL_FOR_TYPE = { bool: 'checkbox', enum: 'select', int: 'number', float: 'number', str: 'text', url: 'text',
-        email: 'text', timezone: 'text', list: 'json', basemaps: 'json', rectangle: 'json' };
-
-    function settingField(setting) {
-        const id = `s-${setting.key}`;
-        let input;
-        const control = CONTROL_FOR_TYPE[setting.type] || 'text';
-        if (control === 'checkbox') input = el('input', { type: 'checkbox', id, class: 'form-check-input', checked: !!setting.value });
-        else if (control === 'select') input = el('select', { id, class: 'form-select' }, setting.choices.map((c) => el('option', { value: c, selected: setting.value === c }, c)));
-        else if (control === 'number') input = el('input', { id, type: 'number', class: 'form-control', min: setting.min, max: setting.max, step: setting.type === 'int' ? 1 : 'any', value: setting.value });
-        else if (control === 'json') input = el('textarea', { id, class: 'form-control mono', rows: setting.type === 'rectangle' ? 1 : 4,
-            'aria-describedby': `${id}-hint` }, JSON.stringify(setting.value));
-        else input = el('input', { id, type: 'text', class: 'form-control', maxlength: setting.max_length, value: setting.value ?? '' });
-        input.dataset.key = setting.key;
-        input.dataset.type = setting.type;
-        input.dataset.initial = JSON.stringify(setting.value);
-        if (setting.destination_service) input.dataset.destination = '1';
-        const reset = setting.source === 'base' ? confirmButton('Revenir au défaut', 'Supprimer la valeur enregistrée ?',
-            () => act(api(`/api/admin/settings/${encodeURIComponent(setting.key)}`, { method: 'DELETE' }), loadSettings)) : null;
-        return el('div', { class: 'field' }, el('label', { for: id }, setting.label), input,
-            el('span', { class: 'badge-soft' }, setting.source), setting.help ? el('span', { class: 'hint' }, setting.help) : null,
-            setting.allowlist && setting.allowlist.length ? el('span', { class: 'hint' }, `Destinations autorisées : ${setting.allowlist.join(', ')}`) : null,
-            setting.type === 'rectangle' ? el('span', { class: 'hint', id: `${id}-hint` }, 'Quatre nombres : [lon min, lat min, lon max, lat max] (côtés de 2 000 km au plus).') : null,
-            setting.destination_service ? el('span', { class: 'hint' }, 'Changer la destination efface le secret associé.') : null, reset);
-    }
-
-    function readSetting(input) {
-        const type = input.dataset.type;
-        if (type === 'bool') return input.checked;
-        if (type === 'int') return Number(input.value);
-        if (type === 'float') return Number(input.value);
-        if (CONTROL_FOR_TYPE[type] === 'json') {
-            const value = JSON.parse(input.value);
-            if (type === 'rectangle') {        // contrôle côté interface (le serveur reste l'autorité)
-                const ok = Array.isArray(value) && value.length === 4 && value.every(Number.isFinite)
-                    && value[0] >= -180 && value[2] <= 180 && value[1] >= -90 && value[3] <= 90 && value[0] < value[2] && value[1] < value[3];
-                if (!ok) throw new Error('rectangle');
-            }
-            return value;
-        }
-        return input.value;
-    }
-
-    async function loadSettings() {
-        const data = await act(api('/api/admin/settings'));
-        if (!data) return;
-        $('settingsVersion').textContent = `Version des réglages : ${data.version}`;
-        $('settingsAlerts').replaceChildren(...(data.alerts || []).map((alert) => el('div', { class: 'alert alert-warning', role: 'alert' }, alert.message)));
-        const sections = new Map();
-        data.settings.filter((s) => !s.secret).forEach((s) => { if (!sections.has(s.section)) sections.set(s.section, []); sections.get(s.section).push(s); });
-        $('settingsBox').replaceChildren(...[...sections].map(([name, items]) =>
-            el('fieldset', { class: 'mb-3' }, el('legend', { class: 'h5' }, name), el('div', { class: 'field-grid is-wide' }, items.map(settingField)))));
-    }
-
-    $('settingsForm').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const changes = {};
-        try {
-            document.querySelectorAll('#settingsBox [data-key]').forEach((input) => {
-                const value = readSetting(input);
-                if (JSON.stringify(value) !== input.dataset.initial) changes[input.dataset.key] = value;
-            });
-        } catch (_) { notify('Valeur illisible ou hors bornes (JSON attendu pour une liste ou un rectangle).', 'danger'); return; }
-        if (!Object.keys(changes).length) { notify('Rien à enregistrer.'); return; }
-        // CA-65, EF-5.5 : changer la destination d'un service efface son secret lié : confirmation DANS la page (jamais une boîte du navigateur)
-        const cleared = await secretsToClear(changes);
-        if (cleared.length) {
-            $('settingsConfirmText').textContent = `Ce changement de destination efface le secret enregistré : ${cleared.join(', ')}. Il faudra le ressaisir.`;
-            $('settingsConfirm').hidden = false;
-            pendingChanges = changes;
-            return;
-        }
-        await saveSettings(changes);
-    });
-
-    let pendingChanges = null;
-    const LINKED_SECRETS = { 'smtp.host': 'smtp.password', 'smtp.port': 'smtp.password', 'routing.base_url': 'routing.api_key' };
-    async function secretsToClear(changes) {
-        const names = [...new Set(Object.keys(changes).filter((key) => LINKED_SECRETS[key]).map((key) => LINKED_SECRETS[key]))];
-        if (!names.length) return [];
-        const data = await act(api('/api/admin/secrets'));
-        if (!data || data.disabled) return [];
-        return names.filter((name) => (data.secrets.find((s) => s.name === name) || {}).configured);
-    }
-    async function saveSettings(changes) {
-        await act(api('/api/admin/settings', { method: 'PATCH', body: { settings: changes } }), () => notify('Réglages enregistrés.'));
-        loadSettings();
-    }
-    $('settingsConfirmYes').addEventListener('click', async () => {
-        const changes = pendingChanges; pendingChanges = null; $('settingsConfirm').hidden = true;
-        if (changes) await saveSettings(changes);
-    });
-    $('settingsConfirmNo').addEventListener('click', () => { pendingChanges = null; $('settingsConfirm').hidden = true; });
+    // -- réglages : sous-onglets, éditeurs, enregistrement par onglet (static/js/admin-settings.js, §5.6b) ---------------------
+    function loadSettings() { return AdminSettings.open(window.location.hash.split('/')[1] || ''); }
 
     // -- clés API et e-mail -----------------------------------------------------------------------------------------------
     async function loadSecrets() {
@@ -406,6 +314,7 @@
             state.me = info.user;
             state.mode = info.auth_mode;
         } catch (error) { notify(error.message, 'danger'); return; }
+        AdminSettings.setup();
         window.addEventListener('hashchange', openTab);
         openTab();
     });

@@ -33,9 +33,17 @@ SMTP_DESTINATION_KEYS = ('smtp.host', 'smtp.port')
 class SettingsError(ValueError):
     """Écriture refusée : `field` est la clé en cause (400 avec le champ)."""
 
-    def __init__(self, key: str, message: str):
+    def __init__(self, key: str, message: str, index: Optional[int] = None):
         super().__init__(f"{key} : {message}")
-        self.field, self.message = key, message
+        self.field, self.message, self.index = key, message, index      # index : rang du fond de carte en cause (EF-6.13)
+
+
+class SettingsConflict(Exception):
+    """EF-6.13 : la version des réglages a changé depuis le chargement de la page ; rien n'est écrit. `version` = la courante."""
+
+    def __init__(self, version):
+        super().__init__("Un autre admin a modifié ces réglages : recharge la page avant d'enregistrer.")
+        self.version = version
 
 
 @dataclass(frozen=True)
@@ -51,12 +59,23 @@ class SettingsStore:
         self._env = env or os.environ.get        # nom de variable -> texte (ou valeur typée) ou None
         self._state = _State()
         self._lock = threading.Lock()
+        self._written = threading.local()       # version de sa PROPRE écriture, lue dans la transaction après _bump (L3-n1)
         self._warned = set()
+        self._startup = None
         # Destinations sortantes (EF-6.8, EF-5.5), branchées par init_settings : `destination_allowed(service, destination)`
         # valide une écriture (400 sinon) ; `secrets` (SecretsStore) efface les secrets liés quand la destination change
         self.destination_allowed = None
         self.tiles_allowed = None             # callable(ensemble d'hôtes) -> bool : fonds de carte contre `tiles=` (R1)
         self.secrets = None
+
+    @property
+    def last_write_version(self) -> Optional[int]:
+        """Version posée par la dernière écriture de CE fil (set_many ou reset), pas celle d'une écriture concurrente."""
+        return getattr(self._written, 'version', None)
+
+    def env_value(self, name: str):
+        """Valeur brute d'une variable d'environnement vue par le store (la config de l'app, pas os.environ)."""
+        return self._env(name)
 
     # -- lecture ---------------------------------------------------------------------------------
     @property
@@ -96,6 +115,20 @@ class SettingsStore:
                 logger.warning("Variable d'environnement %s invalide : ignorée, valeur par défaut appliquée", setting.env)
             return None, True
 
+    def fallback(self, key: str):
+        """(valeur effective SANS la ligne en base, origine `env` ou `défaut`) : ce que « Rétablir » donnerait (EF-6.11)."""
+        setting = self.setting(key)
+        value, _invalid = self._from_env(setting)
+        return (setting.default, 'défaut') if value is None else (value, 'env')
+
+    def env_invalid(self, key: str) -> bool:
+        return self._from_env(self.setting(key))[1]
+
+    def restart_pending(self, key: str) -> bool:
+        """EF-6.15 : réglage `requires_restart` dont la valeur effective diffère de celle lue au démarrage du processus."""
+        setting = self.setting(key)
+        return bool(setting.requires_restart and key in self._startup and self.get(key) != self._startup[key])
+
     def source(self, key: str) -> str:
         setting = self.setting(key)
         if key in self._state.base:
@@ -123,6 +156,8 @@ class SettingsStore:
                     self._warn_once((r['key'], 'base'), "Réglage %r en base invalide : ignoré, repli sur l'env ou le défaut",
                                     r['key'])
             self._state = _State(version, base, rows)
+            if self._startup is None:                      # instantané des valeurs lues au démarrage (restart_pending)
+                self._startup = {k: self.get(k) for k, s in self._registry.items() if s.requires_restart}
         return True
 
     def _warn_once(self, token, message, *args):
@@ -132,8 +167,12 @@ class SettingsStore:
 
     # -- écriture ------------------------------------------------------------------------------
     def set_many(self, conn, changes: Mapping, *, actor: audit.Actor,
-                 ip: Optional[str] = None) -> None:
-        """Lot tout ou rien. Lève SettingsError(clé, message) sans rien écrire si une valeur est refusée."""
+                 ip: Optional[str] = None, expected_version: Optional[int] = None) -> None:
+        """
+        Lot tout ou rien. Lève SettingsError(clé, message) sans rien écrire si une valeur est refusée. `expected_version` (la page
+        d'admin l'envoie toujours) est comparée à la version en base DANS la transaction d'écriture : SettingsConflict si elle a
+        bougé.
+        """
         if not changes:
             return
         clean = {}
@@ -144,15 +183,21 @@ class SettingsStore:
             try:
                 clean[key] = setting.validate(value)
             except ValueError as exc:
-                raise SettingsError(key, str(exc)) from None
+                raise SettingsError(key, str(exc), getattr(exc, 'index', None)) from None
             self._check_destination(setting, clean[key])
         self._check_smtp(clean)
         self._check_map(clean)
         now = _now()
         with write_transaction(conn):
+            if expected_version is not None:
+                row = conn.execute("SELECT version FROM settings_meta WHERE id = 1").fetchone()
+                current = row['version'] if row else 0
+                if current != expected_version:
+                    raise SettingsConflict(current)                  # avant tout audit : rien n'est écrit (EF-6.13)
             refusal = self._check_mfa_policy(conn, clean, actor, ip)    # E-2 : DANS la transaction d'écriture (BEGIN IMMEDIATE)
             if refusal is None:
                 self._write_locked(conn, clean, now, actor, ip)
+                self._written.version = self._current_version_in(conn)
         if refusal is not None:
             raise refusal
         self._after_write(conn)
@@ -201,6 +246,7 @@ class SettingsStore:
                 self._clear_smtp_secret_if_changed(conn, smtp_before, actor, ip)
             if keys:
                 self._bump(conn)
+                self._written.version = self._current_version_in(conn)
                 audit.record(conn, 'setting.reset', actor=actor, target_type='setting', target_id=key or '*', ip=ip,
                              details={'keys': sorted(keys), 'old': previous})
         self._after_write(conn)
@@ -280,15 +326,12 @@ class SettingsStore:
             return
         basemaps = clean['map.basemaps'] if 'map.basemaps' in clean else self.get('map.basemaps')
         if 'map.basemaps' in clean and self.tiles_allowed is not None:
-            for basemap in basemaps:
+            for index, basemap in enumerate(basemaps):
                 hosts = outbound.tile_hosts_of_template(basemap['url'], basemap['subdomains'])
                 if not self.tiles_allowed(hosts):
                     raise SettingsError('map.basemaps', f"Fond « {basemap['name']} » : hôte non autorisé par "
-                                                        "OUTBOUND_ALLOWED_HOSTS (tiles=)")
-        default = clean['map.default_basemap'] if 'map.default_basemap' in clean else self.get('map.default_basemap')
-        if basemaps and default not in {b['name'] for b in basemaps}:
-            raise SettingsError('map.default_basemap' if 'map.default_basemap' in clean else 'map.basemaps',
-                                "Le fond par défaut doit être l'un des fonds de la liste")
+                                                        "OUTBOUND_ALLOWED_HOSTS (tiles=)", index)
+        # Fond par défaut inexistant : contrôlé par la page d'admin ; le serveur ne le refuse plus (bandeau d'usage, EF-6.12)
 
     def _smtp_pair_in(self, conn):
         """(hôte, port) SMTP effectifs tels que la base les porte maintenant (même transaction)."""
@@ -310,6 +353,11 @@ class SettingsStore:
                 pass            # valeur en base devenue invalide : elle est ignorée, comme à la lecture
         value, _ = self._from_env(setting)
         return setting.default if value is None else value
+
+    @staticmethod
+    def _current_version_in(conn) -> int:
+        row = conn.execute("SELECT version FROM settings_meta WHERE id = 1").fetchone()
+        return row['version'] if row else 0
 
     @staticmethod
     def _bump(conn):

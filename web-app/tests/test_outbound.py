@@ -433,9 +433,9 @@ def test_neutral_test_with_injected_clock_sleeps_exactly_the_remainder():
 def test_url_and_email_entries_need_their_bounds():
     for kwargs in (dict(type='url', max_length=500), dict(type='url', schemes=('https',)), dict(type='email')):
         with pytest.raises(ValueError):
-            Setting('x.u', section='s', label='l', default='', **kwargs)
-    Setting('x.u', 'url', '', 's', 'l', max_length=100, schemes=('https',))
-    Setting('x.e', 'email', '', 's', 'l', max_length=254)
+            Setting('x.u', section='Général', label='l', default='', **kwargs)
+    Setting('x.u', 'url', '', 'Général', 'l', max_length=100, schemes=('https',))
+    Setting('x.e', 'email', '', 'Général', 'l', max_length=254)
 
 
 @pytest.mark.parametrize('value,ok', [
@@ -445,7 +445,7 @@ def test_url_and_email_entries_need_their_bounds():
     ('x' * 65 + '@b.c', False), ('a@' + 'x' * 254, False), (5, False), (None, False),
 ])
 def test_email_settings(value, ok):
-    setting = Setting('x.e', 'email', '', 's', 'l', max_length=400)
+    setting = Setting('x.e', 'email', '', 'Général', 'l', max_length=400)
     if ok:
         assert setting.validate(value) == value
     else:
@@ -454,7 +454,7 @@ def test_email_settings(value, ok):
 
 
 def test_url_setting_validation_details():
-    setting = Setting('x.u', 'url', '', 's', 'l', max_length=60, schemes=('https',))
+    setting = Setting('x.u', 'url', '', 'Général', 'l', max_length=60, schemes=('https',))
     assert setting.validate('https://h/p/') == 'https://h/p' and setting.validate('') == ''
     for bad in ('http://h', 'https://', 'https://u@h', 'https://h:99999', 'https://h#f', ' https://h', 'https://h x', 'x' * 61):
         with pytest.raises(ValueError):

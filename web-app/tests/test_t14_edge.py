@@ -503,8 +503,10 @@ def test_settings_patch_is_atomic_audited_versioned_and_validated(app, conn):
     assert after['version'] > version
     assert {s['key']: s['value'] for s in after['settings']}['map.zoom'] == 9
     assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'setting.update'").fetchone()[0] >= 1
-    assert call(client, 'delete', '/api/admin/settings/map.zoom').get_json() == {'success': True, 'reset': True}
-    assert call(client, 'delete', '/api/admin/settings/map.zoom').get_json() == {'success': True, 'reset': False}
+    first = call(client, 'delete', '/api/admin/settings/map.zoom').get_json()
+    assert {k: first[k] for k in ('success', 'reset')} == {'success': True, 'reset': True} and isinstance(first['version'], int)   # EF-6.13
+    second = call(client, 'delete', '/api/admin/settings/map.zoom').get_json()
+    assert {k: second[k] for k in ('success', 'reset')} == {'success': True, 'reset': False}
     assert call(client, 'delete', '/api/admin/settings/nope.nope').status_code == 404
 
 
