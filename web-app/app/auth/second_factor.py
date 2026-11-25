@@ -135,6 +135,15 @@ def replace_recovery_codes(conn: sqlite3.Connection, user_id: int) -> List[str]:
     return [format_recovery(c) for c in sorted(codes)]
 
 
+def recovery_is_valid(conn: sqlite3.Connection, user_id: int, code) -> bool:
+    """Le code de secours existe et n'est pas utilisé, SANS le consommer (contrôles à faire avant la consommation, E-3-n1)."""
+    normalized = normalize_recovery(code)
+    if normalized is None:
+        return False
+    return conn.execute("SELECT 1 FROM recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL",
+                        (user_id, _hash(normalized))).fetchone() is not None
+
+
 def consume_recovery(conn: sqlite3.Connection, user_id: int, code) -> bool:
     """Marque le code utilisé de façon atomique (usage unique) ; faux s'il est inconnu, déjà utilisé ou mal formé."""
     normalized = normalize_recovery(code)

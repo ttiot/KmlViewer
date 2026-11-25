@@ -21,7 +21,7 @@ from flask import current_app, jsonify, render_template, request, session, url_f
 
 from app import audit
 from app.auth import bodies, bp, csrf, emails, factors, modes, passwords, tokens, users
-from app.auth.guard import safe_next
+from app.auth.guard import oidc_enabled, safe_next
 from app.auth.pending import COOKIE_KEY
 from app.db import get_db
 
@@ -124,13 +124,20 @@ def _requires_factor(user, has_factor: bool) -> bool:
 
 # -- Étape 1 : mot de passe ---------------------------------------------------------------------------------------------
 
+def render_login_page():
+    """Page de connexion unique : formulaire identifiant / mot de passe, plus le bouton SSO en mode oidc (E-21, CA-63)."""
+    next_url = safe_next(request.args.get('next', ''))
+    sso_url = url_for('auth.login', sso=1, next=next_url) if oidc_enabled() else None
+    return render_template('password_login.html', csrf_token=csrf.issue(), forgot_enabled=_forgot_available(),
+                           next_url=next_url, sso_url=sso_url)
+
+
 @bp.route('/auth/password/login', methods=['GET', 'POST'])
 def password_login():
     if request.method == 'GET':
         if not modes.password_accounts_available():
             return render_template('auth_message.html', title='Introuvable', message='Cette page n’existe pas.'), 404
-        return render_template('password_login.html', csrf_token=csrf.issue(),
-                               forgot_enabled=_forgot_available(), next_url=safe_next(request.args.get('next', '')))
+        return render_login_page()
     refused = _guard()
     if refused:
         return refused
@@ -207,15 +214,18 @@ def _forgot_job(app, identifier: str, address_form: bool):
             if len(matches) != 1 or not matches[0]['is_active'] or not matches[0]['email']:
                 return
             user = matches[0]
+            tokens.revoke_pending(conn, user['id'], 'reset', actor=audit.Actor.system())    # un seul lien à la fois
             created = tokens.create(conn, 'reset', actor=audit.Actor.system(), target_user_id=user['id'], email=user['email'],
                                     ttl=timedelta(hours=RESET_TTL_HOURS))
             from app.mailer import compose  # import tardif : mailer dépend de app.auth
-            subject, body = compose('reset', link=tokens.link(app.config['PUBLIC_URL'], created.token))
+            subject, body = compose('reset', link=tokens.link(app.config['PUBLIC_URL'], created.token), username=user['username'],
+                                    hours=RESET_TTL_HOURS)
             app.extensions['mailer'].send(user['email'], subject, body, conn=conn)
         except Exception:  # noqa: BLE001 - jamais de détail (lien) dans un journal
             logger.warning("Mot de passe oublié : traitement différé en échec")
         finally:
             conn.close()
+    run.kind = 'Réinitialisation du mot de passe'        # type fixe repris par le journal de la file d'envoi (CA-66, E-16)
     return run
 
 

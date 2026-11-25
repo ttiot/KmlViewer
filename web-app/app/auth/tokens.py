@@ -247,6 +247,21 @@ def revoke_pending_for_creator(conn, user_id: int, *, actor: audit.Actor, now: O
     return len(ids)
 
 
+def revoke_pending(conn, user_id: int, kind: str, *, actor: audit.Actor, now: Optional[datetime] = None) -> int:
+    """Un seul lien valable à la fois : les jetons `kind` non utilisés du compte sont révoqués (EF-4.5, EF-1.8)."""
+    with write_transaction(conn):
+        ids = [r[0] for r in conn.execute(
+            "SELECT id FROM auth_tokens WHERE kind = ? AND target_user_id = ? AND used_at IS NULL AND revoked_at IS NULL",
+            (kind, user_id))]
+        for token_id in ids:
+            revoke(conn, token_id, actor=actor, now=now)
+    return len(ids)
+
+
+def revoke_pending_verifications(conn, user_id: int, *, actor: audit.Actor, now: Optional[datetime] = None) -> int:
+    return revoke_pending(conn, user_id, 'verify_email', actor=actor, now=now)
+
+
 def matches(stored_hash: str, token) -> bool:
     """Comparaison en temps constant d'un jeton avec un hash déjà lu (EF-S4)."""
     digest = hash_token(token)

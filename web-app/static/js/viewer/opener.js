@@ -3,10 +3,12 @@
 // Un seul champ de fichiers et un seul chemin d'envoi : uploadFiles (files.js).
 'use strict';
 
-// L'état vide n'est affiché que tant qu'aucun fichier n'est ouvert.
+// L'état vide n'est affiché que tant qu'aucun fichier n'est ouvert ET que le constructeur de traces est fermé (son encart couvrait
+// la carte au milieu de la pose des points) ; à la fermeture du constructeur, l'état d'avant est rétabli.
 function updateEmptyState() {
     const empty = document.getElementById('emptyState');
-    if (empty) empty.hidden = Viewer.files.size > 0;
+    const builderOpen = typeof RouteBuilder !== 'undefined' && RouteBuilder.isOpen();
+    if (empty) empty.hidden = Viewer.files.size > 0 || builderOpen;
 }
 
 function openMenu() {

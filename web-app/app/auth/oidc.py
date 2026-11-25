@@ -126,6 +126,14 @@ def login():
         if modes.auth_mode() == 'password':
             return redirect(url_for('auth.password_login', next=request.args.get('next', '')))
         return redirect(url_for('main.index'))
+    if modes.password_accounts_available() and request.args.get('sso') != '1':
+        # E-21, CA-63 : UNE page porte le bouton SSO et le formulaire ; aucune redirection d'office vers l'IdP
+        from app.auth.password_login import render_login_page
+        return render_login_page()
+    return _start_sso()                      # `?sso=1` : le bouton de la page unique ; `next` conservé
+
+
+def _start_sso():
     _purge_pending_logins()
     session['next'] = safe_next(request.args.get('next', ''))
     return oauth.oidc.authorize_redirect(url_for('auth.callback', _external=True))

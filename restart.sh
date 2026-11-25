@@ -4,7 +4,7 @@
 
 set -e
 
-echo "🔄 Redémarrage de l'application Visualiseur KML..."
+echo "🔄 Redémarrage (recréation des conteneurs, .env relu) de l'application Visualiseur KML..."
 echo ""
 
 # Fonction pour utiliser docker-compose ou docker compose
@@ -16,8 +16,8 @@ run_compose() {
     fi
 }
 
-# Redémarrer les conteneurs
-if run_compose restart; then
+# Recréer les conteneurs : `restart` ne relit PAS le fichier .env (variables figées à la création), `up -d --force-recreate` oui
+if run_compose up -d --force-recreate; then
     echo "✅ Application redémarrée avec succès!"
     echo ""
     echo "📍 Accès à l'application:"

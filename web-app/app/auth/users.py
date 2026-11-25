@@ -188,7 +188,22 @@ def upsert_from_claims(db: sqlite3.Connection, claims: Mapping, *,
     result = db.execute("SELECT * FROM users WHERE sub = ?", (sub,)).fetchone()
     if email and (row is None or row['email'] != email):
         _flag_email_collision(db, result)
+    if row is None or (row['username'] or '').lower() != (result['username'] or '').lower():
+        _flag_username_collision(db, result)         # E-12, CA-62 : une ligne par APPARITION
     return result
+
+
+def _flag_username_collision(db, user) -> None:
+    """Identifiant fourni par l'IdP déjà porté (casse ignorée) par un autre compte : toléré, mais WARNING + audit."""
+    others = [r['id'] for r in db.execute("SELECT id FROM users WHERE id != ? AND lower(username) = lower(?)",
+                                          (user['id'], user['username']))]
+    if not others:
+        return
+    from app import audit
+    logger.warning("Collision d'identité : le compte #%s partage son identifiant avec %d autre(s) compte(s)",
+                   user['id'], len(others))
+    audit.record(db, 'identity.collision', actor=audit.Actor.system(), target_type='user', target_id=user['id'],
+                 details={'kind': 'identifiant', 'accounts': [user['id'], *others][:20]})
 
 
 def _flag_email_collision(db, user) -> None:

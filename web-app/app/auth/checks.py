@@ -161,7 +161,10 @@ def check_startup_config(app) -> None:
 
     if mode == 'oidc':
         _check_oidc(config)
-        config['PASSWORD_ACCOUNTS'] = bool(config['PUBLIC_URL']) and _secrets_key_state(config)
+        has_key = _secrets_key_state(config)
+        config['PASSWORD_ACCOUNTS'] = bool(config['PUBLIC_URL']) and has_key
+        present = (('SECRETS_KEY', has_key), ('PUBLIC_URL', bool(config['PUBLIC_URL'])))
+        config['PASSWORD_ACCOUNTS_MISSING'] = [name for name, ok in present if not ok]      # E-10 : nommées dans l'admin
         if not config['PASSWORD_ACCOUNTS']:
             logger.info("Comptes à mot de passe désactivés : SECRETS_KEY et PUBLIC_URL sont requises (mode oidc)")
     else:
@@ -169,7 +172,7 @@ def check_startup_config(app) -> None:
         config['PASSWORD_ACCOUNTS'] = True
     # Sûr par défaut : le cookie de session ne part qu'en HTTPS, sauf dérogation explicite
     config['SESSION_COOKIE_SECURE'] = True if secure is None else bool(secure)
-    if not config['SESSION_COOKIE_SECURE'] and mode == 'password' and config['PUBLIC_URL'].startswith('https://'):
+    if not config['SESSION_COOKIE_SECURE'] and config['PUBLIC_URL'].startswith('https://'):          # DEP-1b : tous les modes
         raise RuntimeError("SESSION_COOKIE_SECURE=0 est refusé : PUBLIC_URL est en https, le cookie de session doit être Secure. "
                            "Retire SESSION_COOKIE_SECURE (Secure par défaut) ou utilise http://localhost en développement.")
     if not config['SESSION_COOKIE_SECURE']:

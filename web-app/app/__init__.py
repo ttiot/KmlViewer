@@ -54,6 +54,13 @@ def create_app(config_class=Config, overrides=None):
             init_common_passwords()
         except CommonPasswordsError as exc:
             raise RuntimeError(f"{exc}. Démarrage refusé.") from None
+        # Public Suffix List embarquée (EF-2.4b, E-13) : absente ou invalide => refus ; RP ID WebAuthn invalide => refus
+        from app.auth import publicsuffix, webauthn_factor
+        try:
+            publicsuffix.init_public_suffix()
+        except publicsuffix.PublicSuffixError as exc:
+            raise RuntimeError(f"{exc}. Démarrage refusé.") from None
+        webauthn_factor.validate_config(app.config)
 
     # Après le contrôle d'hôte et d'origine (une requête rejetée ne lit pas la base), avant le garde
     # (qui voit des réglages à jour)

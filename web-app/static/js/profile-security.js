@@ -56,10 +56,32 @@
         $('mfaKeyList').replaceChildren(...data.key_list.map((key) => el('li', { class: 'd-flex gap-2 align-items-center' },
             el('span', {}, key.name || 'Clé de sécurité'), el('span', { class: 'hint' }, key.last_used_at ? `utilisée le ${key.last_used_at}` : 'jamais utilisée'),
             el('button', { type: 'button', class: 'btn btn-sm btn-outline-danger', onclick: async () => {
-                if (await act(post(`/api/me/mfa/webauthn/${key.id}`, creds(), 'DELETE'), () => notify('Clé retirée.'))) loadMfa();
+                const body = await proofBody(); if (!body) return;
+                if (await act(post(`/api/me/mfa/webauthn/${key.id}`, body, 'DELETE'), () => notify('Clé retirée.'))) loadMfa();
             } }, 'Retirer'))));
     }
     const creds = () => ({ password: $('mfaPassword').value, code: $('mfaCode').value.trim() });
+    // E-3b : sans code saisi, une clé de sécurité du compte prouve le second facteur (retrait d'une clé, codes de secours)
+    async function keyProof() {
+        const first = await fetch('/api/me/mfa/webauthn/proof/options', { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('mfaPassword').value }) });
+        const options = await first.json();
+        if (!first.ok) throw new Error(options.error || 'Impossible de démarrer.');
+        options.challenge = Webauthn.toBytes(options.challenge);
+        (options.allowCredentials || []).forEach((c) => { c.id = Webauthn.toBytes(c.id); });
+        const got = await navigator.credentials.get({ publicKey: options });
+        return { id: got.id, rawId: Webauthn.toText(got.rawId), type: got.type,
+            response: { clientDataJSON: Webauthn.toText(got.response.clientDataJSON), authenticatorData: Webauthn.toText(got.response.authenticatorData),
+                signature: Webauthn.toText(got.response.signature), userHandle: got.response.userHandle ? Webauthn.toText(got.response.userHandle) : null },
+            clientExtensionResults: got.getClientExtensionResults ? got.getClientExtensionResults() : {} };
+    }
+    async function proofBody() {
+        const body = creds();
+        if (!body.code && Webauthn.supported()) {
+            try { body.assertion = await keyProof(); } catch (error) { notify(error.message && !error.name ? error.message : 'Clé refusée ou opération annulée.', 'danger'); return null; }
+        }
+        return body;
+    }
 
     $('mfaKeyAdd').addEventListener('click', async () => {
         try {
@@ -99,7 +121,8 @@
         loadMfa();
     });
     $('mfaRegen').addEventListener('click', async () => {
-        const r = await act(post('/api/me/mfa/recovery-codes', creds()));
+        const body = await proofBody(); if (!body) return;
+        const r = await act(post('/api/me/mfa/recovery-codes', body));
         if (r) { showOnce('Nouveaux codes de secours (les anciens ne valent plus) :', r.recovery_codes.join('\n')); loadMfa(); }
     });
     $('mfaRemove').addEventListener('click', async () => {

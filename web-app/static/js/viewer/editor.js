@@ -52,6 +52,7 @@ function setEditorMode(mode) {
         showAlert('Ce fichier ne contient aucun point', 'warning');
         return;
     }
+    if (typeof RouteBuilder !== 'undefined') RouteBuilder.close();   // E-6 : éditeur de points et constructeur jamais ouverts ensemble
     const config = EDITOR_MODES[mode];
     Editor.mode = mode;
     document.getElementById(config.button).classList.add('active');

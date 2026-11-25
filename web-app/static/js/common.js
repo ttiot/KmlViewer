@@ -161,3 +161,32 @@ document.addEventListener('DOMContentLoaded', () => {
         document.documentElement.style.setProperty('--navbar-h', `${bar.offsetHeight}px`);
     }).observe(bar);
 });
+
+// E-7 / RB-2.6 : TOUTE déconnexion (formulaire de la barre de navigation, présente sur toutes les pages) efface les points, l'activité
+// et la distance du constructeur de traces stockés dans ce navigateur, pas seulement depuis le visualiseur.
+document.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || !(form.getAttribute('action') || '').endsWith('/auth/logout')) return;
+    try {
+        Object.keys(window.localStorage).filter((k) => k.startsWith('kmlviewer.routeBuilder.'))
+            .forEach((k) => window.localStorage.removeItem(k));
+    } catch (_) { /* stockage indisponible */ }
+});
+
+// EF-4.5 : renvoi du mail de validation depuis le bandeau « adresse à valider » (3 par heure, 429 au-delà).
+document.addEventListener('DOMContentLoaded', () => {
+    const button = document.getElementById('resendVerification');
+    if (!button) return;
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+            await App.api('/api/me/email/resend-verification', { method: 'POST', body: {} });
+            App.notify('Mail de validation renvoyé.');
+            button.textContent = 'Mail renvoyé';
+        } catch (error) {
+            App.notify(error.message, 'danger');
+        } finally {
+            button.disabled = false;
+        }
+    });
+});

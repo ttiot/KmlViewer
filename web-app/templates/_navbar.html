@@ -35,4 +35,15 @@
         </form>
         {% endif %}
     </div>
+    {# EF-4.5 : adresse en attente de validation (compte à mot de passe) : bandeau sur toutes les pages, avec renvoi si l'e-mail marche #}
+    {% if current_user and current_user['auth_method'] == 'password' and current_user['pending_email'] %}
+    <div class="pending-email-banner" id="pendingEmailBanner" role="status">
+        <span>Adresse à valider : <strong class="mono">{{ current_user['pending_email'] }}</strong>.</span>
+        {% if smtp_configured() %}
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="resendVerification">Renvoyer le mail de validation</button>
+        {% else %}
+        <span>La validation n'est pas disponible, contacte un administrateur.</span>
+        {% endif %}
+    </div>
+    {% endif %}
 </header>

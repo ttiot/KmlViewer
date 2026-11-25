@@ -44,6 +44,7 @@ class IngestResult:
     message: str = ''
     # Erreur qui ne tient pas au fichier (quota, disque, base) : le réessayer plus tard a un sens
     retryable: bool = False
+    quota: bool = False              # quota de stockage atteint : l'utilisateur doit libérer de la place (413)
 
 
 # Alias conservé pour les appelants (routes) : l'extension se calcule dans file_formats
@@ -144,7 +145,8 @@ def _ingest(db: sqlite3.Connection, cfg: Mapping, user_id: int, raw: bytes, file
             logger.error("Quota illisible pour l'utilisateur %s : %s", user_id, exc)
             return IngestResult('error', message="Erreur de stockage", retryable=True)
         if used + len(raw) > quota:
-            return IngestResult('error', message="Quota de stockage atteint : supprime des activités", retryable=True)
+            return IngestResult('error', message="Quota de stockage atteint : supprime des activités", retryable=True,
+                                quota=True)
 
     try:
         parsed = parse_raw(raw, filename)

@@ -82,13 +82,35 @@ def _queue_verification(db, account) -> None:
     if not mailer.configured or row is None or not row['pending_email']:
         return
     try:
-        created = tokens.create(db, 'verify_email', actor=Actor.user(account['id'], account['username']),
+        actor = Actor.user(account['id'], account['username'])
+        tokens.revoke_pending_verifications(db, account['id'], actor=actor)         # EF-4.5 : seul le dernier lien vaut
+        created = tokens.create(db, 'verify_email', actor=actor,
                                 target_user_id=account['id'], email=row['pending_email'])
         subject, body = mail_compose('verification', link=tokens.link(current_app.config['PUBLIC_URL'], created.token),
                                      username=account['username'])
         mailer.enqueue(row['pending_email'], subject, body)
     except Exception:  # noqa: BLE001 - le compte est créé : un échec de mise en file n'est pas une erreur pour l'invité
         logger.exception("Mail de validation non mis en file")
+
+
+def resend_verification(db, account) -> None:
+    """
+    EF-4.5, CA-60 : renvoi du mail de validation par l'utilisateur OU l'admin ; 3 par heure et par compte (compteur PARTAGÉ),
+    429 avec `Retry-After` au-delà. 409 si le compte n'est pas `password`, n'a pas d'adresse en attente ou si l'e-mail n'est pas
+    configuré. La création du compte (premier mail) ne compte pas.
+    """
+    from app.errors import ApiError
+    row = db.execute("SELECT auth_method, pending_email FROM users WHERE id = ?", (account['id'],)).fetchone()
+    if row is None or row['auth_method'] != 'password' or not row['pending_email']:
+        raise ApiError("Aucune adresse en attente de validation.", 409)
+    if not current_app.extensions['mailer'].configured:
+        raise ApiError("L'e-mail n'est pas configuré : la validation ne peut pas être envoyée.", 409)
+    allowed, retry = current_app.extensions['limiters'].resend_account.hit(int(account['id']))
+    if not allowed:
+        error = ApiError("Trop de renvois : réessaie plus tard.", 429)
+        error.retry_after = retry
+        raise error
+    _queue_verification(db, account)
 
 
 def _start_enrollment(db, account):

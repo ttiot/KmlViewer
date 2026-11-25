@@ -195,6 +195,10 @@ class BucketLimiter(_Counter, RateLimiter):
         return len(self._index)
 
 
+EMAIL_CHANGE_PER_ACCOUNT_HOUR, EMAIL_CHANGE_PER_IP_HOUR = 3, 10     # changements d'adresse (EF-4.6) ; distinct du renvoi
+RESEND_PER_HOUR = 3        # renvois du mail de validation par compte et par heure (utilisateur ET admin, EF-4.5)
+
+
 class LruLimiter(_Counter, RateLimiter):
     """Famille « IP », « compte », « utilisateur » : au plus `max_entries` clés, la moins récente évincée."""
 
@@ -321,3 +325,6 @@ class Limiters:
         # Clés non choisies par l'attaquant : second facteur (compte déjà établi), générations (utilisateur)
         self.mfa_account = LruLimiter(get_limit('mfa_per_account'), w15, account_entries, clock)
         self.generation_user = LruLimiter(get_limit('generation_per_user'), w1h, account_entries, clock)
+        self.email_change_account = LruLimiter(lambda: EMAIL_CHANGE_PER_ACCOUNT_HOUR, w1h, account_entries, clock)
+        self.email_change_ip = LruLimiter(lambda: EMAIL_CHANGE_PER_IP_HOUR, w1h, ip_entries, clock)
+        self.resend_account = LruLimiter(lambda: RESEND_PER_HOUR, w1h, account_entries, clock)    # EF-4.5 : 3 renvois / h

@@ -14,7 +14,7 @@ from flask import current_app, g, jsonify, request
 from app import audit, features, outbound
 from app.api import bp
 from app.api.payload import json_body
-from app.auth import admin_required, factors, invitations, tokens, users
+from app.auth import admin_required, factors, invitations, modes, tokens, users
 from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
@@ -23,7 +23,7 @@ from app.settings import REGISTRY, SettingsError, effective
 
 logger = logging.getLogger(__name__)
 
-RESET_LINK_TTL = timedelta(hours=1)
+RESET_LINK_TTL = timedelta(hours=24)                      # EF-1.8
 CONVERT_LINK_TTL = timedelta(hours=24)
 
 
@@ -55,14 +55,28 @@ def _public_link(token: str) -> str:
 @bp.route('/admin/users/<int:user_id>/reset-link', methods=['POST'])
 @admin_required
 def admin_reset_link(user_id):
-    """Lien de réinitialisation du mot de passe (1 h, usage unique), montré UNE fois à l'admin qui le transmet."""
+    """
+    Lien de réinitialisation du mot de passe (24 h, usage unique, EF-1.8) : montré UNE fois à l'admin ET, si l'e-mail est
+    configuré, envoyé (file différée) à l'adresse validée du compte. `sent_by_mail` dit si l'envoi a été mis en file.
+    """
     target = _target(user_id)
     _password_account_required(target)
     if not target['is_active']:
         raise ApiError('Compte désactivé.', 409)
+    tokens.revoke_pending(get_db(), user_id, 'reset', actor=_actor())             # un seul lien de réinitialisation à la fois
     created = tokens.create(get_db(), 'reset', actor=_actor(), created_by=g.user['id'], target_user_id=user_id,
                             email=target['email'], ttl=RESET_LINK_TTL, ip=request.remote_addr)
-    return jsonify({'success': True, 'link': _public_link(created.token), 'expires_at': created.expires_at})
+    link = _public_link(created.token)
+    sent = False
+    mailer = current_app.extensions['mailer']
+    if target['email'] and mailer.has_settings:
+        from app.mailer import compose  # import tardif : mailer dépend de app.auth
+        subject, body = compose('reset', link=link, username=target['username'],
+                                hours=int(RESET_LINK_TTL.total_seconds() // 3600))
+        sent = mailer.enqueue(target['email'], subject, body) == 'queued'
+        if sent:
+            tokens.mark_sent(get_db(), created.id)
+    return jsonify({'success': True, 'link': link, 'expires_at': created.expires_at, 'sent_by_mail': sent})
 
 
 @bp.route('/admin/users/<int:user_id>/mfa-reset', methods=['POST'])
@@ -105,13 +119,8 @@ def admin_revoke_sessions(user_id):
 def admin_resend_verification(user_id):
     target = _target(user_id)
     _password_account_required(target)
-    if not target['pending_email']:
-        raise ApiError("Aucune adresse en attente de validation.", 409)
-    mailer = current_app.extensions['mailer']
-    if not mailer.configured:
-        raise ApiError("L'e-mail n'est pas configuré : la validation ne peut pas être envoyée.", 409)
-    from app.auth.token_routes import _queue_verification
-    _queue_verification(get_db(), target)
+    from app.auth.token_routes import resend_verification
+    resend_verification(get_db(), target)                  # même limite (3 / h) que le renvoi de l'utilisateur
     return jsonify({'success': True})
 
 
@@ -134,6 +143,7 @@ def admin_convert(user_id):
 @bp.route('/admin/invitations')
 @admin_required
 def admin_invitations():
+    _require_password_accounts()
     return jsonify({'success': True, 'invitations': invitations.list_for(get_db(), g.user, everyone=True)})
 
 
@@ -141,6 +151,7 @@ def admin_invitations():
 @admin_required
 def admin_invitation_revoke(token_id):
     """L'admin révoque n'importe quelle invitation (crédit non rendu, EF-3.7)."""
+    _require_password_accounts()
     if not invitations.revoke(get_db(), g.user, token_id, ip=request.remote_addr):
         raise ApiError('Invitation introuvable', 404)
     return jsonify({'success': True})
@@ -167,10 +178,41 @@ def _setting_view(store, setting, conn_overrides) -> dict:
     return view
 
 
+_DESTINATIONS = (('smtp', 'Serveur SMTP'), ('routing', 'Moteur de routage'), ('dem', "Service d'altitude (MNT)"))
+
+
+def _destination_refused(cfg, service: str) -> bool:
+    """Destination effective (réglage forcé en base compris) hors de OUTBOUND_ALLOWED_HOSTS ; vide = service désactivé."""
+    try:
+        if service == 'smtp':
+            host, port = effective(cfg, 'smtp.host'), effective(cfg, 'smtp.port')
+            return bool(host) and not outbound.allowed(cfg, 'smtp', outbound.destination_of_smtp(host, port))
+        url = effective(cfg, 'routing.base_url' if service == 'routing' else 'DEM_URL')
+        return bool(url) and not outbound.allowed(cfg, service, outbound.destination_of_url(url))
+    except outbound.OutboundError:
+        return True
+
+
 def _setting_alerts() -> list:
-    from app.api.map_routes import default_basemap_alert
-    alert = default_basemap_alert(current_app.config)
-    return [alert] if alert else []
+    """Bandeaux de l'admin (CA-64, T16-n3) : jamais la valeur d'un secret, seulement le service ou le réglage en cause."""
+    from app.api.map_routes import allowed_basemaps, default_basemap_alert
+    cfg = current_app.config
+    alerts = []
+    if not current_app.extensions['mailer'].has_settings:
+        alerts.append({'code': 'smtp_not_configured', 'message':
+                       "E-mail non configuré : les adresses ne peuvent pas être validées, le mot de passe oublié est désactivé."})
+    for service, label in _DESTINATIONS:
+        if _destination_refused(cfg, service):
+            alerts.append({'code': 'destination_not_allowed', 'service': service, 'message':
+                           f"{label} : la destination configurée n'est pas dans OUTBOUND_ALLOWED_HOSTS ({service}=) : "
+                           "le service ne sera pas appelé."})
+    if len(allowed_basemaps(cfg, audit=False)) < len(effective(cfg, 'map.basemaps')):
+        alerts.append({'code': 'destination_not_allowed', 'service': 'tiles', 'message':
+                       "Fond de carte : un hôte de tuiles est hors OUTBOUND_ALLOWED_HOSTS (tiles=) : ce fond n'est pas servi."})
+    alert = default_basemap_alert(cfg)
+    if alert:
+        alerts.append(alert)
+    return alerts
 
 
 @bp.route('/admin/settings')
@@ -258,10 +300,30 @@ def _secret_status(name: str) -> dict:
     return status
 
 
+def _secrets_unavailable() -> list:
+    """E-10, EF-0.4, CA-61 : mode `oidc` sans SECRETS_KEY ou PUBLIC_URL : saisie de secrets désactivée ; variables manquantes."""
+    if current_app.config.get('AUTH_MODE') != 'oidc' or current_app.config.get('PASSWORD_ACCOUNTS'):
+        return []
+    return list(current_app.config.get('PASSWORD_ACCOUNTS_MISSING') or [])
+
+
+def _require_password_accounts() -> None:
+    """CA-61 : comptes à mot de passe indisponibles (mode oidc sans SECRETS_KEY ou PUBLIC_URL) : invitations en 404."""
+    if current_app.config.get('AUTH_MODE') == 'oidc' and not modes.password_accounts_available():
+        raise ApiError('Introuvable', 404)
+
+
+def _require_secrets() -> None:
+    if _secrets_unavailable():
+        raise ApiError('Introuvable', 404)
+
+
 @bp.route('/admin/secrets')
 @admin_required
 def admin_secrets():
+    missing = _secrets_unavailable()
     return jsonify({'success': True, 'available': current_app.extensions['secrets'].available,
+                    'disabled': bool(missing), 'missing': missing,
                     'secrets': [_secret_status(n) for n in SECRET_KINDS]})
 
 
@@ -276,6 +338,7 @@ def admin_secret_one(name):
 @bp.route('/admin/secrets/<name>', methods=['PUT'])
 @admin_required
 def admin_secret_put(name):
+    _require_secrets()
     if name not in SECRET_KINDS:
         raise ApiError('Secret inconnu', 404)
     data = json_body()
@@ -307,6 +370,7 @@ def admin_secret_delete(name):
 @admin_required
 def admin_secret_test(name):
     """« Tester » par service (EF-5.6) : ok / ko SEULEMENT, rendu à l'échéance du service, quel que soit le résultat."""
+    _require_secrets()
     if name not in SECRET_KINDS:
         raise ApiError('Secret inconnu', 404)
     if name == 'smtp.password':
@@ -352,7 +416,8 @@ def _feature_view(key: str) -> dict:
 @bp.route('/admin/features')
 @admin_required
 def admin_features():
-    return jsonify({'success': True, 'features': [_feature_view(k) for k in features.FEATURES]})
+    return jsonify({'success': True, 'timezone': effective(current_app.config, 'APP_TIMEZONE'),
+                    'features': [_feature_view(k) for k in features.FEATURES]})
 
 
 @bp.route('/admin/features/<key>', methods=['PATCH'])

@@ -252,6 +252,19 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ------------------------------------------------------------- Navigation */
 
+.pending-email-banner {
+    flex: 1 0 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    font-size: 0.9rem;
+}
+
 .app-navbar {
     position: sticky;
     top: 0;
@@ -775,6 +788,29 @@ input[type="range"] {
 .badge-soft.is-good {
     background: var(--good-soft);
     color: var(--good);
+}
+
+.badge-soft.is-warn {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+.badge-soft.is-bad {
+    background: var(--bad-soft, var(--surface-3));
+    color: var(--bad, var(--text-2));
+}
+
+.diagnostic {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.diagnostic-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
 }
 
 .accordion {

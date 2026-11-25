@@ -648,3 +648,64 @@ def test_the_enroll_and_login_pages_ship_the_webauthn_script_without_inline_code
     source = (__import__('pathlib').Path(__file__).resolve().parent.parent / 'static' / 'js' / 'webauthn.js').read_text(encoding='utf-8')
     code = re.sub(r'//.*', '', source)
     assert not re.search(r'\.innerHTML|insertAdjacentHTML|document\.write|\beval\s*\(|new\s+Function|localStorage|sessionStorage', code)
+
+
+# ===== E-3 : une assertion vaut preuve pour retirer une clé et régénérer les codes (jamais davantage) ==============================
+
+def proof_of(client, auth, **kw):
+    r = call(client, 'post', '/api/me/mfa/webauthn/proof/options', {'password': GOOD})
+    assert r.status_code == 200, r.get_data()
+    return assertion(auth, r.get_data(as_text=True), **kw)
+
+
+def test_an_assertion_replaces_the_code_to_remove_a_key_and_to_regenerate_the_recovery_codes(app, conn):
+    row = add(app, conn, 'bob')
+    first = add_key(conn, row, name='une')
+    add_key(conn, row, VirtualAuthenticator(RP, ORIGIN), name='deux')
+    ids = [r[0] for r in conn.execute("SELECT id FROM webauthn_credentials ORDER BY id")]
+    client = session_client(app, row)
+    regenerated = call(client, 'post', '/api/me/mfa/recovery-codes', {'password': GOOD, 'assertion': proof_of(client, first)})
+    assert regenerated.status_code == 200 and len(regenerated.get_json()['recovery_codes']) == 10
+    stale = proof_of(client, first)
+    assert call(client, 'delete', f'/api/me/mfa/webauthn/{ids[1]}', {'password': GOOD, 'assertion': stale}).status_code == 200
+    client = session_client(app, refresh(conn, 'bob'))
+    assert call(client, 'delete', f'/api/me/mfa/webauthn/{ids[0]}', {'password': GOOD, 'assertion': stale}).status_code == 403   # rejouée
+    assert conn.execute("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?", (row['id'],)).fetchone()[0] == 1
+
+
+def test_a_bad_assertion_or_one_without_the_password_is_refused(app, conn):
+    row = add(app, conn, 'bob')
+    auth = add_key(conn, row, name='une')
+    add_key(conn, row, VirtualAuthenticator(RP, ORIGIN), name='deux')
+    key_id = conn.execute("SELECT id FROM webauthn_credentials ORDER BY id").fetchone()[0]
+    client = session_client(app, row)
+    forged = proof_of(client, auth, rp_id='evil.example')
+    assert call(client, 'delete', f'/api/me/mfa/webauthn/{key_id}', {'password': GOOD, 'assertion': forged}).status_code == 403
+    assert call(client, 'delete', f'/api/me/mfa/webauthn/{key_id}', {'password': OTHER, 'assertion': proof_of(client, auth)}).status_code == 403
+    assert call(client, 'delete', f'/api/me/mfa/webauthn/{key_id}', {'assertion': proof_of(client, auth)}).status_code in (400, 403)
+    assert conn.execute("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?", (row['id'],)).fetchone()[0] == 2
+
+
+def test_an_assertion_proves_nothing_else_the_current_password_and_a_code_stay_required(app, conn):
+    row = add(app, conn, 'bob')
+    auth = add_key(conn, row, name='une')
+    client = session_client(app, row)
+    r = call(client, 'post', '/api/me/password', {'current_password': GOOD, 'new_password': 'un-nouveau-mot-de-passe-77',
+                                                  'assertion': proof_of(client, auth)})
+    assert r.status_code == 403
+    r = call(client, 'post', '/api/me/email', {'password': GOOD, 'email': 'nouveau@example.org', 'assertion': proof_of(client, auth)})
+    assert r.status_code in (400, 403) and call(client, 'get', '/api/me').status_code == 200
+
+
+def test_a_recovery_code_used_from_the_profile_is_audited_like_at_login(app, conn):
+    from app.auth import second_factor
+    row = add(app, conn, 'bob')
+    add_key(conn, row, name='une')
+    add_key(conn, row, VirtualAuthenticator(RP, ORIGIN), name='deux')
+    codes = second_factor.replace_recovery_codes(conn, row['id'])
+    conn.commit()
+    key_id = conn.execute("SELECT id FROM webauthn_credentials ORDER BY id").fetchone()[0]
+    client = session_client(app, row)
+    assert call(client, 'delete', f'/api/me/mfa/webauthn/{key_id}', {'password': GOOD, 'code': codes[0]}).status_code == 200
+    rows = conn.execute("SELECT details FROM audit_log WHERE action = 'user.recovery_used'").fetchall()
+    assert len(rows) == 1 and '"where": "profile"' in rows[0][0] and codes[0] not in rows[0][0]

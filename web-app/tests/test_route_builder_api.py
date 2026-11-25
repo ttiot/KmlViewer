@@ -478,7 +478,8 @@ def test_the_builder_script_follows_the_front_rules():
     urls = set(re.findall(r"""(?:fetch|api)\(\s*['"`]([^'"`]+)""", js))
     assert urls and all(u.startswith('/') for u in urls)                                          # aucune requête hors de l'origine
     assert "kmlviewer.routeBuilder." in js and 'MAX_HISTORY = 100' in js and 'divIcon' in js
-    assert re.search(r"form\[action\$=\"/auth/logout\"\]", js)                                      # effacement à la déconnexion
+    common = (root / 'common.js').read_text(encoding='utf-8')                                       # E-7 : script commun à toutes les pages
+    assert '/auth/logout' in common and 'kmlviewer.routeBuilder.' in common                       # effacement à TOUTE déconnexion
 
 
 def test_the_library_filters_planned_traces_and_shows_the_badge(app, conn):

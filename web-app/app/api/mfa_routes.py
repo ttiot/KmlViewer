@@ -13,7 +13,7 @@ from flask import current_app, g, jsonify, request, session
 from app import audit
 from app.api import bp
 from app.api.payload import json_body
-from app.auth import factors, mfa_limit, passwords, second_factor, users, webauthn_factor
+from app.auth import factors, mfa_limit, passwords, proof, second_factor, users, webauthn_factor
 from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
@@ -135,7 +135,14 @@ def mfa_totp_remove():
     user = _password_user()
     data = json_body()
     _check_password(user, data)
-    _check_totp(user, data)
+
+    def refuse_if_impossible():                             # E-3-n1 : avant la consommation d'un code de secours
+        state = _state(user)
+        if not state['totp']:
+            raise ApiError('Aucun code TOTP actif.', 409)
+        if user['is_admin'] and state['keys'] == 0:
+            raise ApiError('Un administrateur garde au moins un second facteur.', 409)
+    proof.code_or_recovery(user, data, refuse_if_impossible)     # CA-57 : code TOTP ou de secours (notifié)
     db = get_db()
     with write_transaction(db):
         state = _state(user)
@@ -158,10 +165,14 @@ def mfa_totp_remove():
 
 @bp.route('/me/mfa/recovery-codes', methods=['POST'])
 def mfa_recovery_codes():
+    """Régénère les codes : mot de passe + (code TOTP OU assertion d'une clé, E-3b)."""
     user = _password_user()
-    data = json_body()
+    data = json_body(large=False)
     _check_password(user, data)
-    _check_totp(user, data)
+    if data.get('assertion') is not None:
+        proof.assertion(user, data)
+    else:
+        _check_totp(user, data)
     db = get_db()
     with write_transaction(db):
         if not factors.has_second_factor(db, user['id']):
@@ -222,11 +233,18 @@ def mfa_webauthn_verify():
 
 @bp.route('/me/mfa/webauthn/<int:key_id>', methods=['DELETE'])
 def mfa_webauthn_remove(key_id):
-    """Retire une clé : mot de passe + code ; jamais le dernier facteur d'un admin (EF-2.2, B5)."""
+    """Retire une clé : mot de passe + (code OU assertion d'une clé) ; jamais le dernier facteur d'un admin (EF-2.2, B5)."""
     user = _password_user()
-    data = json_body()
+    data = json_body(large=False)
     _check_password(user, data)
-    _check_totp_or_recovery(user, data)
+
+    def refuse_if_impossible():                             # E-3-n1 : avant la consommation d'un code de secours
+        state = _state(user)
+        if not any(k['id'] == key_id for k in state['key_list']):
+            raise ApiError('Clé introuvable', 404)
+        if user['is_admin'] and not state['totp'] and state['keys'] <= 1:
+            raise ApiError('Un administrateur garde au moins un second facteur.', 409)
+    _check_totp_or_recovery(user, data, refuse_if_impossible)
     db = get_db()
     with write_transaction(db):
         state = _state(user)
@@ -246,15 +264,24 @@ def mfa_webauthn_remove(key_id):
     return jsonify({'success': True})
 
 
-def _check_totp_or_recovery(user, data) -> None:
-    """Second facteur exigé pour une suppression : code TOTP ou de secours (le compte peut n'avoir que des clés)."""
-    if mfa_limit.reserve(user['id']) is not None:
-        raise ApiError(mfa_limit.MESSAGE, 429)
-    code = data.get('code')
-    kind = second_factor.kind_of(code)
-    db = get_db()
-    ok = (second_factor.verify_totp(db, current_app.extensions['secrets'], user['id'], code) if kind == 'totp'
-          else second_factor.consume_recovery(db, user['id'], code) if kind == 'recovery' else False)
-    if not ok:
-        raise ApiError('Code invalide ou déjà utilisé.', 403)
-    mfa_limit.release(user['id'])
+def _check_totp_or_recovery(user, data, check=None) -> None:
+    """Retrait d'une clé : assertion WebAuthn (E-3b) ou code TOTP / de secours (E-3a : un code de secours est notifié)."""
+    if data.get('assertion') is not None:
+        proof.assertion(user, data, check)
+    else:
+        proof.code_or_recovery(user, data, check)
+
+
+@bp.route('/me/mfa/webauthn/proof/options', methods=['POST'])
+def mfa_webauthn_assertion_options():
+    """Défi d'assertion pour prouver un second facteur par une clé (retrait d'une clé, codes de secours) : mot de passe exigé."""
+    user = _password_user()
+    data = json_body()
+    _check_password(user, data)
+    try:
+        options = webauthn_factor.authentication_options(
+            current_app.config, current_app.extensions['pending'], proof.assertion_owner(user),
+            webauthn_factor.keys_of(get_db(), user['id']))
+    except webauthn_factor.WebAuthnError as exc:
+        raise ApiError(str(exc), 409) from None
+    return current_app.response_class(options, mimetype='application/json')

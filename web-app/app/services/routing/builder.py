@@ -268,7 +268,7 @@ def _elevation_gain(elevations, count: int):
 def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta, notes, number=1,
                   avoid=frozenset()):
     """RB-4.1 : boucle native ; hors tolérance ⇒ graine suivante dans la limite des essais et du budget."""
-    best, tried, last_seed = None, 0, seed
+    best, tried, last_seed, invalid = None, 0, seed, None
     for attempt in range(1 + config.seed_retries):
         if attempt and not _enough_left(budget):
             break
@@ -288,6 +288,13 @@ def _single_point(provider, start, profile, target_m, tolerance, seed, budget, c
         tried += 1
         notes.extend(result.warnings)
         trace = list(result.points)
+        # E-24, CA-R38 : comme à ≥ 2 points, la boucle se referme sur son départ et passe à moins de snap_tolerance_m de P1
+        if quality.closure_m(trace) > config.snap_tolerance_m:
+            invalid = invalid or 'closure'
+            continue
+        if quality.snap_to_trace(trace, [start])[1][0] > config.snap_tolerance_m:
+            invalid = 'far'
+            continue
         seen = quality.fingerprint(trace) in avoid                  # déjà proposée : écartée si une autre existe
         candidate = (seen, abs(quality.length_m(trace) - target_m), quality.overlap_rate(trace), trace, result.elevations_m)
         if best is None or candidate[:3] < best[:3]:
@@ -296,6 +303,10 @@ def _single_point(provider, start, profile, target_m, tolerance, seed, budget, c
         if not seen and candidate[1] <= tolerance * target_m:
             break
     if best is None:
+        if invalid == 'far':
+            raise UnreachablePoint(number, 0)                      # « Le point 1 est trop loin d'une voie praticable »
+        if invalid == 'closure':
+            raise NoRouteFound()                                   # « Aucune trace possible… » : la fermeture seule échoue
         raise RoutingTimeout()
     return best[3], best[4], tried, last_seed
 

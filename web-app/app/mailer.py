@@ -15,6 +15,7 @@ Deux modes (EF-4.8) : SYNCHRONE (invitation, e-mail de test, commandes CLI) et F
 thread dédié) pour tout le reste : la requête ne dépend jamais de l'envoi. Perte au redémarrage acceptée et journalisée.
 """
 
+import atexit
 import logging
 import queue
 import smtplib
@@ -49,7 +50,7 @@ def _note_line(inviter: str, note: Optional[str]) -> str:
 
 
 def compose(kind: str, *, link: str = '', username: str = '', inviter: str = '', note: Optional[str] = None,
-            detail: str = '') -> tuple:
+            detail: str = '', hours: Optional[int] = None) -> tuple:
     """(sujet, corps) d'un message. `kind` : invitation, verification, reset, bootstrap ou notification (voir NOTIFICATIONS)."""
     footer = "\nSi tu n'es pas à l'origine de cette demande, ignore ce message."
     if kind == 'invitation':
@@ -63,8 +64,10 @@ def compose(kind: str, *, link: str = '', username: str = '', inviter: str = '',
         return ("Validation de ton adresse e-mail", f"Bonjour,\n\nTon compte « {username} » a été créé. Pour valider cette "
                 f"adresse e-mail (lien à usage unique) :\n{link}\n\nSi tu n'as pas créé ce compte, ignore ce message.\n")
     if kind == 'reset':
-        return ("Réinitialisation du mot de passe", "Bonjour,\n\nPour choisir un nouveau mot de passe (lien à usage unique, "
-                f"limité dans le temps) :\n{link}\n{footer}\n")
+        account = f" du compte « {username} »" if username else ""
+        validity = f"valable {hours} h" if hours else "limité dans le temps"
+        return ("Réinitialisation du mot de passe", f"Bonjour,\n\nPour choisir un nouveau mot de passe{account} "
+                f"(lien à usage unique, {validity}) :\n{link}\n\nSi tu n'as rien demandé, préviens ton administrateur.\n")
     text = NOTIFICATIONS.get(kind)
     if text is None:
         raise ValueError(f"Type de message inconnu : {kind!r}")
@@ -177,6 +180,7 @@ class MailQueue:
         self._thread: Optional[threading.Thread] = None
         self._stopping = threading.Event()
         self.dropped = 0
+        self._inflight = None                     # message en cours d'envoi (comptabilisé à l'arrêt, E-16)
 
     def put(self, message) -> bool:
         """Met en file un message (EmailMessage) ou un TRAVAIL (fonction sans argument exécutée par le thread dédié)."""
@@ -221,11 +225,41 @@ class MailQueue:
                 return
             message = self._queue.get()
             try:
-                if message is None or self._stopping.is_set():
+                if message is not None and self._stopping.is_set():
+                    with self._queue.mutex:                   # non traité : remis en tête pour que l'arrêt le compte (E-16)
+                        self._queue.queue.appendleft(message)
                     return
+                if message is None:
+                    return
+                self._inflight = message
                 self._process(message)
             finally:
+                self._inflight = None
                 self._queue.task_done()
+
+    @staticmethod
+    def _kind(message) -> str:
+        """Type d'un message en file pour le journal : sujet FIXE (aucune adresse, aucun lien), ou « travail différé »."""
+        if callable(message):
+            return str(getattr(message, 'kind', None) or 'travail différé')[:80]
+        try:
+            return str(message['Subject'])[:80]
+        except Exception:  # noqa: BLE001
+            return 'message'
+
+    def _log_lost(self) -> None:
+        """E-16, CA-66 : une ligne WARNING si des messages sont perdus à l'arrêt ; rien si la file est vide."""
+        with self._queue.mutex:
+            waiting = [m for m in self._queue.queue if m is not None]
+        if self._inflight is not None:
+            waiting.append(self._inflight)
+        if not waiting:
+            return
+        kinds: dict = {}
+        for message in waiting:
+            kinds[self._kind(message)] = kinds.get(self._kind(message), 0) + 1
+        logger.warning("File d'envoi arrêtée avec %d message(s) non envoyé(s), perdus au redémarrage : %s", len(waiting),
+                       ', '.join(f"{kind} ×{count}" for kind, count in sorted(kinds.items())))
 
     def stop(self) -> None:
         if self._thread is not None:
@@ -235,6 +269,7 @@ class MailQueue:
             except queue.Full:
                 pass
             self._thread.join(timeout=0.5)               # thread démon : un envoi bloqué ne retient pas l'arrêt
+            self._log_lost()
             self._thread = None
 
     def pending(self) -> int:
@@ -317,6 +352,7 @@ class Mailer:
 def init_mailer(app) -> Mailer:
     mailer = Mailer(app)
     app.extensions['mailer'] = mailer
+    atexit.register(mailer.queue.stop)       # E-16 : à l'arrêt du processus la perte est journalisée ; sans thread : no-op
     return mailer
 
 

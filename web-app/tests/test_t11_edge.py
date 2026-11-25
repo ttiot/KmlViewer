@@ -720,12 +720,14 @@ def test_the_last_factor_of_an_admin_cannot_be_removed_EF22(app, conn):
     assert second_factor.remaining_recovery(conn, row['id']) == 10
 
 
-def test_a_recovery_code_does_not_authorise_removing_the_factor_nor_regenerating(app, conn):
+def test_a_recovery_code_removes_the_totp_with_a_notice_but_does_not_authorise_regenerating(app, conn):
     row, secret, client = enrolled_profile(app, conn)
     code = conn.execute("SELECT 1").fetchone() and second_factor.replace_recovery_codes(conn, row['id'])[0]
     conn.commit()
-    assert call(client, 'delete', '/api/me/mfa/totp', {'password': GOOD, 'code': code}).status_code == 403
-    assert call(client, 'post', '/api/me/mfa/recovery-codes', {'password': GOOD, 'code': code}).status_code == 403
+    assert call(client, 'post', '/api/me/mfa/recovery-codes', {'password': GOOD, 'code': code}).status_code == 403      # P-T11-7 : TOTP ou assertion seulement
+    assert second_factor.remaining_recovery(conn, row['id']) == 10                                                    # le code de secours n'a pas été consommé
+    assert call(client, 'delete', '/api/me/mfa/totp', {'password': GOOD, 'code': code}).status_code == 200             # CA-57 : accepté (et notifié)
+    assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'user.recovery_used'").fetchone()[0] == 1
 
 
 def test_regenerating_the_codes_needs_password_and_totp_and_the_old_ones_die(app, conn):

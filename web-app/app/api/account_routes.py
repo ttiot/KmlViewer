@@ -9,10 +9,11 @@ from app import audit
 from app.api import bp
 from app.api.mfa_routes import _check_password, _password_user
 from app.api.payload import json_body
-from app.auth import emails, factors, mfa_limit, passwords, second_factor, tokens, users
+from app.auth import emails, factors, passwords, proof, tokens, users
 from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
+from app.ratelimit import hit_all, ip_key
 
 
 def _check_second_factor(user, data) -> None:
@@ -20,15 +21,7 @@ def _check_second_factor(user, data) -> None:
     db = get_db()
     if not factors.has_second_factor(db, user['id']):
         return
-    if mfa_limit.reserve(user['id']) is not None:
-        raise ApiError(mfa_limit.MESSAGE, 429)
-    code = data.get('code')
-    kind = second_factor.kind_of(code)
-    ok = (second_factor.verify_totp(db, current_app.extensions['secrets'], user['id'], code) if kind == 'totp'
-          else second_factor.consume_recovery(db, user['id'], code) if kind == 'recovery' else False)
-    if not ok:
-        raise ApiError('Code invalide ou déjà utilisé.', 403)
-    mfa_limit.release(user['id'])
+    proof.code_or_recovery(user, data)
 
 
 @bp.route('/me/password', methods=['POST'])
@@ -64,6 +57,15 @@ def change_password():
     return jsonify({'success': True})
 
 
+@bp.route('/me/email/resend-verification', methods=['POST'])
+def resend_email_verification():
+    """EF-4.5, CA-60 : renvoi du mail de validation par le titulaire (session complète) ; 3 / h partagés avec l'admin."""
+    user = _password_user()
+    from app.auth.token_routes import resend_verification
+    resend_verification(get_db(), user)
+    return jsonify({'success': True})
+
+
 @bp.route('/me/email', methods=['POST'])
 def change_email():
     """
@@ -72,6 +74,19 @@ def change_email():
     """
     user = _password_user()
     data = json_body()
+    # E-15-1, EF-4.6 : 10 / h par IP et 3 / h par compte. Contrôle SANS compter avant tout hachage (un compte déjà limité ne fait
+    # pas hacher), puis créneau RÉSERVÉ (atomique) juste avant l'écriture : seuls les changements valides consomment le budget.
+    limiters = current_app.extensions['limiters']
+    checks = ((limiters.email_change_ip, ip_key(request.remote_addr)), (limiters.email_change_account, int(user['id'])))
+
+    def too_many(retry):
+        error = ApiError("Trop de changements d'adresse : réessaie plus tard.", 429)
+        error.retry_after = retry
+        return error
+    for limiter, key in checks:
+        allowed, retry = limiter.peek(key)
+        if not allowed:
+            raise too_many(retry)
     _check_password(user, {'password': data.get('password')})
     _check_second_factor(user, data)
     try:
@@ -81,6 +96,9 @@ def change_email():
     db = get_db()
     if wanted == user['email']:
         raise ApiError('C’est déjà ton adresse.', 409)
+    allowed, retry = hit_all(*checks)                           # créneau réservé : jamais plus de 3 en parallèle
+    if not allowed:
+        raise too_many(retry)
     with write_transaction(db):
         db.execute("UPDATE users SET pending_email = ? WHERE id = ?", (wanted, user['id']))
         audit.record(db, 'user.email_change_requested', actor=audit.Actor.from_user(user), target_type='user',

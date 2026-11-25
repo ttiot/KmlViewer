@@ -74,7 +74,7 @@
         const buttons = [];
         if (user.auth_method === 'password') {
             buttons.push(el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: () => post('reset-link',
-                (r) => showOnce(`Lien de réinitialisation pour ${user.username} (1 h, usage unique) :`, r.link)) }, 'Lien de réinitialisation'));
+                (r) => showOnce(`Lien de réinitialisation pour ${user.username} (24 h, usage unique${r.sent_by_mail ? ', envoyé aussi par e-mail' : ''}) :`, r.link)) }, 'Lien de réinitialisation'));
             if (!self) buttons.push(confirmButton('Réinitialiser le 2e facteur', 'Retirer tous ses facteurs ?',
                 () => post('mfa-reset', (r) => { notify(r.demoted ? 'Facteurs retirés ; compte rétrogradé.' : 'Facteurs retirés.'); loadUsers(); })));
             if (user.pending_email) buttons.push(el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary',
@@ -119,6 +119,14 @@
 
     // -- invitations -------------------------------------------------------------------------------------------------------
     async function loadInvitations() {
+        const info = await act(api('/api/admin/secrets'));          // `disabled` / `missing` : comptes à mot de passe indisponibles (CA-61)
+        if (info && info.disabled) {
+            $('inviteForm').hidden = true;
+            $('invitesBody').replaceChildren(el('tr', {}, el('td', { colspan: 5, class: 'hint', role: 'status' },
+                `Invitations indisponibles : variable(s) manquante(s) — ${(info.missing || []).join(', ')} (mode oidc : SECRETS_KEY et PUBLIC_URL sont requises).`)));
+            return;
+        }
+        $('inviteForm').hidden = false;
         const data = await act(api('/api/admin/invitations'));
         if (!data) return;
         $('invitesBody').replaceChildren(...data.invitations.map((i) => el('tr', {},
@@ -140,6 +148,54 @@
     });
 
     // -- fonctions bêta ----------------------------------------------------------------------------------------------------
+    // Diagnostic du moteur (E-21) : lecture humaine, jamais le JSON brut ni l'epoch ; tout passe par textContent (App.el).
+    const PROFILE_LABELS = ['foot', 'hike', 'bike', 'racingbike', 'mtb', 'gravel'];
+    function ago(epochSeconds, timezone) {
+        const minutes = Math.max(0, Math.round((Date.now() / 1000 - epochSeconds) / 60));
+        const when = minutes < 1 ? "à l'instant" : minutes < 60 ? `il y a ${minutes} min` : `il y a ${Math.round(minutes / 60)} h`;
+        let local = '';
+        try {
+            local = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short', timeZone: timezone || undefined })
+                .format(new Date(epochSeconds * 1000));
+        } catch (_) { local = new Date(epochSeconds * 1000).toLocaleString('fr-FR'); }
+        return `Vérifié ${when} (${local})`;
+    }
+    function extent(bbox) {
+        if (!Array.isArray(bbox) || bbox.length !== 4) return null;
+        const [south, west, north, east] = bbox.map((v) => Number(v).toFixed(2));
+        return `sud ${south}°, ouest ${west}°, nord ${north}°, est ${east}°`;
+    }
+    function renderDiagnostic(d, timezone) {
+        if (typeof d === 'string') return el('p', { class: 'hint' }, d);
+        const badge = (text, kind) => el('span', { class: `badge-soft is-${kind}` }, text);
+        const state = !d.configured ? badge('Moteur non configuré', 'warn')
+            : d.available ? badge('Moteur disponible', 'good') : badge('Moteur indisponible', 'bad');
+        const lines = [el('div', { class: 'diagnostic-line' }, state,
+            d.checked_at ? el('span', { class: 'hint' }, ago(d.checked_at, timezone)) : el('span', { class: 'hint' }, 'Pas encore vérifié'))];
+        if (d.coverage_contained !== null && d.coverage_contained !== undefined) {
+            lines.push(el('div', { class: 'diagnostic-line' }, el('span', {}, 'Zone couverte :'),
+                d.coverage_contained ? badge('oui', 'good') : badge('non', 'warn'),
+                d.coverage_contained ? null : el('span', { class: 'hint' },
+                    "la zone des traces (réglage routing.coverage_bbox) dépasse l'étendue du moteur : certains points seront refusés.")));
+        }
+        const area = extent(d.info_bbox);
+        if (area) lines.push(el('div', { class: 'diagnostic-line' }, el('span', {}, 'Étendue du moteur :'), el('span', { class: 'hint' }, area)));
+        if (Array.isArray(d.profiles) && d.profiles.length) {
+            const known = PROFILE_LABELS.filter((p) => d.profiles.includes(p));
+            const others = d.profiles.filter((p) => !PROFILE_LABELS.includes(p));
+            lines.push(el('div', { class: 'diagnostic-line' }, el('span', {}, 'Profils :'), [...known, ...others].map((p) => badge(p, 'info'))));
+        }
+        if (d.configured) {
+            const result = el('span', { role: 'status', class: 'hint' });
+            lines.push(el('div', { class: 'diagnostic-line' }, el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: async () => {
+                result.textContent = '…';
+                const r = await act(api('/api/admin/secrets/routing.api_key/test', { method: 'POST', body: {} }));
+                result.textContent = r ? (r.ok ? 'Moteur joignable.' : 'Moteur injoignable.') : 'Test impossible.';
+            } }, 'Tester le moteur'), result));
+        }
+        return el('div', { class: 'diagnostic' }, lines);
+    }
+
     async function loadFeatures() {
         const [features, users] = await Promise.all([act(api('/api/admin/features')), act(api('/api/admin/users'))]);
         if (!features || !users) return;
@@ -152,7 +208,7 @@
                 const box = el('input', { type: 'checkbox', class: 'form-check-input', checked: picked.has(u.id), value: u.id });
                 return el('label', { class: 'chip' }, box, ' ', u.username);
             }));
-            const diagnostic = feature.diagnostic ? el('p', { class: 'hint' }, typeof feature.diagnostic === 'string' ? feature.diagnostic : JSON.stringify(feature.diagnostic)) : null;
+            const diagnostic = feature.diagnostic ? renderDiagnostic(feature.diagnostic, features.timezone) : null;
             return el('div', { class: 'mb-3' }, el('h2', { class: 'h5' }, feature.label), el('p', { class: 'hint' }, feature.description), diagnostic,
                 select, el('p', { class: 'mt-2 mb-1' }, 'Comptes (liste conservée quel que soit l’état) :'), list,
                 el('button', { type: 'button', class: 'btn btn-primary mt-2', onclick: async () => {
@@ -229,14 +285,45 @@
             });
         } catch (_) { notify('Valeur illisible ou hors bornes (JSON attendu pour une liste ou un rectangle).', 'danger'); return; }
         if (!Object.keys(changes).length) { notify('Rien à enregistrer.'); return; }
+        // CA-65, EF-5.5 : changer la destination d'un service efface son secret lié : confirmation DANS la page (jamais une boîte du navigateur)
+        const cleared = await secretsToClear(changes);
+        if (cleared.length) {
+            $('settingsConfirmText').textContent = `Ce changement de destination efface le secret enregistré : ${cleared.join(', ')}. Il faudra le ressaisir.`;
+            $('settingsConfirm').hidden = false;
+            pendingChanges = changes;
+            return;
+        }
+        await saveSettings(changes);
+    });
+
+    let pendingChanges = null;
+    const LINKED_SECRETS = { 'smtp.host': 'smtp.password', 'smtp.port': 'smtp.password', 'routing.base_url': 'routing.api_key' };
+    async function secretsToClear(changes) {
+        const names = [...new Set(Object.keys(changes).filter((key) => LINKED_SECRETS[key]).map((key) => LINKED_SECRETS[key]))];
+        if (!names.length) return [];
+        const data = await act(api('/api/admin/secrets'));
+        if (!data || data.disabled) return [];
+        return names.filter((name) => (data.secrets.find((s) => s.name === name) || {}).configured);
+    }
+    async function saveSettings(changes) {
         await act(api('/api/admin/settings', { method: 'PATCH', body: { settings: changes } }), () => notify('Réglages enregistrés.'));
         loadSettings();
+    }
+    $('settingsConfirmYes').addEventListener('click', async () => {
+        const changes = pendingChanges; pendingChanges = null; $('settingsConfirm').hidden = true;
+        if (changes) await saveSettings(changes);
     });
+    $('settingsConfirmNo').addEventListener('click', () => { pendingChanges = null; $('settingsConfirm').hidden = true; });
 
     // -- clés API et e-mail -----------------------------------------------------------------------------------------------
     async function loadSecrets() {
         const data = await act(api('/api/admin/secrets'));
         if (!data) return;
+        if (data.disabled) {            // E-10, EF-0.4 : formulaire masqué, explication qui nomme les variables manquantes
+            $('secretsBox').replaceChildren(el('p', { class: 'hint', role: 'status' },
+                `La saisie des clés API et de l'e-mail est désactivée : variable(s) manquante(s) — ${(data.missing || []).join(', ')} (mode oidc : SECRETS_KEY et PUBLIC_URL sont requises).`));
+            return;
+        }
         $('secretsBox').replaceChildren(...data.secrets.map((secret) => {
             const input = el('input', { type: 'password', class: 'form-control', autocomplete: 'off', maxlength: 1024, 'aria-label': `Valeur de ${secret.name}` });
             const status = secret.configured
@@ -266,6 +353,35 @@
     });
 
     // -- journal -----------------------------------------------------------------------------------------------------------
+    // Détails d'une ligne du journal (E-21) : liste « clé : valeur » compacte, détail brut replié ; tout en textContent.
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+    function readable(key, value, depth = 0) {
+        if (value === null || value === undefined) return '—';
+        if (typeof value === 'boolean') return value ? 'oui' : 'non';
+        if (typeof value === 'number') {
+            if (/(_s|_seconds)$/.test(key)) {
+                const m = Math.floor(value / 60), r = Math.round(value % 60);
+                return m ? `${m} min${r ? ` ${r} s` : ''}` : `${value} s`;
+            }
+            return String(value);
+        }
+        if (typeof value === 'string') return ISO_DATE.test(value) ? dateTime(value) : (value.length > 120 ? `${value.slice(0, 117)}…` : value);
+        if (Array.isArray(value)) return value.slice(0, 20).map((v) => readable(key, v, depth + 1)).join(', ') + (value.length > 20 ? ', …' : '');
+        if (depth >= 2) return '…';
+        return Object.entries(value).map(([k, v]) => `${k} ${readable(k, v, depth + 1)}`).join(' · ');
+    }
+    function renderDetails(details) {
+        if (!details || (typeof details === 'object' && !Object.keys(details).length)) return '';
+        if (typeof details !== 'object') return String(details);
+        const isEmpty = (v) => v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length)
+            || (typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length);
+        const shown = Object.entries(details).filter(([, value]) => !isEmpty(value));          // champs vides omis (le brut les garde)
+        const list = el('ul', { class: 'list-unstyled mb-1 audit-details' }, shown.length ? shown.map(([key, value]) =>
+            el('li', {}, el('span', { class: 'mono' }, `${key} : `), readable(key, value))) : el('li', {}, '—'));
+        const raw = el('details', {}, el('summary', {}, 'Voir le détail'), el('pre', { class: 'mono mb-0' }, JSON.stringify(details, null, 2)));
+        return el('div', {}, list, raw);
+    }
+
     async function loadAudit(fresh) {
         if (fresh) { state.auditBefore = null; $('auditBody').replaceChildren(); }
         const params = new URLSearchParams({ limit: '50' });
@@ -277,7 +393,7 @@
         $('auditBody').append(...data.entries.map((e) => el('tr', {}, el('td', { class: 'text-nowrap' }, dateTime(e.at)),
             el('td', {}, `${e.actor_type}${e.actor_label ? ` · ${e.actor_label}` : ''}`), el('td', { class: 'mono' }, e.action),
             el('td', {}, e.target_type ? `${e.target_type} ${e.target_id ?? ''}` : '—'),
-            el('td', { class: 'mono hint' }, e.details ? JSON.stringify(e.details) : ''))));
+            el('td', { class: 'hint' }, renderDetails(e.details)))));
         state.auditBefore = data.next_before_id;
         $('auditMore').hidden = !data.next_before_id;
     }

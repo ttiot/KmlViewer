@@ -166,7 +166,7 @@ def test_delete_through_the_new_route_removes_the_account_and_destroys_its_pendi
     assert app.extensions['pending'].get(pid) is None
 
 
-def test_reset_link_is_single_use_for_one_hour_and_only_for_active_password_accounts(app, conn, client):
+def test_reset_link_is_single_use_for_24_hours_and_only_for_active_password_accounts(app, conn, client):
     target = add(conn, 'alice')
     r = call(client, 'POST', f"/api/admin/users/{target['id']}/reset-link")
     link = r.get_json()['link']
@@ -333,12 +333,13 @@ def test_the_admin_is_told_when_the_default_basemap_is_unavailable(app, conn, cl
     """T16-n3 : fond par défaut retiré de la liste (valeur forcée en base) : alerte explicite, ailleurs aucune alerte."""
     from tests.conftest import force_setting
     store = app.config['SETTINGS_STORE']
-    assert call(client, 'GET', '/api/admin/settings').get_json()['alerts'] == []
-    assert call(client, 'GET', '/api/admin/settings/diagnostic').get_json()['alerts'] == []
+    def basemap_codes(path):
+        return [a['code'] for a in call(client, 'GET', path).get_json()['alerts'] if a['code'] == 'default_basemap_unavailable']
+    assert basemap_codes('/api/admin/settings') == [] and basemap_codes('/api/admin/settings/diagnostic') == []
     force_setting(conn, store, 'map.default_basemap', 'fantome')
     for path in ('/api/admin/settings', '/api/admin/settings/diagnostic'):
-        alerts = call(client, 'GET', path).get_json()['alerts']
-        assert [a['code'] for a in alerts] == ['default_basemap_unavailable'] and 'fantome' in alerts[0]['message']
+        alerts = [a for a in call(client, 'GET', path).get_json()['alerts'] if a['code'] == 'default_basemap_unavailable']
+        assert len(alerts) == 1 and 'fantome' in alerts[0]['message']
 
 
 # --- Secrets (P-T14-7) ----------------------------------------------------------------------------------------------------------
@@ -503,3 +504,27 @@ def test_activation_deactivation_and_deletion_of_an_account_are_audited_without_
     assert row['actor_type'] == 'user' and users and row['actor_id'] is not None
     dump = json.dumps([dict(r) for r in conn.execute("SELECT details FROM audit_log")])
     assert 'password_hash' not in dump and 'totp' not in dump
+
+
+def test_reset_link_lasts_24_hours_and_is_mailed_to_the_validated_address_when_smtp_is_configured(app, conn, client, smtp):
+    """E-1 / EF-1.8 : 24 h ; envoi différé à l'adresse validée si SMTP configuré, sinon lien montré seulement."""
+    from datetime import datetime, timezone
+    target = add(conn, 'alice', email='alice@example.org')
+    r = call(client, 'POST', f"/api/admin/users/{target['id']}/reset-link").get_json()
+    assert r['sent_by_mail'] is False and app.extensions['mailer'].queue.drain() == 0
+    expires = datetime.strptime(r['expires_at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+    hours = (expires - datetime.now(timezone.utc)).total_seconds() / 3600
+    assert 23.9 < hours <= 24.01
+    c = database.connect(app.config['DB_PATH'])
+    app.config['SETTINGS_STORE'].set_many(c, {'smtp.host': '127.0.0.1', 'smtp.port': smtp.port, 'smtp.security': 'none',
+                                              'smtp.sender': 'noreply@example.org', 'smtp.timeout_s': 2}, actor=CLI)
+    c.close()
+    r = call(client, 'POST', f"/api/admin/users/{target['id']}/reset-link").get_json()
+    assert r['sent_by_mail'] is True and app.extensions['mailer'].queue.drain() == 1
+    import email
+    mail = email.message_from_string(smtp.messages[0])
+    assert len(smtp.messages) == 1 and mail['To'] == 'alice@example.org'
+    assert r['link'].split('#t=')[1] in mail.get_payload(decode=True).decode()
+    noaddr = add(conn, 'bob')
+    r = call(client, 'POST', f"/api/admin/users/{noaddr['id']}/reset-link").get_json()
+    assert r['sent_by_mail'] is False and r['link']

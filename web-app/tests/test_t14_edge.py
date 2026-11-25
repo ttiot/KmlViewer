@@ -212,7 +212,7 @@ def test_mfa_reset_and_reset_link_only_concern_password_accounts(app, conn, kind
     assert call(client, 'post', f'/api/admin/users/{target}/reset-link', {}).status_code == expected
 
 
-def test_the_reset_link_is_shown_once_single_use_one_hour_and_never_sent_to_the_admin_session(app, conn):
+def test_the_reset_link_is_shown_once_single_use_24_hours_and_never_sent_to_the_admin_session(app, conn):
     rows, _ = world(app, conn)
     r = call(session_client(app, rows['a']), 'post', f"/api/admin/users/{rows['user']['id']}/reset-link", {})
     body = r.get_json()
@@ -222,7 +222,7 @@ def test_the_reset_link_is_shown_once_single_use_one_hour_and_never_sent_to_the_
         [dict(x) for x in conn.execute("SELECT * FROM audit_log")])
     from datetime import datetime
     fmt = '%Y-%m-%dT%H:%M:%SZ'
-    assert 3500 <= (datetime.strptime(row['expires_at'], fmt) - datetime.strptime(row['created_at'], fmt)).total_seconds() <= 3700
+    assert 86300 <= (datetime.strptime(row['expires_at'], fmt) - datetime.strptime(row['created_at'], fmt)).total_seconds() <= 86500
     disabled = add(app, conn, 'off', active=False)
     assert call(session_client(app, rows['a']), 'post', f"/api/admin/users/{disabled['id']}/reset-link", {}).status_code == 409
 

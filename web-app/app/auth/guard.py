@@ -120,7 +120,8 @@ def init_guard(app) -> None:
     app.before_request(_load_user_and_guard)
     app.context_processor(lambda: {
         'current_user': g.get('user'), 'auth_mode': modes.auth_mode(), 'oidc_enabled': oidc_enabled(),
-        'password_accounts': modes.password_accounts_available()})
+        'password_accounts': modes.password_accounts_available(),
+        'smtp_configured': lambda: current_app.extensions['mailer'].configured})
 
 
 def current_user_id() -> int:

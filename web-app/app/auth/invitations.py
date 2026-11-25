@@ -332,5 +332,7 @@ def reset_password(conn, token, password, *, ip: Optional[str] = None, now: Opti
             return None
         conn.execute("UPDATE users SET password_hash = ?, password_changed_at = ?, session_token = ? WHERE id = ?",
                      (hashed, tokens._stamp(now), _new_session_token(), target))
+        # les autres liens de réinitialisation du compte meurent avec l'usage : un seul lien valable à la fois
+        tokens.revoke_pending(conn, target, 'reset', actor=audit.Actor.from_user(user), now=now)
         audit.record(conn, 'user.password_reset', actor=audit.Actor.from_user(user), target_type='user', target_id=target, ip=ip)
     return target

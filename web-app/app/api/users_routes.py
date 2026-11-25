@@ -118,6 +118,9 @@ def update_user(user_id):
     # (`user.admin_refused`) soit validée avec elle ; rien d'autre n'est alors appliqué, et l'erreur 409 part après.
     refused = None
     with write_transaction(db):
+        target = users.get_by_id(db, user_id)                      # relu DANS la transaction (avant/après exacts de l'audit)
+        if target is None:
+            raise _unknown_user()
         if updates.get('is_active') == 0 or updates.get('is_admin') == 0:
             ensure_admin_remains(db, user_id, 'le désactiver ou le rétrograder')
         if 'is_admin' in updates:
@@ -165,6 +168,9 @@ def delete_user(user_id):
     if target is None:
         raise _unknown_user()
     with write_transaction(db):
+        target = users.get_by_id(db, user_id)                      # relu DANS la transaction d'audit
+        if target is None:
+            raise _unknown_user()
         ensure_admin_remains(db, user_id, 'le supprimer')
         # Avant la suppression : la clé étrangère de l'émetteur passerait à NULL et ses invitations ne seraient plus retrouvables
         tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))

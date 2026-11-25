@@ -1,7 +1,7 @@
 // Constructeur de traces (gpx-route-builder TR6) : points sur la carte, activité, distance, « Terminer » -> boucle routée.
 // Règles : toute donnée du serveur passe par textContent (App.el) ; marqueurs = L.divIcon dont le contenu n'est que le numéro ;
 // aucun style ni script en ligne ; aucune requête hors de l'origine ; les points restent dans ce navigateur (clé locale par compte,
-// supprimée à la déconnexion) ; annuler / rétablir en mémoire seulement (100 états).
+// supprimée à TOUTE déconnexion, script commun : common.js) ; annuler / rétablir en mémoire seulement (100 états).
 'use strict';
 
 const RouteBuilder = (() => {
@@ -37,15 +37,6 @@ const RouteBuilder = (() => {
             if (typeof saved.distance === 'string') $('rbDistance').value = saved.distance;
         } catch (_) { /* contenu illisible : ignoré */ }
     }
-    // À l'envoi du formulaire de déconnexion : toutes les clés du mode sont effacées
-    function wipeOnLogout() {
-        document.querySelectorAll('form[action$="/auth/logout"]').forEach((form) => form.addEventListener('submit', () => {
-            try {
-                Object.keys(window.localStorage).filter((k) => k.startsWith(STORAGE_PREFIX)).forEach((k) => window.localStorage.removeItem(k));
-            } catch (_) { /* ignoré */ }
-        }));
-    }
-
     // -- messages dans la page -------------------------------------------------------------------------------------------
     function say(text, kind = 'info') {
         const box = $('rbMessage');
@@ -217,9 +208,11 @@ const RouteBuilder = (() => {
             state.options = await api('/api/route-builder/options');
             state.userId = (await api('/api/me')).user.id;
         } catch (error) { notify(error.message, 'danger'); return; }
+        if (typeof cancelEditing === 'function') cancelEditing();       // E-6 : l'éditeur de points est fermé à l'ouverture du constructeur
         clearOtherAccounts();
         state.active = true;
         root.hidden = false;
+        if (typeof updateEmptyState === 'function') updateEmptyState();      // le popup « Glisse-dépose » ne couvre plus la carte
         $('rbActivity').replaceChildren(...state.options.activities.map((a) => el('option', { value: a.key,
             selected: a.key === state.options.default_activity }, a.label)));
         $('rbDistance').min = state.options.min_km;
@@ -238,8 +231,10 @@ const RouteBuilder = (() => {
     }
 
     function close() {
+        if (!state.active) return;
         state.active = false;
         root.hidden = true;
+        if (typeof updateEmptyState === 'function') updateEmptyState();      // rétablit l'état d'avant (vide si aucune trace)
         state.markers.forEach((m) => Viewer.map.removeLayer(m));
         state.markers = [];
         if (state.coverage) { Viewer.map.removeLayer(state.coverage); state.coverage = null; }
@@ -257,7 +252,6 @@ const RouteBuilder = (() => {
     function setup() {
         root = $('routeBuilderPanel');
         if (!root) return;                                  // fonction indisponible : aucun élément dans la page (EF-7.3)
-        wipeOnLogout();
         $('routeBuilderOpen').addEventListener('click', () => (state.active ? close() : open()));
         $('rbClose').addEventListener('click', close);
         Viewer.map.on('click', addPoint);
@@ -301,5 +295,5 @@ const RouteBuilder = (() => {
         $('rbActivity').addEventListener('change', save);
     }
 
-    return { setup };
+    return { setup, close, isOpen: () => state.active };
 })();

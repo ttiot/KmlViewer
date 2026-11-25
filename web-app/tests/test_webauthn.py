@@ -283,15 +283,10 @@ def test_the_rp_id_override_must_be_a_domain_suffix_of_the_host():
     assert webauthn_factor.rp_id({**cfg, 'WEBAUTHN_RP_ID': 'ces.example.com'}) is None        # suffixe de chaîne, pas de domaine
 
 
-def test_the_routes_refuse_politely_when_webauthn_is_unavailable(tmp_path):
-    app = make(tmp_path, PUBLIC_URL='https://traces.example.com', WEBAUTHN_RP_ID='example.org')
-    c = database.connect(app.config['DB_PATH'])
-    user = add(c, 'alice')
-    client = app.test_client()
-    pending_for(app, c, client, user, 'enroll')
-    r = post(client, '/auth/password/enroll/webauthn/options', {}, csrf_of(client, '/auth/password/enroll'))
-    assert r.status_code == 400 and 'disponibles' in r.get_json()['error']
-    assert 'enrollKey' not in client.get('/auth/password/enroll', **KW).get_data(as_text=True)
+def test_an_invalid_rp_id_override_refuses_to_start_naming_the_variable(tmp_path):
+    """E-13 (remplace « les routes refusent poliment ») : un WEBAUTHN_RP_ID qui n'est pas un suffixe de l'hôte arrête le démarrage."""
+    with pytest.raises(RuntimeError, match='WEBAUTHN_RP_ID'):
+        make(tmp_path, PUBLIC_URL='https://traces.example.com', WEBAUTHN_RP_ID='example.org')
 
 
 # --- Profil ------------------------------------------------------------------------------------------------------------------------

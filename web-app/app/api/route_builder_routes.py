@@ -132,7 +132,8 @@ def route_builder_route_generate():
             response_error.retry_after = retry
             raise response_error
         try:
-            generation = builder.execute(runtime.provider(), prepared, config, avoid=avoid)
+            generation = builder.execute(runtime.provider(), prepared, config, avoid=avoid,
+                                         today=datetime.now(ZoneInfo(effective(current_app.config, 'APP_TIMEZONE'))))   # E-26
         except (builder.InvalidBuild, RoutingTimeout, RoutingUnavailable, InvalidResponse, NoRouteFound) as exc:
             raise _error(exc) from None
         except Exception:  # noqa: BLE001 - jamais de détail interne
@@ -193,6 +194,8 @@ def route_builder_save():
             outcome = ingest_service.ingest_bytes(db, current_app.config, user_id, gpx, f'{name[:100]}.gpx', 'route_builder',
                                                   defer_elevation=True, kind='planned')
         if outcome.status == 'error':
+            if outcome.quota:
+                raise ApiError(outcome.message, 413)                  # E-8 : quota atteint, message clair (pas 503)
             raise ApiError('Enregistrement impossible', 503 if outcome.retryable else 400)
         digest = hashlib.sha256(gpx).hexdigest()
         runtime.results.mark_saved(user_id, rid, {'activity_id': outcome.activity_id, 'user_id': user_id, 'sha256': digest})

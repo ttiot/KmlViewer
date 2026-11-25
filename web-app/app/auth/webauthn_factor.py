@@ -27,13 +27,11 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
                                       UserVerificationRequirement)
 
 from app import audit
+from app.auth import publicsuffix
 from app.db import write_transaction
 
 logger = logging.getLogger(__name__)
 
-# Suffixes publics à plusieurs labels les plus courants : une surcharge qui en est un est refusée (liste minimale, T12-n1)
-PUBLIC_SUFFIXES = frozenset({'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'co.jp',
-                             'co.za', 'com.br', 'com.cn', 'com.mx', 'co.in', 'github.io', 'herokuapp.com', 'appspot.com'})
 RP_NAME = 'KmlViewer'
 MAX_KEYS = 10
 MAX_NAME = 60
@@ -64,20 +62,58 @@ def _is_ip(host: str) -> bool:
         return False
 
 
+def _override(cfg) -> str:
+    return (cfg.get('WEBAUTHN_RP_ID') or os.environ.get('WEBAUTHN_RP_ID') or '').strip().lower()
+
+
+def _is_suffix_of(host: str, candidate: str) -> bool:
+    return host == candidate or host.endswith('.' + candidate)
+
+
+def rp_id_problem(cfg) -> Optional[str]:
+    """
+    Raison pour laquelle le RP ID configuré est INVALIDE (None s'il est utilisable ou si WebAuthn n'est simplement pas
+    configurable : pas d'hôte, adresse IP). Vérifié contre la Public Suffix List embarquée (EF-2.4b, E-13).
+    """
+    _scheme, host, _port = _public(cfg)
+    if not host or _is_ip(host):
+        return None
+    rules = publicsuffix.rules()
+    override = _override(cfg)
+    if override:
+        ascii_override = publicsuffix.to_ascii(override)
+        if ascii_override is None or override.strip('.') != override or not _is_suffix_of(host, ascii_override):
+            return "WEBAUTHN_RP_ID n'est pas l'hôte de PUBLIC_URL ni un suffixe de domaine de cet hôte"
+        if ascii_override != 'localhost' and publicsuffix.is_public_suffix(ascii_override, rules):
+            return "WEBAUTHN_RP_ID est un suffixe public (il doit contenir un domaine enregistrable)"
+        return None
+    if '.' in host and publicsuffix.is_public_suffix(host, rules):
+        return "L'hôte de PUBLIC_URL est un suffixe public : aucun RP ID WebAuthn n'est possible"
+    return None
+
+
+def validate_config(cfg) -> None:
+    """Démarrage (comptes à mot de passe disponibles) : RP ID invalide ⇒ RuntimeError qui nomme la variable (E-13)."""
+    problem = rp_id_problem(cfg)
+    if problem:
+        raise RuntimeError(f"{problem}. Corrige WEBAUTHN_RP_ID (ou PUBLIC_URL). Démarrage refusé.")
+
+
 def rp_id(cfg) -> Optional[str]:
     """RP ID : surcharge `WEBAUTHN_RP_ID` (suffixe de domaine de l'hôte) ou l'hôte de PUBLIC_URL ; None si inutilisable."""
     _scheme, host, _port = _public(cfg)
     if not host or _is_ip(host):                        # un RP ID n'est jamais une adresse IP
         return None
-    override = (cfg.get('WEBAUTHN_RP_ID') or os.environ.get('WEBAUTHN_RP_ID') or '').strip().lower()
-    if override:
-        # Au moins deux labels (« com » ne désigne aucun site) et un suffixe de domaine de l'hôte (T12-n1)
-        if ((host == override or (host.endswith('.' + override) and '.' in override and override not in PUBLIC_SUFFIXES))
-                and override.strip('.') == override):
-            return override
-        logger.error("WEBAUTHN_RP_ID n'est pas un suffixe de l'hôte de PUBLIC_URL : WebAuthn indisponible")
+    try:
+        problem = rp_id_problem(cfg)
+    except publicsuffix.PublicSuffixError:
+        logger.error("Public Suffix List indisponible : WebAuthn indisponible")
         return None
-    return host
+    if problem:
+        logger.error("%s : WebAuthn indisponible", problem)
+        return None
+    override = _override(cfg)
+    return publicsuffix.to_ascii(override) if override else host
 
 
 def expected_origin(cfg) -> Optional[str]:
