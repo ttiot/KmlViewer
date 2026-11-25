@@ -27,6 +27,7 @@ from app import features
 from app.audit import Actor
 from app.services.routing.base import (InvalidResponse, NoRouteFound, RouteResult, RoutingTimeout, RoutingUnavailable)
 from app.services.routing.results import ResultStore
+from app.settings import REGISTRY
 from tests.pw_harness import KW, add, call, concurrent, connect, make_app, new_secret, session_client
 from tests.routing_fakes import FakeProvider
 
@@ -34,6 +35,8 @@ CLI = Actor.cli()
 ENGINE = 'http://engine.test:8989'
 POINTS = [[50.63, 3.05], [50.66, 3.10], [50.64, 3.15]]
 BASE = '/api/route-builder'
+DEFAULT_COVERAGE = REGISTRY['routing.coverage_bbox'].default          # la valeur par défaut du registre (voir le test de conformité à la spec)
+SPEC_DEFAULT_COVERAGE = [1.35, 48.80, 6.45, 51.55]               # gpx-route-builder §5.6 et RB-1.3 (choix de spec, demande d'ops)
 
 
 class World:
@@ -147,7 +150,7 @@ def test_options_describe_the_form_and_follow_the_registry(world):
     assert body['available'] is True and body['state'] == 'ok'
     assert [a['key'] for a in body['activities']] == ['run', 'trail', 'hike', 'road_bike', 'gravel', 'mtb']
     assert body['min_km'] == 1 and body['max_km'] == 300 and body['step_km'] == 0.5 and body['max_waypoints'] == 50 and body['tolerance_pct'] == 15
-    assert body['coverage_bbox'] == [1.35, 48.80, 6.45, 51.55] and body['default_activity'] == 'run'
+    assert body['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55] and body['default_activity'] == 'run'
     world.set(**{'routing.max_distance_km': 120, 'routing.max_waypoints': 7})
     again = call(world.a, 'get', f'{BASE}/options').get_json()
     assert again['max_km'] == 120 and again['max_waypoints'] == 7
@@ -233,8 +236,6 @@ def test_every_invalid_request_is_a_400_without_any_engine_call_and_is_not_count
     assert world.runtime._active_total == 0
 
 
-@pytest.mark.xfail(strict=True, reason="T-TR5-A (défaut) : distance_km = entier JSON de 400 chiffres => OverflowError dans math.isfinite() de "
-                                       "builder._validated_target : 500 au lieu de 400 sur une route publique de la bêta (même classe que le type float du registre, déjà traitée)")
 @pytest.mark.parametrize('value', [10 ** 400, -10 ** 400, 2 ** 1030])
 def test_a_huge_integer_distance_is_a_400_never_a_500(world, value):
     body = {'points': POINTS, 'activity': 'run', 'distance_km': value}
@@ -297,9 +298,6 @@ def test_next_seed_wraps_and_the_same_seed_gives_the_same_trace_through_the_api(
     assert different['route_meta']['seed'] == 8
 
 
-@pytest.mark.xfail(strict=True, reason="T-TR5-C (défaut, RB-4.9, P-TR5-4) : route_meta.ascent_m / descent_m valent TOUJOURS null : _elevation_gain lit "
-                                       "parsed['stats'] / parsed['elevation'], qui n'existent pas dans le payload du visualiseur (métadonnées vides) ; "
-                                       "même quand le moteur a fourni l'altitude de tous les points")
 def test_ascent_and_descent_come_from_the_trace_altitudes(tmp_path):
     class Hilly(FakeProvider):
         def route(self, waypoints, profile, deadline):
@@ -662,7 +660,7 @@ def test_the_admin_diagnostic_reports_the_engine_state_and_the_coverage_containm
     w.conn.close()
 
 
-@pytest.mark.parametrize('value', [[1.35, 48.8, 6.45, 51.55], [0, 0, 1, 1], [1, 48, 2, 49], [0, -10, 5, 0], [-5, 0, 5, 10]])
+@pytest.mark.parametrize('value', [DEFAULT_COVERAGE, [0, 0, 1, 1], [1, 48, 2, 49], [0, -10, 5, 0], [-5, 0, 5, 10]])
 def test_valid_coverage_rectangles_are_accepted_and_stored_as_floats(world, value):
     r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': value})
     assert r.status_code == 200, r.get_data()
@@ -680,12 +678,17 @@ def test_invalid_coverage_rectangles_are_refused_at_write_and_nothing_changes(wo
     assert call(world.a, 'get', f'{BASE}/options').get_json()['coverage_bbox'] == before
 
 
-@pytest.mark.xfail(strict=True, reason="T-TR5-B (défaut) : un entier JSON de 400 chiffres dans routing.coverage_bbox => OverflowError dans math.isfinite() de "
-                                       "Setting._rectangle : 500 sur PATCH /api/admin/settings (le type float du même registre rattrape ce cas)")
 @pytest.mark.parametrize('value', [[0, 0, 10 ** 400, 1], [-10 ** 400, 0, 1, 1], [0, 2 ** 1030, 1, 1]])
 def test_a_huge_integer_in_a_rectangle_is_a_400_never_a_500(world, value):
     r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': value}, raw=json.dumps({'routing.coverage_bbox': value}))
     assert r.status_code == 400
+
+
+@pytest.mark.xfail(strict=True, reason="écart spec / code (décision à prendre) : la spec (§5.6, RB-1.3, recette) fixe le défaut [1.35, 48.80, 6.45, 51.55] "
+                                       "(choix d'ops) ; le registre livre [1.35, 48.83, 6.42, 51.55] (proposition du 2026-11-25 : rectangle contenu dans /info). "
+                                       "Quand l'une des deux est alignée sur l'autre, retirer ce xfail")
+def test_the_default_coverage_is_the_one_written_in_the_spec():
+    assert DEFAULT_COVERAGE == SPEC_DEFAULT_COVERAGE
 
 
 def test_a_forged_coverage_in_the_database_falls_back_to_the_default_not_to_no_limit(world):
@@ -695,7 +698,7 @@ def test_a_forged_coverage_in_the_database_falls_back_to_the_default_not_to_no_l
         world.conn.commit()
         world.app.config['SETTINGS_STORE'].refresh(world.conn, force=True)
         options = call(world.a, 'get', f'{BASE}/options').get_json()
-        assert options['coverage_bbox'] == [1.35, 48.8, 6.45, 51.55], forged
+        assert options['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55], forged
         assert world.route(points=[[52.37, 4.90], [52.38, 4.91]], distance_km=None).status_code == 400
     assert world.provider.calls == []
 
