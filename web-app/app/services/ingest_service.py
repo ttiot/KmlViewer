@@ -21,6 +21,7 @@ from app.services import (
     activity_stats, activity_store, activity_types, dem_service, file_formats, profile_service, segment_service,
 )
 from app.services.gpx_parser import GPXParser
+from app.services.track_series import iter_lines
 from app.services.kml_parser import KMLParser
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,55 @@ def parse_raw(raw: bytes, filename: str) -> Dict[str, Any]:
     if fmt == 'gpx':
         return GPXParser.parse_gpx_coordinates(content)
     return KMLParser.parse_kml_coordinates(content)
+
+
+def overlay_dem_elevation(parsed: Dict[str, Any], ele_dem) -> bool:
+    """
+    Superpose l'altitude MNT (`ele_dem`, alignée sur les points stockés) à un fichier parsé : 3e coordonnée des polylignes et
+    altitude des marqueurs de points de trace. Travaille sur le parse en mémoire : le fichier brut n'est jamais modifié.
+    Même parcours et même filtre que `activity_stats.extract_track`. Retourne False (parse inchangé) si l'alignement échoue.
+    """
+    features = parsed.get('features') or []
+    lines = [coords for _feature, coords, _stamps in iter_lines(features) if isinstance(coords, list)]
+    valid = [[i for i, c in enumerate(coords) if isinstance(c, (list, tuple)) and len(c) >= 2
+              and -90 <= c[0] <= 90 and -180 <= c[1] <= 180] for coords in lines]
+    if sum(len(v) for v in valid) != len(ele_dem):
+        logger.warning("Altitude MNT non superposée : %d valeur(s) pour %d points", len(ele_dem), sum(len(v) for v in valid))
+        return False
+    # Marqueurs de points de trace : le bloc de `trkpt_*` qui précède une ligne a autant de points qu'elle (GPX)
+    markers_of, block = {}, []
+    line_index = 0
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        if feature.get('type') == 'marker' and str(feature.get('name', '')).startswith('trkpt_'):
+            block.append(feature)
+        elif feature.get('type') in ('polyline', 'track') and isinstance(feature.get('coordinates'), list):
+            markers_of[line_index] = block
+            block, line_index = [], line_index + 1
+        elif feature.get('type') == 'multitrack':
+            line_index += sum(1 for _ in iter_lines([feature]))
+            block = []
+        else:
+            block = [] if feature.get('type') != 'marker' else block
+    k = 0
+    for line_number, (coords, indices) in enumerate(zip(lines, valid)):
+        markers = markers_of.get(line_number) or []
+        aligned = len(markers) == len(coords)
+        for i in indices:
+            value = round(float(ele_dem[k]), 1)
+            k += 1
+            coord = coords[i]
+            if len(coord) > 2:
+                coord[2] = value
+            else:
+                coord.append(value)
+            if aligned:
+                marker = markers[i]
+                marker['altitude'] = value
+                if isinstance(marker.get('parsed_info'), dict):
+                    marker['parsed_info']['altitude_m'] = value
+    return True
 
 
 def _plausible_epoch(epoch: Optional[float], now: float) -> Optional[float]:
@@ -256,7 +306,7 @@ def recompute_elevation(db: sqlite3.Connection, cfg: Mapping, user_id: int, acti
     activity_store.update_elevation(
         db, user_id, activity_id,
         points=activity_store.pack_points(pts['lat'], pts['lon'], pts['ele'], pts['t'], ele_dem, breaks),
-        ascent_m=round(ascent, 1), descent_m=round(descent, 1), elev_source='dem')
+        ascent_m=round(ascent, 1), descent_m=round(descent, 1), elev_source='dem')   # invalide aussi l'analyse enregistrée
     return {'ascent_m': round(ascent, 1), 'descent_m': round(descent, 1),
             'ascent_gps_m': row['ascent_gps_m'], 'elev_source': 'dem'}
 

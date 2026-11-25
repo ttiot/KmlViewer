@@ -65,14 +65,22 @@ def compute(db: sqlite3.Connection, cfg: Mapping, user_id: int, activity_id: int
 
     computed_at = activity_store.epoch_to_iso(time.time())
     blob = zlib.compress(json.dumps(analysis, separators=(',', ':')).encode('utf-8'), 6)
-    db.execute(
+    # Garde de course (EA-5) : le résultat n'est enregistré que si l'altitude de l'activité est celle lue au départ (même
+    # source, même statut, mêmes points). Une correction MNT survenue pendant le calcul l'a rendu périmé : il est rendu à
+    # l'appelant sans être stocké, et la demande suivante recalcule. Le test et l'écriture sont une seule instruction.
+    stored = db.execute(
         "INSERT INTO activity_analyses (activity_id, version, computed_at, result) "
-        f"SELECT ?, ?, ?, ? WHERE {_OWNED} "
+        "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM activities a WHERE a.id = ? AND a.user_id = ? "
+        "AND a.elev_source = ? AND a.dem_status IS ? AND a.points = ?) "
         "ON CONFLICT(activity_id) DO UPDATE SET version = excluded.version, "
         "computed_at = excluded.computed_at, result = excluded.result",
-        (activity_id, advanced_analysis.ANALYSIS_VERSION, computed_at, blob, activity_id, user_id))
+        (activity_id, advanced_analysis.ANALYSIS_VERSION, computed_at, blob, activity_id, user_id,
+         row['elev_source'], row['dem_status'], row['points'])).rowcount
     db.commit()
-    logger.info("Analyse avancée enregistrée pour l'activité %s (%d octets)", activity_id, len(blob))
+    if stored:
+        logger.info("Analyse avancée enregistrée pour l'activité %s (%d octets)", activity_id, len(blob))
+    else:
+        logger.info("Analyse avancée de l'activité %s non enregistrée : l'altitude a changé pendant le calcul", activity_id)
     return _payload(analysis, computed_at)
 
 

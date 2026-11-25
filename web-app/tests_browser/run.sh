@@ -23,7 +23,8 @@ case "$OUT" in "$WEB_APP"/*|"$(dirname "$WEB_APP")"/*) echo "Les captures doiven
 mkdir -p "$OUT"
 
 # Les quatre ports doivent être libres (un serveur de développement oublié sur le même port ferait jouer les scénarios sur la mauvaise application)
-for port in "${BENCH_PORT:-5277}" "${BENCH_OIDC_PORT:-5279}" "${BENCH_SETTINGS_PORT:-5281}" "${BENCH_REGISTRY_PORT:-5283}"; do
+for port in "${BENCH_PORT:-5277}" "${BENCH_OIDC_PORT:-5279}" "${BENCH_SETTINGS_PORT:-5281}" "${BENCH_REGISTRY_PORT:-5283}" \
+        "${BENCH_DEM_APP_PORT:-5285}" "${BENCH_DEM_SVC_PORT:-5290}"; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
         echo "Le port $port est déjà utilisé : libère-le ou choisis-en un autre (BENCH_PORT, BENCH_OIDC_PORT, BENCH_SETTINGS_PORT, BENCH_REGISTRY_PORT)" >&2
         exit 2
@@ -50,10 +51,14 @@ BENCH_SECRETS_KEY="${BENCH_SECRETS_KEY:-a21sdmlld2VyLWJlbmNoLWtleS0wMTIzNDU2Nzg5
 OIDC_PORT="${BENCH_OIDC_PORT:-5279}"
 SETTINGS_PORT="${BENCH_SETTINGS_PORT:-5281}"
 REGISTRY_PORT="${BENCH_REGISTRY_PORT:-5283}"
+DEM_APP_PORT="${BENCH_DEM_APP_PORT:-5285}"
+DEM_SVC_PORT="${BENCH_DEM_SVC_PORT:-5290}"
 NAME_OIDC="$NAME-oidc"
 NAME_SET="$NAME-settings"
 NAME_REG="$NAME-registry"
-cleanup() { docker rm -f "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" >/dev/null 2>&1 || true; }
+NAME_DEM="$NAME-dem"
+NAME_DEMSVC="$NAME-demsvc"
+cleanup() { docker rm -f "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" "$NAME_DEM" "$NAME_DEMSVC" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 # Instance 1 : mode local (administrateur implicite), moteur réel, e-mail volontairement NON configuré au départ (bandeau « SMTP absent »)
@@ -86,7 +91,17 @@ docker run -d --name "$NAME_REG" --network host --tmpfs /data --tmpfs /tmp \
     -e "SECRETS_KEY=$BENCH_SECRETS_KEY" -e "OUTBOUND_ALLOWED_HOSTS=tiles=a.tiles.exemple.fr" -e BENCH_PROFILE=registry \
     "$APP_IMAGE" sh -c "python tests_browser/seed.py && exec gunicorn --bind 127.0.0.1:$REGISTRY_PORT --workers 1 --threads 8 --no-control-socket bench_app:app" >/dev/null
 
-URLS="http://127.0.0.1:$PORT http://127.0.0.1:$OIDC_PORT http://127.0.0.1:$SETTINGS_PORT http://127.0.0.1:$REGISTRY_PORT"
+# Service d'altitude FACTICE (porte pilotée par le scénario) et instance 5 : DEM_URL posé, tâche de fond toutes les 30 s, moteur de routage réel
+docker run -d --name "$NAME_DEMSVC" --network host -v "$HERE:/work:ro" -e PYTHONDONTWRITEBYTECODE=1 \
+    "$APP_IMAGE" python /work/fake_dem.py "$DEM_SVC_PORT" >/dev/null
+docker run -d --name "$NAME_DEM" --network host --tmpfs /data --tmpfs /tmp \
+    -v "$WEB_APP:/app:ro" -w /app \
+    -e PYTHONPATH=/app -e PYTHONDONTWRITEBYTECODE=1 -e FLASK_ENV=production -e AUTH_MODE=local -e DATA_DIR=/data -e INBOX_ENABLED=0 \
+    -e "SECRETS_KEY=$BENCH_SECRETS_KEY" -e "OUTBOUND_ALLOWED_HOSTS=routing=$HOST_PORT_ENGINE,dem=127.0.0.1:$DEM_SVC_PORT" \
+    -e "BENCH_ENGINE_URL=$ENGINE" -e "DEM_URL=http://127.0.0.1:$DEM_SVC_PORT/v1/test" -e DEM_BACKFILL_INTERVAL=30 \
+    "$APP_IMAGE" sh -c "python tests_browser/seed.py && exec gunicorn --bind 127.0.0.1:$DEM_APP_PORT --workers 1 --threads 8 --no-control-socket kml_viewer:app" >/dev/null
+
+URLS="http://127.0.0.1:$PORT http://127.0.0.1:$OIDC_PORT http://127.0.0.1:$SETTINGS_PORT http://127.0.0.1:$REGISTRY_PORT http://127.0.0.1:$DEM_APP_PORT"
 for _ in $(seq 1 90); do
     ready=1
     for url in $URLS; do curl -fsS -m 2 "$url/api/health" >/dev/null 2>&1 || ready=0; done
@@ -95,13 +110,13 @@ for _ in $(seq 1 90); do
 done
 for url in $URLS; do
     curl -fsS -m 2 "$url/api/health" >/dev/null 2>&1 || { echo "L'application ne démarre pas ($url) :" >&2
-        for name in "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG"; do docker logs "$name" 2>&1 | tail -10 >&2; done; exit 3; }
+        for name in "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" "$NAME_DEM"; do docker logs "$name" 2>&1 | tail -10 >&2; done; exit 3; }
 done
 sleep 6   # laisse passer le premier sondage de santé du moteur (diagnostic « disponible »)
 
 set +e
 docker run --rm --network host --ipc=host \
-    -v "$HERE:/work:ro" -v "$OUT:/out" -e "BENCH_URL=http://127.0.0.1:$PORT" -e "BENCH_OIDC_URL=http://127.0.0.1:$OIDC_PORT" -e "BENCH_SETTINGS_URL=http://127.0.0.1:$SETTINGS_PORT" -e "BENCH_REGISTRY_URL=http://127.0.0.1:$REGISTRY_PORT" -e BENCH_OUT=/out -e "BENCH_ONLY=${BENCH_ONLY:-}" -e PYTHONDONTWRITEBYTECODE=1 -e "BENCH_UID=$(id -u)" -e "BENCH_GID=$(id -g)" \
+    -v "$HERE:/work:ro" -v "$OUT:/out" -e "BENCH_URL=http://127.0.0.1:$PORT" -e "BENCH_OIDC_URL=http://127.0.0.1:$OIDC_PORT" -e "BENCH_SETTINGS_URL=http://127.0.0.1:$SETTINGS_PORT" -e "BENCH_REGISTRY_URL=http://127.0.0.1:$REGISTRY_PORT" -e "BENCH_DEM_URL=http://127.0.0.1:$DEM_APP_PORT" -e "BENCH_DEM_SVC=http://127.0.0.1:$DEM_SVC_PORT" -e BENCH_OUT=/out -e "BENCH_ONLY=${BENCH_ONLY:-}" -e PYTHONDONTWRITEBYTECODE=1 -e "BENCH_UID=$(id -u)" -e "BENCH_GID=$(id -g)" \
     "$PLAYWRIGHT_IMAGE" python /work/scenarios.py
 STATUS=$?
 set -e
@@ -109,5 +124,6 @@ docker logs "$NAME" > "$OUT/application.log" 2>&1 || true
 docker logs "$NAME_OIDC" > "$OUT/application-oidc.log" 2>&1 || true
 docker logs "$NAME_SET" > "$OUT/application-settings.log" 2>&1 || true
 docker logs "$NAME_REG" > "$OUT/application-registry.log" 2>&1 || true
+docker logs "$NAME_DEM" > "$OUT/application-dem.log" 2>&1 || true
 echo "Captures et résultats : $OUT"
 exit $STATUS

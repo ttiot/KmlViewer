@@ -11,6 +11,7 @@ import sys
 import time
 import traceback
 import urllib.parse
+import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -19,13 +20,15 @@ OIDC = os.environ.get('BENCH_OIDC_URL', '').rstrip('/')
 SETTINGS = os.environ.get('BENCH_SETTINGS_URL', '').rstrip('/')      # instance 3 : registre v1, état exact du CA-72
 # instance 4 : registre de test (list, requires_restart, secret)
 REGISTRY = os.environ.get('BENCH_REGISTRY_URL', '').rstrip('/')
+DEM_APP = os.environ.get('BENCH_DEM_URL', '').rstrip('/')           # instance 5 : DEM_URL posé (service d'altitude factice)
+DEM_SVC = os.environ.get('BENCH_DEM_SVC', '').rstrip('/')           # service d'altitude factice : /gate/open, /gate/close
 OUT = os.environ.get('BENCH_OUT', '/out')
 results = []
 
 # Aucune sortie réseau (EF-6.17) : toute requête du navigateur vers un autre hôte que les applications de test est
 # INTERCEPTÉE (page.route), ENREGISTRÉE puis BLOQUÉE ; les tuiles des hôtes de tuiles reçoivent une image locale de 1 pixel.
 # La liste sert de preuve (CA-76).
-APP_HOSTS = {urllib.parse.urlsplit(u).netloc for u in (BASE, OIDC, SETTINGS, REGISTRY) if u}
+APP_HOSTS = {urllib.parse.urlsplit(u).netloc for u in (BASE, OIDC, SETTINGS, REGISTRY, DEM_APP) if u}
 TILE_HOST_SUFFIXES = ('tile.openstreetmap.org', 'tile.opentopomap.org', 'basemaps.cartocdn.com', 'server.arcgisonline.com',
                       'tiles.exemple.fr')
 PIXEL = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=')
@@ -968,6 +971,128 @@ def action_bar_desktop(page):
     check_action_bar(page, 'bureau', {'width': 1440, 'height': 900})
 
 
+def dem_gate(action):
+    return json.load(urllib.request.urlopen(f'{DEM_SVC}/gate/{action}', timeout=10))
+
+
+def activity_meta(page, activity_id):
+    return api(page, 'GET', f'/api/activities/{activity_id}')['body']['activity']
+
+
+def open_from_library(page, activity_id):
+    page.goto(f'{DEM_APP}/?activity={activity_id}')
+    page.wait_for_function("() => document.getElementById('totalDistance').textContent.trim() !== '—'", timeout=30000)
+    page.wait_for_timeout(2500)                                           # analyse de base et profil
+
+
+def figures(page):
+    return page.evaluate("""() => {
+      const t = (id) => (document.getElementById(id) || {}).textContent || '';
+      const strip = document.getElementById('profileStrip');
+      return { ascent: t('totalAscent').trim(), meta: t('stripMeta').trim(), cursor: t('cursorAltitude').trim(),
+               profileHidden: document.getElementById('profileSection').hidden,
+               profilePaths: strip ? strip.querySelectorAll('path').length : 0 };
+    }""")
+
+
+@scenario("(i) Altitude MNT : D+, D−, profil, altitude sous le curseur après correction puis réouverture (retour du 25/11)")
+def dem_correction_reaches_the_viewer(page):
+    problems = []
+
+    def soft(label, check):
+        try:
+            check()
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f'{label} : {type(exc).__name__}: {str(exc)[:220]}')
+
+    dem_gate('close')                                    # la correction de fond échoue et réessaie tant que la porte est fermée
+    page.goto(DEM_APP + '/')
+    page.wait_for_selector('#map.leaflet-container')
+    page.click('#routeBuilderOpen')
+    page.wait_for_timeout(2000)
+    box = page.locator('#map').bounding_box()
+    cx, cy = box['x'] + box['width'] / 2, box['y'] + min(box['height'], 500) / 2
+    for dx, dy in ((0, 0), (70, 10), (35, -60)):
+        page.mouse.click(cx + dx, cy + dy)
+    page.wait_for_function("() => /^3 point/.test(document.getElementById('rbCount').textContent)", timeout=10000)
+    page.fill('#rbDistance', '20')
+    page.click('#rbFinish')
+    page.wait_for_selector('#rbResult', state='visible', timeout=90000)
+    page.click('#rbSave')
+    page.wait_for_selector('#rbSaved a', timeout=30000)
+    activity_id = int(re.search(r'activity=(\d+)', page.locator('#rbSaved a').first.get_attribute('href')).group(1))
+    assert activity_meta(page, activity_id)['elev_source'] == 'gps', 'la correction ne devrait pas être faite porte fermée'
+    # avant la correction : l'utilisateur lance l'analyse avancée, qui s'enregistre (sans altitude)
+    open_from_library(page, activity_id)
+
+    def waiting_message():
+        text = norm(page.locator('#fileMeta').inner_text())
+        assert 'altitude en cours de calcul' in text, f"message d'attente absent avant la correction : « {text} »"
+    soft('indication « altitude en cours de calcul » avant la correction', waiting_message)
+    page.click('[data-tool="advanced"]')
+    page.click('#runAdvancedBtn')
+    page.wait_for_function("() => /enregistrée/.test(document.getElementById('advancedStatus').textContent)", timeout=60000)
+    page.screenshot(path=f'{OUT}/28-altitude-avant-correction.png', full_page=True)
+    # la porte s'ouvre : la tâche de fond corrige (30 s au plus par cycle)
+    dem_gate('open')
+    deadline = time.time() + 150
+    while time.time() < deadline and activity_meta(page, activity_id)['dem_status'] != 'ok':
+        time.sleep(3)
+    meta = activity_meta(page, activity_id)
+    assert meta['dem_status'] == 'ok' and meta['elev_source'] == 'dem' and meta['ascent_m'] > 0, meta
+    # réouverture : le panneau montre D+, D−, profil et altitude sous le curseur
+    open_from_library(page, activity_id)
+    shown = figures(page)
+    gone = norm(page.locator('#fileMeta').inner_text())
+    soft("plus d'indication d'attente après la correction", lambda: 'en cours de calcul' not in gone or problems.append(
+        f"l'indication d'attente reste affichée après la correction : « {gone} »"))
+    page.screenshot(path=f'{OUT}/29-altitude-apres-correction-reouverture.png', full_page=True)
+
+    def panel_ascent():
+        assert re.search(r'\d', shown['ascent']), f"Dénivelé + : « {shown['ascent']} »"
+
+    def strip_meta():
+        text = shown['meta']
+        assert re.search(r'Dénivelé − \d', text) and re.search(r'altitude de \d', text), f"stripMeta : « {text} »"
+
+    soft('Dénivelé + du panneau', panel_ascent)
+    soft("Dénivelé − et plage d'altitude sous le profil", strip_meta)
+
+    def profile():
+        assert not shown['profileHidden'] and shown['profilePaths'] > 0, shown
+    soft('profil sous la carte', profile)
+
+    def cursor():
+        strip = page.locator('#profileStrip').bounding_box()
+        assert strip, 'pas de zone de profil'
+        page.mouse.move(strip['x'] + strip['width'] / 2, strip['y'] + strip['height'] / 2)
+        page.wait_for_timeout(500)
+        text = page.evaluate("() => document.getElementById('cursorAltitude').textContent.trim()")
+        assert re.search(r'\d', text), f"altitude sous le curseur : « {text} »"
+    soft('altitude sous le curseur', cursor)
+    # analyse avancée enregistrée AVANT la correction : à jour (ou absente puis relancée), jamais l'instantané sans altitude
+    saved = api(page, 'GET', f'/api/activities/{activity_id}/analysis')['body']
+
+    def saved_is_fresh():
+        if saved['analysis'] is not None:
+            summary = saved['analysis']['summary']
+            assert summary['has_elevation'] is True and summary['ascent_m'] > 0, summary
+    soft('analyse enregistrée à jour', saved_is_fresh)
+    page.click('[data-tool="advanced"]')
+    page.wait_for_timeout(1500)
+    if page.locator('#advancedSummary').inner_text().strip() == '' or 'Lancer' in page.locator('#runAdvancedLabel').inner_text():
+        page.click('#runAdvancedBtn')
+        page.wait_for_function("() => /enregistrée/.test(document.getElementById('advancedStatus').textContent)", timeout=60000)
+    summary_text = norm(page.locator('#advancedSummary').inner_text())
+
+    def advanced_has_ascent():
+        assert re.search(r'\+\d', summary_text), f"résumé : « {summary_text[:160]} »"
+
+    soft('analyse avancée affichée : D+ présent', advanced_has_ascent)
+    page.screenshot(path=f'{OUT}/30-altitude-analyse-avancee.png', full_page=True)
+    assert not problems, ' | '.join(problems)
+
+
 @scenario("(f) /admin Réglages : confirmation DANS LA PAGE avant d'effacer un secret lié (jamais confirm())")
 def confirm_secret_erase(page):
     dialogs = []
@@ -1025,6 +1150,8 @@ def main():
         errors = []
         runs = [builder, admin_diagnostic, admin_audit, oidc_login, smtp_banner, confirm_secret_erase,
                 external_request_is_blocked, action_bar_mobile, action_bar_desktop]
+        if DEM_APP and DEM_SVC:
+            runs += [dem_correction_reaches_the_viewer]
         if SETTINGS and REGISTRY:
             runs += [settings_tabs, settings_search, settings_origin, settings_basemaps, settings_rectangle, settings_save,
                      settings_registry, settings_hidden_error]

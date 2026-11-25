@@ -208,6 +208,10 @@ def update_elevation(db: sqlite3.Connection, user_id: int, activity_id: int, *, 
     db.execute("UPDATE activities SET points = ?, ascent_m = ?, descent_m = ?, elev_source = ?, "
                "dem_status = 'ok' WHERE id = ? AND user_id = ?",
                (points, ascent_m, descent_m, elev_source, activity_id, user_id))
+    # L'analyse enregistrée repose sur l'ancienne altitude : elle est supprimée dans la même transaction (« pas encore
+    # lancée »), la prochaine demande la recalcule avec l'altitude MNT
+    db.execute("DELETE FROM activity_analyses WHERE activity_id = ? AND EXISTS "
+               "(SELECT 1 FROM activities WHERE id = ? AND user_id = ?)", (activity_id, activity_id, user_id))
     db.commit()
 
 

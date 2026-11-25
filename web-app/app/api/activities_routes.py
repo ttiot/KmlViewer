@@ -137,7 +137,14 @@ def get_activity_parsed(activity_id):
             # Le fichier a été accepté à l'import : s'il ne se relit plus, ce n'est pas la faute du client
             logger.error("Fichier d'origine de l'activité %s refusé par le parser : %s", activity_id, parsed.get('error'))
             raise _source_unavailable()
-        return jsonify({**parsed, 'filename': row['name'], 'activity_id': row['id']})
+        if row['elev_source'] == 'dem':
+            # Altitude corrigée (MNT) : superposée au parse en mémoire, le fichier brut reste intact
+            ele_dem = activity_store.unpack_points(row['points']).get('ele_dem')
+            if ele_dem:
+                ingest_service.overlay_dem_elevation(parsed, ele_dem)
+        # Correction pas encore faite (rattrapage en tâche de fond) : la page peut l'annoncer
+        dem_pending = row['elev_source'] != 'dem' and row['dem_status'] is None and dem_service.is_enabled(current_app.config)
+        return jsonify({**parsed, 'filename': row['name'], 'activity_id': row['id'], 'dem_pending': dem_pending})
 
 
 @bp.route('/activities/<int:activity_id>', methods=['PATCH'])

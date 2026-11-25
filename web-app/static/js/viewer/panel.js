@@ -212,6 +212,7 @@ function updatePanel() {
             + (activity.start_time_known === false ? ' (date d\'import)' : ''));
     }
     parts.push(`${App.number(count)} point${count > 1 ? 's' : ''}`);
+    if (file.data.dem_pending) parts.push('altitude en cours de calcul, rouvre la trace dans un instant');   // correction MNT pas encore faite
     document.getElementById('fileMeta').textContent = parts.join(' · ');
 
     const type = document.getElementById('typeSelect');
