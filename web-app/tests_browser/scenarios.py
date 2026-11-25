@@ -157,8 +157,6 @@ def smtp_banner(page):
 # -- Page Réglages (admin-space §5.6b, CA-72 à CA-78) ---------------------------------------------------------------------------
 # Les sélecteurs sont regroupés ici : si le DOM de la page change, c'est le seul endroit à adapter.
 SECTIONS_ORDER = ['Sécurité', 'E-mail', 'Carte', 'Traces planifiées', 'Altitude', 'Dossier surveillé', 'Stockage', 'Général']
-COUNTS = {'Sécurité': 11, 'E-mail': 6, 'Carte': 5, 'Traces planifiées': 16, 'Altitude': 7, 'Dossier surveillé': 3, 'Stockage': 1,
-          'Général': 1}
 STALE_MESSAGE = "Un autre admin a modifié ces réglages : recharge la page avant d'enregistrer."
 TILE = 'https://a.tiles.exemple.fr/{z}/{x}/{y}.png'
 
@@ -182,6 +180,56 @@ def tab(section):
 
 def tab_text(page, section):
     return norm(page.locator(tab(section)).inner_text())
+
+
+def tab_names(page, section):
+    """Noms accessibles des pastilles de l'onglet (« 1 réglage modifié », « saisies non enregistrées », « alerte »…)."""
+    return [n for n in page.locator(tab(section)).evaluate(
+        "e => [...e.querySelectorAll('[aria-label]')].map((x) => x.getAttribute('aria-label'))")]
+
+
+def has_unsaved(page, section):
+    return 'saisies non enregistrées' in tab_names(page, section)
+
+
+def badges(page, key):
+    """Pastilles de la ligne d'un réglage (origine, redémarrage…), à côté du libellé."""
+    return [norm(b.inner_text()) for b in page.locator(f'{row(key)} .setting-title .badge-soft').all()]
+
+
+def hint_of(page, key):
+    return norm(page.locator(f'{row(key)} .setting-hint').inner_text())
+
+
+# Contraste calculé à partir des couleurs CALCULÉES (EF-6.18) : texte (opacité des ancêtres comprise) sur le fond effectif
+CONTRAST = """(element) => {
+    const toRGBA = (css) => {
+        const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = css; ctx.fillRect(0, 0, 1, 1);
+        const d = ctx.getImageData(0, 0, 1, 1).data;
+        return [d[0], d[1], d[2], d[3] / 255];
+    };
+    const over = (top, under) => top.slice(0, 3).map((c, i) => c * top[3] + under[i] * (1 - top[3]));
+    let opacity = 1, backdrop = [255, 255, 255], layers = [];
+    for (let node = element; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        opacity *= parseFloat(style.opacity);
+        const bg = toRGBA(style.backgroundColor);
+        if (bg[3] > 0) { layers.push(bg); if (bg[3] >= 1) break; }
+    }
+    layers.reverse().forEach((layer) => { backdrop = over(layer, backdrop); });
+    const fg = toRGBA(getComputedStyle(element).color);
+    const text = over([fg[0], fg[1], fg[2], fg[3] * opacity], backdrop);
+    const lin = (v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const lum = (rgb) => { const [r, g, b] = rgb.map(lin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const a = lum(text), b = lum(backdrop);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}"""
+
+
+def contrast(locator):
+    return locator.evaluate(CONTRAST)
 
 
 def api(page, method, path, body=None):
@@ -224,9 +272,11 @@ def recorder(page):
 def hits(page):
     found = {}
     for section in SECTIONS_ORDER:
-        match = re.search(r'(\d+) / (\d+)', tab_text(page, section))
-        assert match, f"{section} : compteur « k / n » absent : {tab_text(page, section)}"
-        found[section] = int(match.group(1))
+        pill = page.locator(f'{tab(section)} .tab-count')                  # une seule pastille de nombre : les réglages trouvés
+        found[section] = int(pill.inner_text()) if pill.count() else 0
+        if found[section]:
+            name = pill.get_attribute('aria-label')
+            assert re.fullmatch(rf'{found[section]} réglages? trouvés?', name), name
     return found
 
 
@@ -248,11 +298,13 @@ def settings_tabs(page):
     assert found_tabs == SECTIONS_ORDER, found_tabs
     for section in SECTIONS_ORDER:
         modified = section in ('Carte', 'Altitude')                      # map.zoom en base, DEM_TIMEOUT dans l'env
-        pattern = re.escape(section) + f' {COUNTS[section]}' + (r'(?: ·)? 1 modifié' if modified else '')
-        if section == 'Carte':
-            # tiles=a.tiles.exemple.fr : les fonds par défaut sont hors liste (alerte voulue)
-            pattern += ' !'
+        # EF-6.18 : le nombre seul, jamais de total ; Carte : alerte voulue (tiles=a.tiles.exemple.fr : fonds hors liste)
+        pattern = re.escape(section) + (' 1' if modified else '') + (' !' if section == 'Carte' else '')
         assert re.fullmatch(pattern, tab_text(page, section)), tab_text(page, section)
+        pills = page.locator(f'{tab(section)} .tab-count')
+        assert pills.count() == (1 if modified else 0), f'{section} : {pills.count()} pastille(s) de nombre'
+        if modified:
+            assert pills.first.get_attribute('aria-label') == '1 réglage modifié', pills.first.get_attribute('aria-label')
     assert page.locator('#settingsTabs[role=tablist]').count() == 1, 'rôle tablist'
     assert page.locator('[role=tabpanel]').count() == 1, 'rôle tabpanel'
     assert page.locator('#settingsTabs [role=tab][aria-selected=true]').count() == 1, 'un seul onglet sélectionné'
@@ -292,7 +344,7 @@ def settings_tabs(page):
     page.screenshot(path=f'{OUT}/10-reglages-variable-invalide.png', full_page=True)
 
 
-@scenario("(c2) Réglages : recherche, compteurs k / n, filtre « modifiées », saisie gardée sous un filtre (CA-73)")
+@scenario("(c2) Réglages : recherche, pastilles de résultats, filtre « modifiées », saisie gardée sous un filtre (CA-73)")
 def settings_search(page):
     reset_state(page, SETTINGS)
     open_settings(page, SETTINGS)
@@ -301,8 +353,11 @@ def settings_search(page):
     found = hits(page)
     assert {s for s, k in found.items() if k > 0} == {'Traces planifiées', 'Altitude', 'E-mail'}, found
     for section in SECTIONS_ORDER:
-        opacity = float(page.locator(tab(section)).evaluate('e => getComputedStyle(e).opacity'))
-        assert (opacity < 1) == (found[section] == 0), (section, opacity)    # les onglets sans résultat sont grisés
+        ratio = contrast(page.locator(tab(section)))
+        state = 'grisé' if found[section] == 0 else 'avec résultats'
+        assert ratio >= 4.5, f'{section} : contraste {ratio:.2f}:1 (onglet {state})'
+    dimmed = [x for x in SECTIONS_ORDER if found[x] == 0]
+    assert all(page.locator(tab(x)).evaluate("e => e.classList.contains('is-dim')") for x in dimmed), dimmed    # grisés
     assert selected_tab(page) == 'Sécurité'                              # l'onglet ouvert ne change jamais tout seul
     panel = norm(page.locator('#settingsPanel').inner_text())
     assert 'Aucun réglage ne correspond' in panel
@@ -337,7 +392,7 @@ def settings_search(page):
     page.fill(field('map.zoom'), '12')
     page.fill('#settingsSearch', 'delai')                                # masque map.zoom
     assert page.locator(row('map.zoom')).count() == 0
-    assert 'non enregistré' in tab_text(page, 'Carte')
+    assert has_unsaved(page, 'Carte'), tab_names(page, 'Carte')
     assert page.locator('#settingsSave').is_enabled()                    # l'onglet ouvert peut encore être enregistré
     page.click('#settingsSave')
     expect(page.locator('#settingsConfirm')).to_be_visible()
@@ -364,29 +419,39 @@ def settings_origin(page):
     open_settings(page, SETTINGS, 'altitude')
     writes = recorder(page)
 
-    def origin(key):
-        return norm(page.locator(f'{row(key)} .setting-head').inner_text())
+    def no_variable_name(key):
+        named = [b for b in badges(page, key) if re.search(r'[A-Z]{2,}_[A-Z_]+', b)]
+        assert not named, named                                                                         # jamais dans une pastille
 
-    assert 'Environnement · DEM_TIMEOUT' in origin('DEM_TIMEOUT'), origin('DEM_TIMEOUT')
-    assert 'Défaut' in origin('DEM_BATCH_SIZE'), origin('DEM_BATCH_SIZE')
+    assert badges(page, 'DEM_TIMEOUT') == ['Environnement'], badges(page, 'DEM_TIMEOUT')
+    no_variable_name('DEM_TIMEOUT')
+    assert badges(page, 'DEM_BATCH_SIZE') == [], badges(page, 'DEM_BATCH_SIZE')                          # aucune « Défaut »
     assert not page.locator(f"{row('DEM_TIMEOUT')} button", has_text='Rétablir').count(), 'bouton Rétablir sur une origine env'
     assert not page.locator(f"{row('DEM_BATCH_SIZE')} button", has_text='Rétablir').count(), 'Rétablir sur origine défaut'
-    hint = norm(page.locator(f"{row('DEM_TIMEOUT')} .setting-hint").inner_text())
+    hint = hint_of(page, 'DEM_TIMEOUT')
     assert hint == '1 à 120 s · variable DEM_TIMEOUT', hint
     page.click(tab('Carte'))
-    assert 'Base' in origin('map.zoom'), origin('map.zoom')
+    assert badges(page, 'map.zoom') == ['Base'], badges(page, 'map.zoom')
     reset = page.locator(f"{row('map.zoom')} button", has_text='Rétablir')
     assert reset.count() == 1 and norm(reset.inner_text()) == 'Rétablir la valeur par défaut → 6', norm(reset.inner_text())
-    helps = page.locator('details.setting-help')
-    assert helps.count() >= 1, 'aucune aide `details.setting-help` sur la page'
-    assert all(not h.evaluate('e => e.open') for h in helps.all()), "l'aide n'est pas repliée au chargement"
+    toggles = page.locator('.setting-help-toggle')
+    assert toggles.count() >= 1, 'aucun bouton « ? » (`.setting-help-toggle`) sur la page'
+    assert all(t.get_attribute('aria-expanded') == 'false' for t in toggles.all()), "description non repliée au chargement"
+    assert all(not d.is_visible() for d in page.locator('.setting-desc').all()), 'description visible au chargement'
+    first = toggles.first
+    first.click()                                                        # « ? » : déplie la description du même réglage
+    assert first.get_attribute('aria-expanded') == 'true'
+    assert first.locator('xpath=ancestor::*[contains(@class,"setting-row")][1]').locator('.setting-desc').is_visible()
+    first.click()
+    assert first.get_attribute('aria-expanded') == 'false'
     # base qui surcharge une variable d'env : « remplace DEM_TIMEOUT » et « Rétablir la valeur d'environnement → 30 s »
     assert api(page, 'PATCH', '/api/admin/settings', {'settings': {'DEM_TIMEOUT': 45}})['status'] == 200
     open_settings(page, SETTINGS, 'altitude')
     # la préparation par l'API n'est pas une écriture de la page
     writes.clear()
-    head = origin('DEM_TIMEOUT')
-    assert 'Base' in head and 'remplace DEM_TIMEOUT' in head, head
+    assert badges(page, 'DEM_TIMEOUT') == ['Base'], badges(page, 'DEM_TIMEOUT')
+    overridden = hint_of(page, 'DEM_TIMEOUT')
+    assert overridden == '1 à 120 s · variable DEM_TIMEOUT, remplacée par la valeur en base', overridden
     reset = page.locator(f"{row('DEM_TIMEOUT')} button", has_text='Rétablir')
     assert norm(reset.inner_text()) == "Rétablir la valeur d'environnement → 30 s", norm(reset.inner_text())
     page.screenshot(path=f'{OUT}/13-reglages-origines.png', full_page=True)
@@ -401,9 +466,9 @@ def settings_origin(page):
     page.locator(f"{row('DEM_TIMEOUT')} button", has_text='Confirmer').click()
     page.wait_for_timeout(1500)
     assert [w['method'] for w in writes] == ['DELETE'] and writes[0]['url'].endswith('/api/admin/settings/DEM_TIMEOUT'), writes
-    assert 'Environnement · DEM_TIMEOUT' in origin('DEM_TIMEOUT'), origin('DEM_TIMEOUT')        # la pastille d'origine a changé
+    assert badges(page, 'DEM_TIMEOUT') == ['Environnement'], badges(page, 'DEM_TIMEOUT')                # l'origine a changé
     assert page.input_value(field('DEM_BATCH_SIZE')) == '200', 'saisie perdue après le rétablissement'
-    assert 'non enregistré' in tab_text(page, 'Altitude') and dialogs == [], (tab_text(page, 'Altitude'), dialogs)
+    assert has_unsaved(page, 'Altitude') and dialogs == [], (tab_names(page, 'Altitude'), dialogs)
     stored = page.evaluate("() => JSON.stringify([{...localStorage}, {...sessionStorage}])")
     assert '200' not in stored, stored
 
@@ -627,8 +692,8 @@ def settings_save(page):
     page.fill(field('map.center_lat'), '45')
     page.click(tab('Altitude'))
     page.fill(field('DEM_BATCH_SIZE'), '200')
-    assert 'non enregistré' in tab_text(page, 'Carte') and 'non enregistré' in tab_text(page, 'Altitude')
-    assert 'non enregistré' not in tab_text(page, 'Sécurité')
+    assert has_unsaved(page, 'Carte') and has_unsaved(page, 'Altitude')
+    assert not has_unsaved(page, 'Sécurité')
     page.click(tab('Carte'))
     page.click('#settingsSave')
     expect(page.locator('#settingsConfirm')).to_be_visible()
@@ -647,7 +712,7 @@ def settings_save(page):
     assert payload['settings'].keys() == {'map.zoom', 'map.center_lat'} and isinstance(payload['version'], int), payload
     entries = api(page, 'GET', '/api/admin/audit?action=setting.update&limit=200')['body']['entries']
     assert len(entries) == audits_before + 2, (audits_before, len(entries))                    # un audit par clé modifiée
-    assert 'non enregistré' not in tab_text(page, 'Carte') and 'non enregistré' in tab_text(page, 'Altitude')
+    assert not has_unsaved(page, 'Carte') and has_unsaved(page, 'Altitude')
     page.click(tab('Altitude'))
     assert page.input_value(field('DEM_BATCH_SIZE')) == '200'            # Altitude garde sa saisie et sa pastille
     page.click('#adminTabs a[data-tab="journal"]')                       # changer d'onglet d'administration, puis revenir
@@ -715,6 +780,458 @@ def settings_save(page):
     page.reload()
     page.wait_for_selector('#settingsTabs [role=tab]')
     assert page.input_value(field('map.zoom')) == '10'                   # après rechargement : valeur du serveur, plus de saisie
+
+
+def box_of(locator):
+    return locator.evaluate("""e => { const r = e.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }; }""")
+
+
+def style_of(locator, *props):
+    return locator.evaluate("(e, props) => Object.fromEntries(props.map((p) => [p, getComputedStyle(e)[p]]))", list(props))
+
+
+def reading_problems(page, theme):
+    """Mesures EF-6.18 sur la page Réglages (fenêtre 1280 × 800) dans un thème : liste des écarts à la spec."""
+    page.emulate_media(color_scheme=theme)
+    reset_state(page, SETTINGS)
+    page.set_viewport_size({'width': 1280, 'height': 800})
+    open_settings(page, SETTINGS, 'altitude')
+    bad = []
+
+    def check(label, ok, got):
+        if not ok:
+            bad.append(f'[{theme}] {label} : {got}')
+
+    tops = {round(box_of(page.locator(tab(x)))['top']) for x in SECTIONS_ORDER}
+    check('8 onglets sur une ligne', len(tops) == 1, sorted(tops))
+    pills = {x: page.locator(f'{tab(x)} .tab-count').count() for x in SECTIONS_ORDER}
+    with_pill = {x for x, n in pills.items() if n}
+    check('pastille de nombre seulement sur Carte et Altitude', with_pill == {'Carte', 'Altitude'}, pills)
+    timeout = page.locator(row('DEM_TIMEOUT'))
+    hint, label = timeout.locator('.setting-hint'), timeout.locator('.setting-label')
+    size = float(style_of(hint, 'fontSize')['fontSize'][:-2])
+    check('aide : taille ≥ 13 px', size >= 13, size)
+    check('aide : contraste ≥ 7:1', contrast(hint) >= 7, round(contrast(hint), 2))
+    look = style_of(label, 'fontWeight', 'fontSize')
+    check('libellé : graisse ≥ 600', int(look['fontWeight']) >= 600, look['fontWeight'])
+    check('libellé plus grand que l aide', float(look['fontSize'][:-2]) > size, (look['fontSize'], size))
+    check('libellé : contraste ≥ 7:1', contrast(label) >= 7, round(contrast(label), 2))
+    page.locator('.setting-help-toggle').first.click()
+    desc = page.locator('.setting-row:has(.setting-help-toggle[aria-expanded=true]) .setting-desc').first
+    desc_size = float(style_of(desc, 'fontSize')['fontSize'][:-2])
+    check('description dépliée : taille ≥ 13 px', desc_size >= 13, desc_size)
+    check('description dépliée : contraste ≥ 7:1', contrast(desc) >= 7, round(contrast(desc), 2))
+    page.locator('.setting-help-toggle[aria-expanded=true]').first.click()
+    for selector, label_, floor in (('.tab-count', 'pastille de nombre', 4.5), ('.settings-tab', 'onglet', 4.5),
+                                    ('.badge-soft', 'pastille', 4.5)):
+        for item in page.locator(selector).all():
+            ratio = contrast(item)
+            check(f'{label_} : contraste ≥ {floor}:1', ratio >= floor, f'{round(ratio, 2)} ({norm(item.inner_text())})')
+    check('aucune pastille « Défaut »', not [t for t in page.locator('.badge-soft').all_inner_texts() if norm(t) == 'Défaut'], '')
+    digits = style_of(page.locator(f'{field("DEM_TIMEOUT")}'), 'fontVariantNumeric')['fontVariantNumeric']
+    check('chiffres en chasse fixe', 'tabular-nums' in digits, digits)
+    # largeur de la boîte de l'éditeur, unité comprise
+    for key, section, limit in (('DEM_TIMEOUT', 'altitude', 192), ('smtp.security', 'e-mail', 320), ('smtp.host', 'e-mail', 448),
+                                ('DEM_URL', 'altitude', 640)):
+        open_settings(page, SETTINGS, section)
+        width = box_of(page.locator(f'{row(key)} .setting-control'))['width']
+        check(f'{key} ≤ {limit} px', width <= limit + 0.5, round(width, 1))
+    # en-tête et éditeur côte à côte
+    open_settings(page, SETTINGS, 'altitude')
+    head, editor = box_of(timeout.locator('.setting-head')), box_of(timeout.locator('.setting-editor'))
+    line = box_of(timeout)
+    check('en-tête et éditeur alignés en haut', abs(head['top'] - editor['top']) <= 4, (round(head['top']), round(editor['top'])))
+    check('écart ≥ 24 px entre les colonnes', editor['left'] - head['right'] >= 24, round(editor['left'] - head['right']))
+    share = head['width'] / line['width']
+    check('en-tête = 35 à 45 % de la ligne', 0.35 <= share <= 0.45, round(share, 3))
+    check('ligne ≤ 80 px de haut', line['height'] <= 80, round(line['height'], 1))
+    title, name = box_of(timeout.locator('.setting-title')), box_of(label)
+    for kind, target in (('« ? »', timeout.locator('.setting-help-toggle')), ('pastille', timeout.locator('.badge-soft'))):
+        if target.count():
+            spot = box_of(target.first)
+            middle = (spot['top'] + spot['bottom']) / 2
+            on_line = name['top'] - 2 <= middle <= name['bottom'] + 2 and spot['top'] >= title['top'] - 2
+            check(f'{kind} sur la ligne du libellé', on_line,
+                  (round(middle), round(name['top']), round(name['bottom'])))
+    # espacement : 12 px entre deux réglages, séparateur, libellé à moins de 4 px de l'aide
+    rows = page.locator('.setting-row').all()
+    first, second = box_of(rows[0]), box_of(rows[1])
+    space = (second['top'] - first['bottom'] + float(style_of(rows[0], 'paddingBottom')['paddingBottom'][:-2])
+             + float(style_of(rows[1], 'paddingTop')['paddingTop'][:-2]))        # espace entre le contenu des deux réglages
+    check('≥ 12 px entre deux réglages', space >= 12, round(space, 1))
+    edges = style_of(rows[1], 'borderTopWidth', 'borderBottomWidth')
+    previous = style_of(rows[0], 'borderBottomWidth')
+    separated = float(edges['borderTopWidth'][:-2]) > 0 or float(previous['borderBottomWidth'][:-2]) > 0
+    check('séparateur entre deux réglages', separated, edges)
+    gap = box_of(timeout.locator('.setting-hint'))['top'] - name['bottom']
+    check('libellé à ≤ 4 px de l aide', gap <= 4, round(gap, 1))
+    # barre d'outils : recherche et interrupteur sur une ligne ; version dans le pied
+    search = box_of(page.locator('#settingsSearch'))
+    toggle = box_of(page.locator('#settingsOnlyModified'))
+    centres = abs((search['top'] + search['bottom']) / 2 - (toggle['top'] + toggle['bottom']) / 2)
+    check('recherche et interrupteur sur une ligne', centres <= 40,
+          (round(search['top']), round(toggle['top'])))
+    in_toolbar = page.locator('.settings-toolbar #settingsVersion').count()
+    check('version absente de la barre d outils', in_toolbar == 0, 'dans la barre')
+    check('version dans le pied', page.locator('.settings-footer #settingsVersion').count() == 1 and
+          'Version des réglages' in page.locator('#settingsVersion').inner_text(), page.locator('#settingsVersion').inner_text())
+    # rectangle : chaque champ ≤ 160 px, les 4 sur une ligne
+    open_settings(page, SETTINGS, 'traces-planifiees')
+    fields = [box_of(page.locator(f'#rect-{i}')) for i in range(4)]
+    check('champs du rectangle ≤ 160 px', all(f['width'] <= 160.5 for f in fields), [round(f['width']) for f in fields])
+    check('les 4 champs sur une ligne', len({round(f['top']) for f in fields}) == 1, [round(f['top']) for f in fields])
+    # grisés par une recherche sans résultat : contraste ≥ 4,5:1
+    page.fill('#settingsSearch', 'DEM_URL')
+    for x in SECTIONS_ORDER:
+        if x != 'Altitude':
+            ratio = contrast(page.locator(tab(x)))
+            check(f'onglet grisé {x} : contraste ≥ 4,5:1', ratio >= 4.5, round(ratio, 2))
+    page.screenshot(path=f'{OUT}/39-reglages-lisibilite-{theme}.png', full_page=True)
+    return bad
+
+
+def phone_problems(page):
+    """Fenêtre 390 × 844 : barre d'onglets défilable sur une ligne, page sans défilement horizontal, en-tête sur l'éditeur."""
+    page.set_viewport_size({'width': 390, 'height': 844})
+    reset_state(page, SETTINGS)
+    open_settings(page, SETTINGS, 'altitude')
+    bad = []
+    bar = page.locator('#settingsTabs')
+    sizes = bar.evaluate('e => ({ scroll: e.scrollWidth, client: e.clientWidth })')
+    if not sizes['scroll'] > sizes['client']:
+        bad.append(f'barre non défilable : {sizes}')
+    tops = {round(box_of(page.locator(tab(x)))['top']) for x in SECTIONS_ORDER}
+    if len(tops) != 1:
+        bad.append(f'barre d onglets sur plusieurs lignes : {sorted(tops)}')
+    wide = page.evaluate('() => document.documentElement.scrollWidth')
+    if wide > 390:
+        bad.append(f'défilement horizontal de la page : scrollWidth {wide}')
+    page.focus(tab('Altitude'))
+    for _ in range(3):                                                   # Altitude → Dossier surveillé → Stockage → Général
+        page.keyboard.press('ArrowRight')
+    inside = page.evaluate("""() => { const b = document.getElementById('settingsTabs').getBoundingClientRect();
+        const t = document.querySelector('#settingsTabs [aria-selected=true]').getBoundingClientRect();
+        const chosen = document.querySelector('#settingsTabs [aria-selected=true]');
+        return { ok: t.left >= b.left - 1 && t.right <= b.right + 1, section: chosen.dataset.section, tab: [t.left, t.right],
+            bar: [b.left, b.right] }; }""")
+    if inside['section'] != 'Général' or not inside['ok']:
+        bad.append(f'onglet « Général » hors de la partie visible : {inside}')
+    row_ = page.locator('.setting-row').first
+    head, editor = box_of(row_.locator('.setting-head')), box_of(row_.locator('.setting-editor'))
+    if editor['top'] < head['bottom'] - 1:
+        bad.append(f'en-tête pas au-dessus de l éditeur : {head} / {editor}')
+    page.screenshot(path=f'{OUT}/40-reglages-lisibilite-telephone.png', full_page=True)
+    page.set_viewport_size({'width': 1440, 'height': 900})
+    return bad
+
+
+@scenario("(m) Réglages : lisibilité à 1280 px (thèmes clair et sombre) et à 390 px : onglets, contraste, largeurs (CA-82)")
+def settings_reading(page):
+    problems = []
+    for theme in ('light', 'dark'):
+        problems += reading_problems(page, theme)
+    problems += phone_problems(page)
+    page.emulate_media(color_scheme='light')
+    assert not problems, ' | '.join(problems)
+
+
+# -- Rectangle de couverture édité sur la carte (EF-6.19, CA-83) ----------------------------------------------------------------
+HANDLES = {'sw': 'Angle sud-ouest du rectangle', 'nw': 'Angle nord-ouest du rectangle', 'ne': 'Angle nord-est du rectangle',
+           'se': 'Angle sud-est du rectangle', 'centre': 'Déplacer le rectangle'}
+RECT_DEFAULT = [1.35, 48.83, 6.42, 51.55]
+RECT_ERROR = '.rectangle-editor .setting-error'
+RECT_PATH = '.rect-preview path.leaflet-interactive'
+RECT_JSON = '.rectangle-editor details.advanced textarea'
+
+
+def handle(page, which):
+    return page.locator(f'.rect-preview [aria-label="{HANDLES[which]}"]')
+
+
+def centre_of(locator):
+    box = locator.bounding_box()
+    return box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+
+
+def in_map(page, which):
+    """Position d'une poignée DANS la carte (indépendante d'un décalage de la page)."""
+    x, y = centre_of(handle(page, which))
+    origin = page.locator('.rect-preview').bounding_box()
+    return x - origin['x'], y - origin['y']
+
+
+def rect_values(page):
+    return [float(page.input_value(f'#rect-{i}')) for i in range(4)]
+
+
+def rect_open(view, section_url=None):
+    open_settings(view, SETTINGS, 'traces-planifiees')
+    view.wait_for_selector('.rect-preview.leaflet-container', timeout=10000)
+    view.locator('.rect-preview').evaluate("e => e.scrollIntoView({ behavior: 'instant', block: 'center' })")
+    view.wait_for_timeout(400)
+
+
+def dashed(page):
+    return (page.locator(RECT_PATH).get_attribute('stroke-dasharray') or 'none') not in ('none', '', '0')
+
+
+def mouse_drag(page, which, dx, dy, release=True, steps=12):
+    x, y = centre_of(handle(page, which))
+    page.mouse.move(x, y)
+    page.mouse.down()
+    for i in range(1, steps + 1):
+        page.mouse.move(x + dx * i / steps, y + dy * i / steps)
+    if release:
+        page.mouse.up()
+        return None
+    return page.mouse.up                                                 # geste maintenu : l'appelant relâche
+
+
+def touch_hold(page, which, dx, dy, steps=12):
+    """Doigt posé sur la poignée puis déplacé, SANS relâcher : renvoie la fonction qui lève le doigt."""
+    x, y = centre_of(handle(page, which))
+    cdp = page.context.new_cdp_session(page)
+    cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
+    for i in range(1, steps + 1):
+        point = {'x': x + dx * i / steps, 'y': y + dy * i / steps}
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [point]})
+        page.wait_for_timeout(15)
+
+    def lift():
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+        page.wait_for_timeout(200)
+    return lift
+
+
+def touch_drag(page, which, dx, dy):
+    touch_hold(page, which, dx, dy)()
+
+
+def decimals(value):
+    text = repr(value)
+    return len(text.split('.')[1]) if '.' in text and 'e' not in text else 0
+
+
+def corner_gestures(page, kind, drag):
+    """NE vers le nord-est puis centre : `drag(which, dx, dy, release)`. Renvoie les écarts à la spec (liste)."""
+    bad = []
+    start = rect_values(page)
+    dims_before = norm(page.locator('.rectangle-editor .hint').first.inner_text())
+    end = drag('ne', 60, -40, False)                                     # geste maintenu : les champs suivent PENDANT le geste
+    during = rect_values(page)
+    if not (during[2] > start[2] and during[3] > start[3] and during[0] == start[0] and during[1] == start[1]):
+        bad.append(f'{kind} : NE vers le nord-est : {start} → {during} (attendu : lon max et lat max en hausse, min inchangées)')
+    if norm(page.locator('.rectangle-editor .hint').first.inner_text()) == dims_before:
+        bad.append(f'{kind} : dimensions « ≈ … km » inchangées pendant le geste')
+    shown = json.loads(page.locator(RECT_JSON).input_value())
+    if [round(v, 4) for v in shown] != [round(v, 4) for v in during]:
+        bad.append(f'{kind} : JSON du volet Avancé {shown} ≠ champs {during} pendant le geste')
+    end()
+    page.wait_for_timeout(300)
+    after = rect_values(page)
+    if any(decimals(v) > 4 for v in after):
+        bad.append(f'{kind} : plus de 4 décimales après le relâchement : {after}')
+    box = page.locator(RECT_PATH).evaluate("e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right]; }")
+    nx, ny = centre_of(handle(page, 'ne'))
+    if abs(nx - box[2]) > 3 or abs(ny - box[1]) > 3:
+        bad.append(f'{kind} : poignée NE ({round(nx)}, {round(ny)}) hors de l angle ({round(box[2])}, {round(box[1])})')
+    # centre : les 4 valeurs se décalent, largeur et hauteur conservées
+    width, height = after[2] - after[0], after[3] - after[1]
+    drag('centre', -50, 30, True)
+    page.wait_for_timeout(300)
+    moved = rect_values(page)
+    if moved == after:
+        bad.append(f'{kind} : poignée centrale sans effet')
+    if abs((moved[2] - moved[0]) - width) > 0.00015 or abs((moved[3] - moved[1]) - height) > 0.00015:
+        now = (moved[2] - moved[0], moved[3] - moved[1])
+        bad.append(f'{kind} : poignée centrale : largeur/hauteur {width:.4f}×{height:.4f} → {now[0]:.4f}×{now[1]:.4f}')
+    return bad
+
+
+@scenario("(n) Réglages : rectangle édité sur la carte (souris, toucher, clavier, bornes, synchronisation des champs) (CA-83)")
+def settings_rectangle_map(page):
+    reset_state(page, SETTINGS)
+    start = len(intercepted)
+    page.set_viewport_size({'width': 1280, 'height': 800})
+    rect_open(page)
+    writes = recorder(page)
+    bad = []
+    phase = ['chargement']
+    page.on('console', lambda m: bad.append(f'erreur JS pendant « {phase[0]} » : {m.text[:120]}') if m.type == 'error' else None)
+    # carte et poignées : tailles
+    height = page.locator('.rect-preview').bounding_box()['height']
+    if height < 320:
+        bad.append(f'carte de {height:.0f} px de haut (≥ 320 attendu)')
+    sizes = {k: handle(page, k).bounding_box() for k in HANDLES}
+    small = {k: (round(b['width']), round(b['height'])) for k, b in sizes.items() if b['width'] < 24 or b['height'] < 24}
+    if small or any(handle(page, k).count() != 1 for k in HANDLES):
+        bad.append(f'poignées absentes ou < 24 × 24 px : {small}')
+    assert rect_values(page) == RECT_DEFAULT, rect_values(page)
+    assert page.locator('.rect-preview .leaflet-tile').count() == 0, 'des tuiles alors que le fond par défaut est hors liste'
+    page.screenshot(path=f'{OUT}/41-rectangle-carte-poignees.png', full_page=True)
+    # souris : angle nord-est, puis poignée centrale
+    phase[0] = 'souris'
+    bad += corner_gestures(page, 'souris', lambda which, dx, dy, release: mouse_drag(page, which, dx, dy, release))
+    page.screenshot(path=f'{OUT}/42-rectangle-carte-apres-gestes.png', full_page=True)
+    if not has_unsaved(page, 'Traces planifiées'):
+        bad.append(f'onglet non marqué « non enregistré » après un geste : {tab_names(page, "Traces planifiées")}')
+    if writes:
+        bad.append(f'écriture avant l enregistrement : {writes}')
+    # enregistrer : confirmation avant / après puis UN PATCH avec la valeur de la carte
+    phase[0] = 'enregistrement'
+    carte = rect_values(page)
+    writes_before = len(writes)
+    page.click('#settingsSave')
+    expect(page.locator('#settingsConfirm')).to_be_visible()
+    confirm = norm(page.locator('#settingsConfirm').inner_text())
+    if '1.35' not in confirm or str(carte[2]) not in confirm.replace(',', '.'):
+        bad.append(f'confirmation avant / après sans l ancienne et la nouvelle valeur : {confirm[:250]}')
+    page.click('#settingsConfirmYes')
+    page.wait_for_timeout(1200)
+    sent = [json.loads(w['body'])['settings'] for w in writes[writes_before:] if w['method'] == 'PATCH']
+    if len(sent) != 1 or sent[0].get('routing.coverage_bbox') != carte:
+        bad.append(f'PATCH attendu avec la valeur de la carte {carte} : {sent}')
+    # « Annuler les modifications » : un geste, puis le rectangle chargé revient
+    mouse_drag(page, 'se', 40, 30)
+    page.wait_for_timeout(200)
+    if rect_values(page) == carte:
+        bad.append('geste SE sans effet')
+    page.click('#settingsCancel')
+    page.wait_for_timeout(300)
+    if rect_values(page) != carte:
+        bad.append(f'« Annuler les modifications » : {rect_values(page)} au lieu du rectangle chargé {carte}')
+    reset_state(page, SETTINGS)
+    rect_open(page)
+    # angle sud-ouest au-delà de l'angle nord-est : arrêt à 0,0001°, min < max
+    phase[0] = 'SW au-delà de NE'
+    nx, ny = centre_of(handle(page, 'ne'))
+    sx, sy = centre_of(handle(page, 'sw'))
+    mouse_drag(page, 'sw', nx - sx + 90, ny - sy - 90)
+    page.wait_for_timeout(300)
+    crossed = rect_values(page)
+    if not (crossed[0] < crossed[2] and crossed[1] < crossed[3]):
+        bad.append(f'SW au-delà de NE : min ≥ max : {crossed}')
+    elif round(crossed[2] - crossed[0], 4) != 0.0001 or round(crossed[3] - crossed[1], 4) != 0.0001:
+        bad.append(f'SW au-delà de NE : arrêt attendu à 0,0001° : {crossed}')
+    page.click('#settingsCancel')
+    page.wait_for_timeout(300)
+    # côté de plus de 2 000 km : message identique à celui de la saisie « 0 / 40 / 30 / 51 »
+    phase[0] = 'côté > 2 000 km'
+    for index, value in enumerate(['0', '40', '30', '51']):
+        page.fill(f'#rect-{index}', value)
+    typed = norm(page.locator(RECT_ERROR).first.inner_text())
+    page.click('#settingsCancel')
+    page.wait_for_timeout(300)
+    page.locator('.rect-preview').hover()
+    for _ in range(4):
+        page.mouse.wheel(0, 400)                                         # dézoomer pour pouvoir agrandir de 2 000 km
+        page.wait_for_timeout(250)
+    page.wait_for_timeout(500)
+    error = ''
+    for _ in range(8):
+        mouse_drag(page, 'ne', 330, -230)
+        page.wait_for_timeout(250)
+        if page.locator(RECT_ERROR).first.is_visible():
+            error = norm(page.locator(RECT_ERROR).first.inner_text())
+            break
+    if not error:
+        bad.append(f'aucune erreur de côté > 2 000 km après plusieurs agrandissements : {rect_values(page)}')
+    else:
+        if error != typed:
+            bad.append(f'message du geste « {error} » ≠ message de la saisie « {typed} »')
+        if not dashed(page):
+            bad.append('rectangle trop grand : trait non pointillé')
+        writes_before = len(writes)
+        page.click('#settingsSave')
+        expect(page.locator('#settingsConfirm')).to_be_hidden()
+        if [w for w in writes[writes_before:] if w['method'] == 'PATCH']:
+            bad.append('PATCH envoyé avec un rectangle trop grand')
+        page.screenshot(path=f'{OUT}/43-rectangle-carte-trop-grand.png', full_page=True)
+    page.click('#settingsCancel')
+    page.reload()
+    rect_open(page)
+    # champs → carte : même instance de carte (zoom et centre conservés), poignées déplacées
+    phase[0] = 'saisie de longitude min'
+    page.locator('.rect-preview').evaluate("e => { e.dataset.mark = 'meme-carte'; }")
+    ne_before, sw_before = in_map(page, 'ne'), in_map(page, 'sw')
+    page.fill('#rect-0', '2.0')
+    page.wait_for_timeout(300)
+    ne_after, sw_after = in_map(page, 'ne'), in_map(page, 'sw')
+    if page.locator('.rect-preview[data-mark=meme-carte]').count() != 1:
+        bad.append('la carte a été recréée par la saisie')
+    if abs(ne_after[0] - ne_before[0]) > 1.5 or abs(ne_after[1] - ne_before[1]) > 1.5:
+        bad.append(f'zoom ou centre modifiés par la saisie (NE {ne_before} → {ne_after})')
+    if sw_after[0] - sw_before[0] < 5:
+        bad.append(f'poignée SW non déplacée par la saisie : {sw_before} → {sw_after}')
+    # saisie vide : erreur sous le champ, rectangle pointillé à la dernière valeur valide, poignées inactives
+    phase[0] = 'saisie vide'
+    path_before = page.locator(RECT_PATH).get_attribute('d')
+    page.fill('#rect-0', '')
+    page.wait_for_timeout(300)
+    if not page.locator(RECT_ERROR).first.is_visible():
+        bad.append('saisie vide : aucune erreur affichée')
+    if not dashed(page):
+        bad.append('saisie vide : rectangle pas en pointillé')
+    if page.locator(RECT_PATH).get_attribute('d') != path_before:
+        bad.append('saisie vide : le rectangle a quitté sa dernière valeur valide')
+    inactive = [k for k in HANDLES if handle(page, k).get_attribute('aria-disabled') != 'true']
+    if inactive:
+        bad.append(f'saisie vide : poignées encore actives : {inactive}')
+    page.fill('#rect-0', '1.35')
+    # clavier : ordre de Tab, puis flèches (0,01°) et Maj + flèches (0,1°)
+    phase[0] = 'clavier'
+    page.focus('#rect-3')
+    order = []
+    for _ in range(16):
+        page.keyboard.press('Tab')
+        name = page.evaluate("() => document.activeElement.getAttribute('aria-label') || ''")
+        if name in HANDLES.values():
+            order.append(name)
+    if order != [HANDLES[k] for k in ('sw', 'nw', 'ne', 'se', 'centre')]:
+        bad.append(f'ordre de Tab des poignées : {order}')
+    page.focus(f'.rect-preview [aria-label="{HANDLES["ne"]}"]')
+    before = rect_values(page)
+    page.keyboard.press('ArrowRight')
+    page.wait_for_timeout(150)
+    step = rect_values(page)
+    if abs(step[2] - before[2] - 0.01) > 0.00015 or step[:2] != before[:2] or step[3] != before[3]:
+        bad.append(f'flèche droite sur NE : {before} → {step} (attendu lon max + 0,01)')
+    page.keyboard.press('Shift+ArrowUp')
+    page.wait_for_timeout(150)
+    big = rect_values(page)
+    if abs(big[3] - step[3] - 0.1) > 0.00015 or big[:3] != step[:3]:
+        bad.append(f'Maj + flèche haut sur NE : {step} → {big} (attendu lat max + 0,1)')
+    # toucher : même geste que la souris
+    phase[0] = 'toucher'
+    context = page.context.browser.new_context(viewport={'width': 1280, 'height': 800}, locale='fr-FR', has_touch=True)
+    context.route('**/*', intercept)
+    tactile = context.new_page()
+    try:
+        reset_state(tactile, SETTINGS)
+        rect_open(tactile)
+        def finger(which, dx, dy, release):
+            return touch_drag(tactile, which, dx, dy) if release else touch_hold(tactile, which, dx, dy)
+
+        bad += corner_gestures(tactile, 'toucher', finger)
+    finally:
+        context.close()
+    # téléphone : carte ≥ 240 px, poignées ≥ 24 × 24 px
+    phase[0] = 'téléphone'
+    page.set_viewport_size({'width': 390, 'height': 844})
+    rect_open(page)
+    phone = page.locator('.rect-preview').bounding_box()['height']
+    if phone < 240:
+        bad.append(f'carte de {phone:.0f} px à 390 px (≥ 240 attendu)')
+    tiny = {k: handle(page, k).bounding_box() for k in HANDLES if handle(page, k).bounding_box()['width'] < 24}
+    if tiny:
+        bad.append(f'poignées < 24 px à 390 px : {tiny}')
+    page.screenshot(path=f'{OUT}/44-rectangle-carte-telephone.png', full_page=True)
+    page.set_viewport_size({'width': 1440, 'height': 900})
+    if foreign_requests(start):
+        bad.append(f'requêtes hors API et tuiles autorisées : {foreign_requests(start)}')
+    reset_state(page, SETTINGS)
+    assert not bad, ' | '.join(bad)
 
 
 @scenario("(c7) Réglages : éditeur de liste, redémarrage nécessaire, secret absent — registre de test (CA-78, CA-79)")
@@ -1161,6 +1678,81 @@ def sso_invitations(page):
     assert not problems, ' | '.join(problems)
 
 
+def sso_page(page, account, path, ready):
+    """Page de l'instance oidc ouverte avec le cookie signé d'un compte du seed (contexte à part)."""
+    with open('/sess/oidc.json', encoding='utf-8') as handle:
+        cookie = json.load(handle)[account]
+    context = page.context.browser.new_context(viewport={'width': 1280, 'height': 900}, locale='fr-FR')
+    context.route('**/*', intercept)
+    context.add_cookies([{'name': 'session', 'value': cookie, 'url': OIDC}])
+    view = context.new_page()
+    view.goto(OIDC + path)
+    view.wait_for_selector(ready, timeout=15000)
+    return view
+
+
+@scenario("(l) /admin Invitations : colonne « Émise par », statuts français, compte créé, comptes supprimés, texte seul (CA-84)")
+def admin_invitations(page):
+    view = sso_page(page, 'sso-admin', '/admin#invitations', '#invitesBody tr')
+    try:
+        view.wait_for_function("() => document.querySelectorAll('#invitesBody tr').length >= 8", timeout=15000)
+        heads = [norm(h.text_content()) for h in view.locator('#tab-invitations thead th').all()]
+        assert heads[:3] == ['Adresse', 'Émise par', 'Statut'], heads
+
+        def line(address):
+            rows = view.locator('#invitesBody tr', has_text=address)
+            assert rows.count() == 1, f'{address} : {rows.count()} ligne(s)'
+            cells = rows.first.locator('td')
+            return {'issuer': norm(cells.nth(1).inner_text()), 'status': norm(cells.nth(2).inner_text()),
+                    'button': rows.first.locator('button').count(), 'row': rows.first}
+
+        addresses = ('x@exemple.fr', 'y@exemple.fr', 'revoquee@exemple.fr', 'expiree@exemple.fr', 'acceptee@exemple.fr',
+                     'supprimee@exemple.fr', 'orpheline@exemple.fr', 'balise@exemple.fr', 'dave@exemple.fr')
+        found = {a: line(a) for a in addresses}
+        view.screenshot(path=f'{OUT}/37-admin-invitations.png', full_page=True)
+        failures = []
+
+        def expect_that(label, ok, got):
+            if not ok:
+                failures.append(f'{label} : {got!r}')
+
+        expect_that('x émise par sso-issuer', found['x@exemple.fr']['issuer'] == 'sso-issuer', found['x@exemple.fr']['issuer'])
+        expect_that('y émise par l admin', found['y@exemple.fr']['issuer'] == 'sso-admin', found['y@exemple.fr']['issuer'])
+        expect_that('x en attente', found['x@exemple.fr']['status'] == 'En attente', found['x@exemple.fr']['status'])
+        expect_that('révoquée', found['revoquee@exemple.fr']['status'] == 'Révoquée', found['revoquee@exemple.fr']['status'])
+        expect_that('expirée', found['expiree@exemple.fr']['status'] == 'Expirée', found['expiree@exemple.fr']['status'])
+        accepted = found['acceptee@exemple.fr']['status']                      # acceptée PUIS révoquée en base : reste Acceptée
+        expect_that('acceptée + compte créé bob', accepted.startswith('Acceptée') and 'compte créé : bob' in accepted, accepted)
+        expect_that('compte créé supprimé', 'compte créé : compte supprimé' in found['supprimee@exemple.fr']['status'],
+                    found['supprimee@exemple.fr']['status'])
+        orphan = found['orpheline@exemple.fr']['issuer']
+        expect_that('émetteur supprimé', orphan == 'compte supprimé', orphan)
+        expect_that('« Révoquer » sur l en attente seule',
+                    [found[a]['button'] for a in found] == [1 if a in ('x@exemple.fr', 'y@exemple.fr', 'orpheline@exemple.fr',
+                                                                        'balise@exemple.fr') else 0 for a in found],
+                    {a: found[a]['button'] for a in found})
+        markup = found['balise@exemple.fr']
+        expect_that('identifiant à balises affiché tel quel', markup['issuer'] == '<b>x</b>', markup['issuer'])
+        expect_that('aucune balise interprétée', markup['row'].locator('b').count() == 0, markup['row'].inner_html())
+        body = norm(view.locator('#tab-invitations').inner_text())
+        expect_that('« Utilisée » nulle part', not re.search(r'utilis[ée]e', body, re.I), body[:300])
+        assert not failures, ' | '.join(failures)
+    finally:
+        view.context.close()
+    # le profil de l'émetteur : mêmes mots, pas de colonne « Émise par »
+    view = sso_page(page, 'sso-issuer', '/profile', '#p-inv')
+    try:
+        view.wait_for_function("() => (document.querySelector('#invList') || {}).innerText?.includes('@')", timeout=15000)
+        listing = norm(view.locator('#invList').inner_text())
+        view.screenshot(path=f'{OUT}/38-profil-emetteur-invitations.png', full_page=True)
+        assert re.search(r'dave@exemple\.fr.*accept', listing, re.I), listing
+        assert not re.search(r'utilis[ée]e', listing, re.I), listing
+        assert 'En attente' in listing or 'en attente' in listing, listing
+        assert 'Émise par' not in listing and 'compte créé' not in listing, listing
+    finally:
+        view.context.close()
+
+
 @scenario("(f) /admin Réglages : confirmation DANS LA PAGE avant d'effacer un secret lié (jamais confirm())")
 def confirm_secret_erase(page):
     dialogs = []
@@ -1208,6 +1800,95 @@ def external_request_is_blocked(page):
     assert blocked and blocked[0]['action'] == 'bloquée', intercepted[mark:]
 
 
+DRAFT_POINTS = """() => Object.keys(window.localStorage).filter((k) => k.startsWith('kmlviewer.routeBuilder.'))
+    .map((k) => (JSON.parse(window.localStorage.getItem(k)) || {}).points || []).filter((points) => points.length)"""
+
+
+def fresh_builder(page):
+    """Contexte neuf (stockage vide), constructeur ouvert, trois points posés : renvoie la page."""
+    context = page.context.browser.new_context(viewport={'width': 1440, 'height': 900}, locale='fr-FR',
+                                               timezone_id='Europe/Paris')
+    context.route('**/*', intercept)
+    view = context.new_page()
+    view.goto(BASE + '/')
+    view.wait_for_selector('#map.leaflet-container')
+    expect(view.locator('#emptyState')).to_be_visible()                  # la page est prête (comme le scénario (a))
+    view.click('#routeBuilderOpen')
+    expect(view.locator('#routeBuilderPanel')).to_be_visible()
+    view.evaluate('() => Viewer.map.setView([50.635, 3.055], 14, { animate: false })')       # dans la couverture du moteur
+    box = view.locator('#map').bounding_box()
+    cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+    for dx, dy in ((0, 0), (70, 10), (35, -60)):
+        view.mouse.click(cx + dx, cy + dy)
+    expect(view.locator('#rbCount')).to_have_text(re.compile(r'^3 point'))
+    return view
+
+
+def generate_result(view):
+    view.fill('#rbDistance', '20')
+    view.click('#rbFinish')
+    view.wait_for_selector('#rbResult', state='visible', timeout=90000)
+
+
+def reopen_builder(view):
+    view.reload()
+    view.wait_for_selector('#map.leaflet-container')
+    expect(view.locator('#emptyState')).to_be_visible()
+    view.click('#routeBuilderOpen')
+    expect(view.locator('#routeBuilderPanel')).to_be_visible()
+
+
+@scenario("(k) Constructeur : points effacés du stockage local après l'enregistrement (ou « déjà enregistrée »), gardés sinon")
+def builder_draft_storage(page):
+    # 1. enregistrement réussi : plus aucun point en local, rien à restaurer au rechargement
+    view = fresh_builder(page)
+    try:
+        assert view.evaluate(DRAFT_POINTS), 'les points posés devraient être gardés en local avant l enregistrement'
+        generate_result(view)
+        assert view.evaluate(DRAFT_POINTS), 'après « Terminer » mais avant l enregistrement : le brouillon reste gardé'
+        with view.expect_response(lambda r: '/api/route-builder/save' in r.url) as saved:
+            view.click('#rbSave')
+        assert saved.value.status == 200, saved.value.status
+        view.wait_for_timeout(500)
+        left = view.evaluate(DRAFT_POINTS)
+        assert left == [], f"points encore en stockage local après l'enregistrement : {left}"
+        view.screenshot(path=f'{OUT}/35-constructeur-apres-enregistrement.png', full_page=True)
+        reopen_builder(view)
+        expect(view.locator('#rbCount')).to_have_text(re.compile(r'^0 point'))      # aucun point restauré
+        assert view.evaluate("() => document.querySelectorAll('#map .leaflet-marker-icon').length") == 0
+    finally:
+        view.context.close()
+    # 2. « déjà enregistrée » (409) : même effet. La réponse du serveur est simulée : seul le comportement de la page est vérifié
+    view = fresh_builder(page)
+    try:
+        generate_result(view)
+        view.route('**/api/route-builder/save', lambda r: r.fulfill(
+            status=409, content_type='application/json',
+            body=json.dumps({'success': False, 'error': 'Cette trace est déjà enregistrée.', 'activity_id': 1})))
+        view.click('#rbSave')
+        expect(view.locator('#rbSaved')).to_contain_text('Déjà enregistrée')
+        view.wait_for_timeout(500)
+        left = view.evaluate(DRAFT_POINTS)
+        assert left == [], f"points encore en stockage local après « déjà enregistrée » : {left}"
+        reopen_builder(view)
+        expect(view.locator('#rbCount')).to_have_text(re.compile(r'^0 point'))
+    finally:
+        view.context.close()
+    # 3. trace non enregistrée : les points sont toujours restaurés au rechargement (P-TR6-6)
+    view = fresh_builder(page)
+    try:
+        reopen_builder(view)
+        expect(view.locator('#rbCount')).to_have_text(re.compile(r'^3 point'))
+        assert view.evaluate("() => document.querySelectorAll('#map .leaflet-marker-icon').length") >= 3
+        view.screenshot(path=f'{OUT}/36-constructeur-brouillon-restaure.png', full_page=True)
+        # génération faite mais pas enregistrée : les points reviennent aussi
+        generate_result(view)
+        reopen_builder(view)
+        expect(view.locator('#rbCount')).to_have_text(re.compile(r'^3 point'))
+    finally:
+        view.context.close()
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     with sync_playwright() as p:
@@ -1217,14 +1898,16 @@ def main():
         context.route('**/*', intercept)
         errors = []
         runs = [builder, admin_diagnostic, admin_audit, oidc_login, smtp_banner, confirm_secret_erase,
-                external_request_is_blocked, action_bar_mobile, action_bar_desktop]
+                external_request_is_blocked, action_bar_mobile, action_bar_desktop, builder_draft_storage]
         if NOPW:
             runs += [sso_invitations]
+        if OIDC:
+            runs += [admin_invitations]
         if DEM_APP and DEM_SVC:
             runs += [dem_correction_reaches_the_viewer]
         if SETTINGS and REGISTRY:
             runs += [settings_tabs, settings_search, settings_origin, settings_basemaps, settings_rectangle, settings_save,
-                     settings_registry, settings_hidden_error]
+                     settings_registry, settings_hidden_error, settings_reading, settings_rectangle_map]
         only = os.environ.get('BENCH_ONLY')                      # sous-chaîne du nom de la fonction : ne rejoue que ces scénarios
         if only:
             runs = [r for r in runs if only in r.__name__]

@@ -38,7 +38,7 @@
             <input id="inviteCredits" class="form-control" type="number" min="0" max="1000" value="0"></div>
         <button type="submit" class="btn btn-primary">Inviter</button>
     </form>
-    <div class="table-responsive"><table class="table mb-0"><thead><tr><th>Adresse</th><th>Statut</th><th>Créée</th><th>Expire</th><th></th></tr></thead>
+    <div class="table-responsive"><table class="table mb-0"><thead><tr><th>Adresse</th><th>Émise par</th><th>Statut</th><th>Créée</th><th>Expire</th><th></th></tr></thead>
         <tbody id="invitesBody"></tbody></table></div>
 </section>
 <section class="panel" id="tab-fonctions" data-panel="fonctions" aria-label="Fonctions bêta" hidden><div id="featuresBox"></div></section>
@@ -49,7 +49,6 @@
             <input id="settingsSearch" type="search" class="form-control" autocomplete="off" maxlength="100"></div>
         <label class="form-check form-switch settings-filter"><input id="settingsOnlyModified" type="checkbox" class="form-check-input">
             <span>Afficher seulement les valeurs modifiées</span></label>
-        <span class="hint" id="settingsVersion"></span>
     </div>
     <div id="settingsTabs" class="settings-tabs" role="tablist" aria-label="Sections des réglages"></div>
     <div id="settingsPanel" class="settings-panel" role="tabpanel"></div>
@@ -57,6 +56,7 @@
     <div class="settings-footer">
         <button type="button" class="btn btn-primary" id="settingsSave" disabled>Enregistrer</button>
         <button type="button" class="btn btn-secondary" id="settingsCancel" disabled>Annuler les modifications</button>
+        <span class="hint settings-version" id="settingsVersion"></span>
     </div>
 </section>
 <section class="panel" id="tab-secrets" data-panel="secrets" aria-label="Clés API et e-mail" hidden>

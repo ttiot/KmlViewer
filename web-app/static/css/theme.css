@@ -1109,7 +1109,7 @@ input[type="range"] {
     }
 }
 
-/* ------------------------------------------------------ Réglages de l'administration (EF-6.9 à EF-6.15) */
+/* ------------------------------------------------------ Réglages de l'administration (EF-6.9 à EF-6.19) */
 .settings-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -1118,16 +1118,25 @@ input[type="range"] {
     margin-bottom: 12px;
 }
 
+.settings-toolbar .field {
+    flex: 1 1 280px;
+    max-width: 420px;
+}
+
+/* Une seule ligne : la barre défile dans sa zone, jamais sur deux lignes ni avec la page (EF-6.18) */
 .settings-tabs {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
     border-bottom: 1px solid var(--border);
     margin-bottom: 12px;
 }
 
 .settings-tab {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
@@ -1137,6 +1146,7 @@ input[type="range"] {
     background: transparent;
     color: var(--text-2);
     font-size: 0.875rem;
+    white-space: nowrap;
 }
 
 .settings-tab[aria-selected="true"] {
@@ -1147,17 +1157,32 @@ input[type="range"] {
 }
 
 .settings-tab.is-dim {
-    opacity: 0.45;
+    color: var(--text-3);       /* grisé sans opacité : le contraste reste d'au moins 4,5:1 */
+    font-style: italic;
 }
 
 .tab-count {
-    color: var(--text-3);
+    min-width: 1.5em;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    color: var(--text);
     font-size: 0.75rem;
-    font-weight: 400;
+    font-weight: 600;
+    line-height: 1.5;
+    text-align: center;
 }
 
+.tab-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+}
+
+/* Ligne : en-tête (libellé, aide) et éditeur ; deux colonnes dès 992 px */
 .setting-row {
-    padding: 10px 0;
+    padding: 14px 0;
     border-bottom: 1px solid var(--border);
 }
 
@@ -1166,33 +1191,109 @@ input[type="range"] {
     padding-left: 10px;
 }
 
-.setting-head {
+.setting-head,
+.setting-editor {
+    min-width: 0;
+}
+
+.setting-title {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px 10px;
-    margin-bottom: 4px;
+    gap: 4px 10px;
 }
 
 .setting-label {
+    margin: 0;
+    color: var(--text);
+    font-size: 1rem;
     font-weight: 600;
 }
 
-.setting-hint {
+.setting-hint,
+.setting-desc {
     margin: 2px 0 0;
-    font-size: 0.75rem;
+    color: var(--text-2);
+    font-size: 0.8125rem;
+    line-height: 1.35;
 }
 
-.setting-help summary {
-    cursor: pointer;
+.setting-desc {
+    margin-top: 6px;
+}
+
+.setting-help-toggle {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
     color: var(--info);
-    list-style: none;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.setting-editor {
+    margin-top: 8px;
+}
+
+.setting-editor > .ms-auto {
+    margin-left: 0 !important;
+    display: block;
+    margin-top: 6px;
+}
+
+.setting-control {
+    max-width: 100%;
+}
+
+.setting-row[data-type="int"] .setting-control,
+.setting-row[data-type="float"] .setting-control {
+    max-width: 12rem;
+}
+
+.setting-row[data-type="enum"] .setting-control,
+.setting-row[data-type="timezone"] .setting-control {
+    max-width: 20rem;
+}
+
+.setting-row[data-type="str"] .setting-control,
+.setting-row[data-type="email"] .setting-control {
+    max-width: 28rem;
+}
+
+.setting-row[data-type="url"] .setting-control {
+    max-width: 40rem;
+}
+
+.setting-row input[type="number"] {
+    font-variant-numeric: tabular-nums;
 }
 
 .setting-error {
     margin: 4px 0 0;
     color: var(--bad);
     font-size: 0.8125rem;
+}
+
+@media (min-width: 992px) {
+    .setting-row {
+        display: grid;
+        grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
+        column-gap: 32px;
+        align-items: start;
+    }
+
+    .setting-editor {
+        margin-top: 0;
+    }
+
+    .setting-row.is-wide .setting-editor {
+        grid-column: 1 / -1;
+        margin-top: 8px;
+    }
 }
 
 .basemap-card {
@@ -1202,11 +1303,62 @@ input[type="range"] {
     margin-bottom: 8px;
 }
 
+.rect-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+}
+
+.rect-fields .field {
+    flex: 0 1 10rem;
+    max-width: 10rem;
+}
+
 .rect-preview {
-    height: 180px;
+    height: 320px;
     margin: 8px 0;
     border: 1px solid var(--border);
     border-radius: 8px;
+}
+
+@media (max-width: 576px) {
+    .rect-preview {
+        height: 240px;
+    }
+}
+
+/* Poignées du rectangle : zone de prise de 28 px, pastille visible au centre */
+.rect-handle {
+    position: relative;
+    background: transparent;
+    cursor: grab;
+    touch-action: none;
+}
+
+.rect-handle::after {
+    content: "";
+    position: absolute;
+    inset: 6px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: #0d6efd;
+    box-shadow: 0 0 0 1px #0a3d91;
+}
+
+.rect-handle-centre::after {
+    border-radius: 3px;
+    transform: rotate(45deg);
+}
+
+.rect-handle:focus-visible {
+    outline: 3px solid var(--warn);
+    outline-offset: 1px;
+    border-radius: 50%;
+}
+
+.rect-handle.is-inactive {
+    opacity: 0.45;
+    pointer-events: none;
 }
 
 .chip-remove {
@@ -1218,11 +1370,16 @@ input[type="range"] {
 
 .settings-footer {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     margin-top: 12px;
 }
 
-.settings-toolbar .field {
-    flex: 1 1 280px;
-    max-width: 420px;
+.settings-version {
+    margin-left: auto;
+}
+
+.rect-preview path.leaflet-interactive {
+    cursor: inherit;      /* le contour ne se saisit pas : glisser dessus déplace la carte (EF-6.19) */
 }

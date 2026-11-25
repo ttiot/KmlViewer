@@ -1,8 +1,10 @@
 """Outillage commun des tests du mode `password` (rôle test) : application, comptes, TOTP réel, sessions injectées, appels d'API."""
 
 import re
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import pyotp
 from cryptography.fernet import Fernet
@@ -127,8 +129,12 @@ _csrf = {}
 
 def csrf_token(app):
     if 'v' not in _csrf:
-        html = app.test_client().get('/auth/password/login', **KW).get_data(as_text=True)
-        _csrf['v'] = re.search(r'name="csrf-token" content="([^"]+)"', html).group(1)
+        pattern = r'name="csrf-token" content="([^"]+)"'
+        found = re.search(pattern, app.test_client().get('/auth/password/login', **KW).get_data(as_text=True))
+        if found is None:                      # appli sans comptes à mot de passe (page 404) : jeton émis par une appli qui en a
+            with tempfile.TemporaryDirectory() as tmp:
+                found = re.search(pattern, make_app(Path(tmp)).test_client().get('/auth/password/login', **KW).get_data(as_text=True))
+        _csrf['v'] = found.group(1)           # le jeton est signé avec la clé fixe du harnais : valable pour toute appli du harnais
     return _csrf['v']
 
 

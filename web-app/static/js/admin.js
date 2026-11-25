@@ -119,11 +119,13 @@
     }
 
     // -- invitations -------------------------------------------------------------------------------------------------------
+    const INVITE_STATUS = { pending: 'En attente', used: 'Acceptée', expired: 'Expirée', revoked: 'Révoquée' };
+
     async function loadInvitations() {
         const info = await act(api('/api/admin/secrets'));          // `disabled` / `missing` : comptes à mot de passe indisponibles (CA-61)
         if (info && info.disabled) {
             $('inviteForm').hidden = true;
-            $('invitesBody').replaceChildren(el('tr', {}, el('td', { colspan: 5, class: 'hint', role: 'status' },
+            $('invitesBody').replaceChildren(el('tr', {}, el('td', { colspan: 6, class: 'hint', role: 'status' },
                 `Invitations indisponibles : variable(s) manquante(s) — ${(info.missing || []).join(', ')} (mode oidc : SECRETS_KEY et PUBLIC_URL sont requises).`)));
             return;
         }
@@ -131,7 +133,10 @@
         const data = await act(api('/api/admin/invitations'));
         if (!data) return;
         $('invitesBody').replaceChildren(...data.invitations.map((i) => el('tr', {},
-            el('td', {}, i.email || '—'), el('td', {}, i.status), el('td', {}, dateTime(i.created_at)), el('td', {}, dateTime(i.expires_at)),
+            el('td', {}, i.email || '—'), el('td', {}, i.created_by_name || 'compte supprimé'),
+            el('td', {}, INVITE_STATUS[i.status] || i.status,
+                i.status === 'used' ? el('div', { class: 'hint' }, `compte créé : ${i.used_by_name || 'compte supprimé'}`) : null),
+            el('td', {}, dateTime(i.created_at)), el('td', {}, dateTime(i.expires_at)),
             el('td', {}, i.status === 'pending' ? confirmButton('Révoquer', 'Révoquer (crédit non rendu) ?',
                 () => act(api(`/api/invitations/${i.id}`, { method: 'DELETE' }), loadInvitations)) : null))));
     }

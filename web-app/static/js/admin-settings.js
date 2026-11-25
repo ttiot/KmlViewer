@@ -13,6 +13,8 @@ const AdminSettings = (() => {
     const CONTROL_FOR_TYPE = { bool: 'switch', enum: 'select', int: 'number', float: 'number', str: 'text', url: 'text', email: 'text',
         timezone: 'text', list: 'chips', basemaps: 'basemap-cards', rectangle: 'rectangle-fields' };
     const MAX_RECTANGLE_SIDE_M = 2_000_000;
+    const SIZE_MESSAGE = 'Côtés de 2 000 km au plus.';
+    const STEP = 0.0001, MAP_LAT = 85.0511;                  // pas des champs ; limite de la projection Web Mercator (EF-6.19)
     const MARKUP = /[<>&"']/;
     const LINKED_SECRETS = { 'smtp.host': 'smtp.password', 'smtp.port': 'smtp.password', 'routing.base_url': 'routing.api_key' };
     const ALERT_KEYS = { smtp: ['smtp.host', 'smtp.port'], routing: ['routing.base_url'], dem: ['DEM_URL'], tiles: ['map.basemaps'] };
@@ -56,7 +58,7 @@ const AdminSettings = (() => {
             default: return value === '' || value === null || value === undefined ? '(vide)' : String(value);
         }
     }
-    const originOf = (setting) => (setting.source === 'env' ? `Environnement · ${setting.env}` : setting.source === 'base' ? 'Base' : 'Défaut');
+    const originOf = (setting) => (setting.source === 'env' ? 'Environnement' : setting.source === 'base' ? 'Base' : 'Défaut');
 
     function hint(setting) {
         const parts = [];
@@ -64,7 +66,7 @@ const AdminSettings = (() => {
         else if (['str', 'email', 'url', 'timezone'].includes(setting.type) && setting.max_length) parts.push(`${setting.max_length} caractères au plus`);
         else if (setting.type === 'basemaps') parts.push(`${setting.max_items} fonds au plus`);
         else if (setting.type === 'list') parts.push(`${setting.max_items} éléments au plus`);
-        if (setting.env) parts.push(`variable ${setting.env}`);
+        if (setting.env) parts.push(setting.env_overridden ? `variable ${setting.env}, remplacée par la valeur en base` : `variable ${setting.env}`);
         return parts.join(' · ');
     }
 
@@ -118,7 +120,7 @@ const AdminSettings = (() => {
         if (!(lonMin >= -180 && lonMax <= 180 && latMin >= -90 && latMax <= 90)) return { message: 'Longitudes dans [-180, 180], latitudes dans [-90, 90].' };
         if (!(lonMin < lonMax && latMin < latMax)) return { message: 'Le minimum doit être inférieur au maximum.' };
         const { width, height } = rectangleSides(box);
-        if (Math.max(width, height) > MAX_RECTANGLE_SIDE_M) return { message: 'Côtés de 2 000 km au plus.' };
+        if (Math.max(width, height) > MAX_RECTANGLE_SIDE_M) return { message: SIZE_MESSAGE };
         return null;
     }
     function validateOne(setting) {
@@ -273,52 +275,141 @@ const AdminSettings = (() => {
         return holder;
     }
 
+    // Rectangle : 4 champs ET carte Leaflet éditable (EF-6.12, EF-6.19). Une seule fonction de contrôle (validateRectangle) pour les deux.
+    const r4 = (v) => Math.round(v * 1e4) / 1e4;
+    const clampTo = (v, lo, hi) => (hi < lo ? v : Math.min(hi, Math.max(lo, v)));
+    const CORNERS = [{ name: 'sud-ouest', lon: 0, lat: 1 }, { name: 'nord-ouest', lon: 0, lat: 3 }, { name: 'nord-est', lon: 2, lat: 3 }, { name: 'sud-est', lon: 2, lat: 1 }];
+    const usableBox = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[0] >= -180 && b[2] <= 180 && b[1] >= -90 && b[3] <= 90
+        && b[0] < b[2] && b[1] < b[3];
+    // Un angle suit le geste ; l'angle opposé reste fixe ; on s'arrête à un pas de lui (min < max toujours vrai) et aux bords de la carte
+    function moveCorner(box, index, lon, lat) {
+        const corner = CORNERS[index], west = corner.lon === 0, south = corner.lat === 1;
+        const oppositeLon = box[west ? 2 : 0], oppositeLat = box[south ? 3 : 1];
+        const next = box.slice();
+        next[corner.lon] = r4(clampTo(lon, west ? -180 : oppositeLon + STEP, west ? oppositeLon - STEP : 180));
+        next[corner.lat] = r4(clampTo(lat, south ? -MAP_LAT : oppositeLat + STEP, south ? oppositeLat - STEP : MAP_LAT));
+        return next;
+    }
+    // Déplacement : largeur et hauteur (en degrés) conservées
+    function moveCentre(box, dLon, dLat) {
+        const width = box[2] - box[0], height = box[3] - box[1];
+        const limit = box[3] > MAP_LAT || box[1] < -MAP_LAT ? 90 : MAP_LAT;
+        const lonMin = r4(clampTo(box[0] + dLon, -180, 180 - width)), latMin = r4(clampTo(box[1] + dLat, -limit, limit - height));
+        return [lonMin, latMin, r4(lonMin + width), r4(latMin + height)];
+    }
+
     function rectangleEditor(setting) {
+        const key = setting.key;
         const holder = el('div', { class: 'rectangle-editor' });
         const labels = ['Longitude min', 'Latitude min', 'Longitude max', 'Latitude max'];
         const dims = el('p', { class: 'hint mb-1' });
-        const preview = el('div', { class: 'rect-preview', 'aria-label': 'Aperçu du rectangle' });
-        const problem = el('p', { class: 'setting-error', role: 'alert', hidden: true });
+        const preview = el('div', { class: 'rect-preview', role: 'group',
+            'aria-label': 'Carte du rectangle : déplace les poignées, ou saisis les valeurs dans les champs' });
+        const problem = el('p', { class: 'setting-error', role: 'alert', hidden: true });      // même message pour un champ et pour un geste
         const bounds = [[-180, 180], [-90, 90], [-180, 180], [-90, 90]];
         const inputs = [];
+        let map = null, rectangle = null, handles = [];
+        let lastBox = (usableBox(current(key)) ? current(key) : loadedValue(key)).slice();      // jamais NaN : une saisie incomplète a pu précéder le dessin
+        const drawable = () => usableBox(lastBox) && lastBox.every((v) => Number.isFinite(v));
+
+        const syncInputs = () => {
+            const box = current(key);
+            inputs.forEach((input, i) => { if (document.activeElement !== input) input.value = Number.isFinite(box[i]) ? box[i] : ''; });
+        };
+        const place = (box) => {
+            if (!usableBox(box)) return;
+            const lat = (v) => clampTo(v, -MAP_LAT, MAP_LAT);
+            const spots = [[lat(box[1]), box[0]], [lat(box[3]), box[0]], [lat(box[3]), box[2]], [lat(box[1]), box[2]], [lat((box[1] + box[3]) / 2), (box[0] + box[2]) / 2]];
+            handles.forEach((marker, i) => { if (!marker.isDragging) marker.setLatLng(spots[i]); });
+        };
+        // Reflète la saisie courante sur la carte SANS la recréer : zoom et centre conservés
         const refresh = () => {
-            const box = current(setting.key);
+            const box = current(key);
             const issue = validateRectangle(box);
+            const usable = usableBox(box);
             problem.textContent = issue ? issue.message : '';
             problem.hidden = !issue;
-            if (!issue) {
+            if (usable) {
+                lastBox = box;
                 const { width, height } = rectangleSides(box);
                 dims.textContent = `≈ ${Math.round(width / 1000)} km × ${Math.round(height / 1000)} km`;
-                drawPreview(preview, box);
             } else dims.textContent = '';
+            if (!map || !drawable()) return;               // aucune valeur vide ou non numérique n'atteint Leaflet
+            rectangle.setBounds([[lastBox[1], lastBox[0]], [lastBox[3], lastBox[2]]]);
+            rectangle.setStyle(issue ? { color: '#dc3545', dashArray: '6 6' } : { color: '#0d6efd', dashArray: null });
+            place(lastBox);
+            handles.forEach((marker) => {              // poignées inactives tant qu'une saisie invalide reste
+                const node = marker.getElement();
+                if (usable) marker.dragging.enable(); else marker.dragging.disable();
+                if (node) { node.tabIndex = usable ? 0 : -1; node.setAttribute('aria-disabled', usable ? 'false' : 'true'); node.classList.toggle('is-inactive', !usable); }
+            });
         };
+        const commit = (box) => { setEdit(key, box); syncInputs(); refresh(); };
+        const fit = () => {
+            if (!map || !drawable()) return;
+            const size = map.getSize();
+            if (!size.x || !size.y) return;                // carte sans taille (onglet masqué, redimensionnement) : fitBounds donnerait NaN
+            map.invalidateSize({ animate: false });
+            map.fitBounds(rectangle.getBounds(), { padding: [10, 10], animate: false });
+        };
+
         const fields = labels.map((label, i) => {
-            const input = el('input', { type: 'number', class: 'form-control', id: `rect-${i}`, min: bounds[i][0], max: bounds[i][1], step: 0.0001,
-                value: current(setting.key)[i], 'aria-label': label,
-                oninput: () => { const box = current(setting.key).slice(); box[i] = input.value === '' ? NaN : Number(input.value); setEdit(setting.key, box); refresh(); } });
+            const input = el('input', { type: 'number', class: 'form-control', id: `rect-${i}`, min: bounds[i][0], max: bounds[i][1], step: STEP,
+                value: current(key)[i], 'aria-label': label,
+                oninput: () => { const box = current(key).slice(); box[i] = input.value === '' ? NaN : Number(input.value); setEdit(key, box); refresh(); } });
             inputs.push(input);
             return el('div', { class: 'field' }, el('label', { for: `rect-${i}` }, label), input);
         });
-        holder.append(el('div', { class: 'field-grid' }, fields), dims, problem, preview,
-            advancedPane(setting, () => { inputs.forEach((input, i) => { input.value = current(setting.key)[i]; }); refresh(); }));
-        setTimeout(refresh, 0);
-        return holder;
-    }
 
-    function drawPreview(container, box) {
-        if (typeof L === 'undefined') return;
-        if (S.previewMap) { S.previewMap.remove(); S.previewMap = null; }
-        container.replaceChildren();
-        const map = L.map(container, { zoomControl: false, attributionControl: false });
-        S.previewMap = map;
-        const maps = S.byKey['map.basemaps'];
-        const wanted = S.byKey['map.default_basemap'];
-        const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
-        if (base && tileHosts(base, maps.allowlist || []).every((h) => h.ok)) {      // fond par défaut seulement s'il est autorisé
-            App.basemapLayer(base).addTo(map);
-        }
-        const rectangle = L.rectangle([[box[1], box[0]], [box[3], box[2]]], { color: '#0d6efd', weight: 2, fill: false }).addTo(map);
-        map.fitBounds(rectangle.getBounds(), { padding: [10, 10] });
+        const init = () => {
+            if (typeof L === 'undefined' || !holder.isConnected || map || !drawable()) return;
+            if (!preview.clientWidth || !preview.clientHeight) {          // conteneur sans taille : on attend qu'il en ait une
+                if (typeof ResizeObserver === 'function') {
+                    const watcher = new ResizeObserver(() => { if (preview.clientWidth && preview.clientHeight) { watcher.disconnect(); init(); } });
+                    watcher.observe(preview);
+                }
+                return;
+            }
+            map = L.map(preview, { zoomControl: false, attributionControl: false });
+            S.previewMap = map;
+            const maps = S.byKey['map.basemaps'], wanted = S.byKey['map.default_basemap'];
+            const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
+            if (base && tileHosts(base, maps.allowlist || []).every((h) => h.ok)) App.basemapLayer(base).addTo(map);      // seulement si autorisé
+            rectangle = L.rectangle([[lastBox[1], lastBox[0]], [lastBox[3], lastBox[2]]], { color: '#0d6efd', weight: 2, fill: false }).addTo(map);
+            fit();                                  // la carte doit avoir une vue avant d'accueillir des marqueurs
+            const names = [...CORNERS.map((c) => `Angle ${c.name} du rectangle`), 'Déplacer le rectangle'];
+            let startBox = null, startSpot = null;
+            names.forEach((name, i) => {              // ordre de création = ordre de Tab : SO, NO, NE, SE, centre
+                const icon = L.divIcon({ className: `rect-handle${i === 4 ? ' rect-handle-centre' : ''}`, iconSize: [28, 28] });
+                const marker = L.marker([0, 0], { draggable: true, icon, keyboard: true, zIndexOffset: i === 4 ? 0 : 100 }).addTo(map);
+                marker.on('dragstart', () => { marker.isDragging = true; startBox = current(key).slice(); startSpot = marker.getLatLng(); });
+                marker.on('drag', () => {
+                    const at = marker.getLatLng();
+                    commit(i === 4 ? moveCentre(startBox, at.lng - startSpot.lng, at.lat - startSpot.lat) : moveCorner(current(key), i, at.lng, at.lat));
+                });
+                marker.on('dragend', () => { marker.isDragging = false; refresh(); });      // se recale sur les valeurs arrondies
+                const node = marker.getElement();
+                node.setAttribute('aria-label', name);
+                node.setAttribute('role', 'button');
+                node.addEventListener('keydown', (event) => {
+                    const dir = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[event.key];
+                    const box = current(key);
+                    if (!dir || !usableBox(box)) return;
+                    event.preventDefault(); event.stopPropagation();                 // la carte ne doit pas se déplacer
+                    const step = event.shiftKey ? 0.1 : 0.01;
+                    if (i === 4) commit(moveCentre(box, dir[0] * step, dir[1] * step));
+                    else commit(moveCorner(box, i, box[CORNERS[i].lon] + dir[0] * step, box[CORNERS[i].lat] + dir[1] * step));
+                });
+                handles.push(marker);
+            });
+            refresh();
+        };
+        holder.append(el('div', { class: 'field-grid rect-fields' }, fields), dims, problem, preview,
+            el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary mt-1', onclick: fit }, 'Recadrer'),
+            advancedPane(setting, () => { syncInputs(); refresh(); fit(); }));
+        refresh();
+        setTimeout(init, 0);
+        return holder;
     }
 
     // Volet « Avancé » : JSON brut de la valeur EN COURS DE SAISIE (basemaps et rectangle seulement)
@@ -380,16 +471,30 @@ const AdminSettings = (() => {
             `Supprimer la valeur enregistrée ?${clears}`, () => resetSetting(setting), 'btn btn-sm btn-outline-secondary');
     }
 
+    // Ligne : un en-tête (libellé, « ? », pastille, aide, description) et un éditeur (champ, rétablissement, erreurs) (EF-6.18)
+    const WIDE = ['basemaps', 'rectangle'];
     function row(setting) {
-        const origin = originOf(setting);
-        const badges = [el('span', { class: `badge-soft ${setting.source === 'base' ? 'is-info' : setting.source === 'env' ? 'is-warn' : ''}` }, origin)];
-        if (setting.env_overridden) badges.push(el('span', { class: 'hint' }, `remplace ${setting.env}`));
+        const badges = [];
+        if (setting.source === 'env') badges.push(el('span', { class: 'badge-soft is-warn' }, 'Environnement'));      // aucune pastille « Défaut » (EF-6.11)
+        else if (setting.source === 'base') badges.push(el('span', { class: 'badge-soft is-info' }, 'Base'));
         if (setting.requires_restart) badges.push(el('span', { class: 'badge-soft is-warn' }, 'Redémarrage nécessaire'));
         if (setting.env_invalid) badges.push(el('span', { class: 'badge-soft is-bad', role: 'alert' }, `${setting.env} invalide : ignorée`));
-        const help = setting.help ? el('details', { class: 'setting-help' }, el('summary', { 'aria-label': `Aide : ${setting.label}` }, '?'), el('p', { class: 'hint mb-0' }, setting.help)) : null;
-        return el('div', { class: `setting-row${isDirty(setting.key) ? ' is-dirty' : ''}`, 'data-setting': setting.key },
-            el('div', { class: 'setting-head' }, el('label', { class: 'setting-label', for: `f-${setting.key}` }, setting.label), ...badges, help, resetControl(setting)),
-            editorFor(setting), el('p', { class: 'hint setting-hint' }, hint(setting)), setting.type === 'basemaps' ? null : errorLine(setting.key));
+        const helpId = `help-${setting.key}`;
+        const description = setting.help ? el('p', { class: 'setting-desc', id: helpId, hidden: true }, setting.help) : null;
+        const toggle = setting.help ? el('button', { type: 'button', class: 'setting-help-toggle', 'aria-expanded': 'false', 'aria-controls': helpId,
+            'aria-label': `Aide : ${setting.label}`, onclick: () => {
+                const open = description.hidden;
+                description.hidden = !open;
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            } }, '?') : null;
+        const hintText = hint(setting);
+        return el('div', { class: `setting-row${isDirty(setting.key) ? ' is-dirty' : ''}${WIDE.includes(setting.type) ? ' is-wide' : ''}`,
+            'data-setting': setting.key, 'data-type': setting.type },
+        el('div', { class: 'setting-head' },
+            el('div', { class: 'setting-title' }, el('label', { class: 'setting-label', for: `f-${setting.key}` }, setting.label), toggle, ...badges),
+            hintText ? el('p', { class: 'setting-hint' }, hintText) : null, description),
+        el('div', { class: 'setting-editor' }, el('div', { class: 'setting-control' }, editorFor(setting)), resetControl(setting),
+            setting.type === 'basemaps' ? null : errorLine(setting.key)));
     }
 
     // -- onglets, compteurs, recherche ------------------------------------------------------------------------------------
@@ -407,6 +512,7 @@ const AdminSettings = (() => {
         });
         return keys;
     }
+    const plural = (n, word) => `${n} ${word}${n > 1 ? 's' : ''}`;
     function tabLabel(section) {
         const all = sectionSettings(section);
         const found = all.filter(matches).length;
@@ -414,11 +520,13 @@ const AdminSettings = (() => {
         const unsaved = all.some((s) => isDirty(s.key));
         const alerted = all.some((s) => alertedKeys().has(s.key));
         const searching = S.search || S.onlyModified;
-        const count = `${searching ? `${found} / ` : ''}${all.length}`;
-        return { found, text: [el('span', {}, section), el('span', { class: 'tab-count' }, count),
-            modified ? el('span', { class: 'tab-count' }, `${modified} modifié${modified > 1 ? 's' : ''}`) : null,
-            unsaved ? el('span', { class: 'badge-soft is-warn' }, 'non enregistré') : null,
-            alerted ? el('span', { class: 'badge-soft is-bad', title: 'Alerte sur un réglage' }, '!') : null] };
+        // Une seule pastille de nombre : réglages trouvés pendant une recherche, sinon réglages modifiés ; jamais de total (EF-6.9)
+        const number = searching ? found : modified;
+        const name = searching ? `${plural(found, 'réglage')} ${found > 1 ? 'trouvés' : 'trouvé'}` : `${plural(modified, 'réglage')} ${modified > 1 ? 'modifiés' : 'modifié'}`;
+        return { found, text: [el('span', {}, section),
+            number > 0 ? el('span', { class: 'tab-count', role: 'img', 'aria-label': name }, String(number)) : null,
+            unsaved ? el('span', { class: 'tab-dot', role: 'img', 'aria-label': 'saisies non enregistrées' }) : null,
+            alerted ? el('span', { class: 'badge-soft is-bad', role: 'img', 'aria-label': 'alerte' }, '!') : null] };
     }
     function renderTabs() {
         const bar = $('settingsTabs');
@@ -429,6 +537,12 @@ const AdminSettings = (() => {
                 'aria-controls': 'settingsPanel', tabindex: selected ? 0 : -1, class: `settings-tab${label.found === 0 && (S.search || S.onlyModified) ? ' is-dim' : ''}`,
                 'data-section': section, onclick: () => selectTab(section), onkeydown: (event) => arrow(event, section) }, ...label.text);
         }));
+        const chosen = bar.querySelector('[aria-selected="true"]');          // la barre défile dans sa zone : l'onglet ouvert reste visible
+        if (chosen) {
+            const box = bar.getBoundingClientRect(), tab = chosen.getBoundingClientRect();
+            if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left;
+            else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right;
+        }
     }
     function arrow(event, section) {
         const index = S.sections.indexOf(section);

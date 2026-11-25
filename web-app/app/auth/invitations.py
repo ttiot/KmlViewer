@@ -109,7 +109,18 @@ def list_for(conn, issuer, *, everyone: bool = False, now: Optional[datetime] = 
         "SELECT id, email, note, initial_credits, created_by, created_at, expires_at, used_at, used_by, revoked_at "
         "FROM auth_tokens WHERE kind = 'invite'" + ("" if everyone else " AND created_by = ?") + " ORDER BY id DESC LIMIT 500",
         () if everyone else (issuer['id'],)).fetchall()
-    return [{**{k: r[k] for k in r.keys()}, 'status': _status(r, moment)} for r in rows]
+    result = [{**{k: r[k] for k in r.keys()}, 'status': _status(r, moment)} for r in rows]
+    if everyone:                           # vue admin : qui a émis, quel compte a été créé (None : compte supprimé)
+        ids = {i for r in result for i in (r['created_by'], r['used_by']) if i is not None}
+        names = {}
+        if ids:
+            marks = ','.join('?' * len(ids))
+            for u in conn.execute(f"SELECT id, username, display_name, email FROM users WHERE id IN ({marks})", tuple(ids)):
+                names[u['id']] = u['username'] or u['display_name'] or u['email'] or f"#{u['id']}"
+        for r in result:
+            r['created_by_name'] = names.get(r['created_by'])
+            r['used_by_name'] = names.get(r['used_by'])
+    return result
 
 
 def revoke(conn, issuer, token_id, *, ip: Optional[str] = None, now: Optional[datetime] = None) -> bool:
