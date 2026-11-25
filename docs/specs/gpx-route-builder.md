@@ -89,12 +89,12 @@ Le module `routing` ne lit ni `os.environ` ni la base : sa configuration vient d
 
 ### 5.2 Édition des points (front)
 
-- **RB-2.1** Entrée « Créer une trace » dans la barre d'outils du visualiseur ; un mode actif à la fois.
+- **RB-2.1** Entrée « Créer une trace » dans la barre d'outils du visualiseur ; un mode actif à la fois : ouvrir le constructeur **ferme** l'éditeur de points du visualiseur (et tout autre mode qui écoute la carte), et réciproquement ; un clic sur la carte n'est traité que par le mode actif (décision de l'utilisateur, 2026-11-25, matrice de conformité, E-6 : à corriger, les deux modes s'ouvrent ensemble dans le code livré).
 - **RB-2.2** Clic/tap ⇒ ajoute un point à la fin ; glisser ⇒ déplace ; clic sur un point ⇒ supprimer / insérer avant ; annuler / rétablir (Ctrl+Z / Ctrl+Y et boutons) ; « Tout effacer » avec confirmation **in-page**.
 - **RB-2.3** Points numérotés dans l'ordre de passage ; le point 1 est le départ **et** l'arrivée. La prévisualisation montre le segment de fermeture (dernier point → point 1).
 - **RB-2.4** 1 à **50** points (réglage, plafond dur 100), contrôle front et serveur.
 - **RB-2.5** Prévisualisation à vol d'oiseau (pointillés, boucle fermée) et sa longueur, calculées localement.
-- **RB-2.6 (n5)** Avertissement in-page avant de quitter avec des points non générés ; points en cours en `localStorage` (try/catch), rien d'autre. Ces positions sont **effacées à la déconnexion** (formulaire de logout) et quand l'utilisateur courant change (clé de stockage suffixée par l'identifiant de compte ; une clé d'un autre compte est supprimée à l'ouverture du mode).
+- **RB-2.6 (n5)** Avertissement in-page avant de quitter avec des points non générés ; points en cours en `localStorage` (try/catch) : positions des points, **activité et distance** saisies, rien d'autre (décision de coord, 2026-11-25, à relire par l'utilisateur : activité et distance gardées pour ne pas perdre le formulaire au rechargement). Ces positions sont **effacées à la déconnexion** (formulaire de logout, **depuis n'importe quelle page** : l'effacement est porté par le script commun chargé partout, pas par le script du mode ; décision de l'utilisateur, 2026-11-25, matrice de conformité, E-7 : à corriger) et quand l'utilisateur courant change (clé de stockage suffixée par l'identifiant de compte ; une clé d'un autre compte est supprimée à l'ouverture du mode).
 
 ### 5.3 Paramètres
 
@@ -179,7 +179,7 @@ Résultats détaillés dans l'ADR-0010. Ces exigences complètent RB-4.1 à RB-4
 
 | Réglage | Type | Défaut |
 |---|---|---|
-| `routing.provider` | enum | `graphhopper` |
+| ~~`routing.provider`~~ | — | **pas de réglage en v1** : GraphHopper est le seul fournisseur ; un autre adaptateur reste possible sans toucher au builder (CA-R18) (décision de coord, 2026-11-25, à relire par l'utilisateur, E-28) |
 | `routing.base_url` | url `http(s)` | vide (ex. `http://graphhopper:8989`) |
 | `routing.api_key` | secret | vide (inutile en auto-hébergé) |
 | `routing.timeout_s` | float 1–60 | 20 (par appel) |
@@ -240,7 +240,7 @@ Codes (M9, M13) :
 | 400 | Entrée invalide (dont point hors emprise, nom invalide) |
 | 404 | Fonction indisponible pour l'utilisateur, moteur **non configuré**, `result_id` inconnu |
 | 409 | Résultat déjà enregistré |
-| 413 | Quota de stockage atteint (comportement d'ingestion existant) |
+| 413 | Quota de stockage atteint à l'enregistrement : message « Quota de stockage atteint : supprime des activités » (décision de l'utilisateur, 2026-11-25, matrice de conformité, E-8 : le code livré répond 503) |
 | 422 | Point non approchable, hors des données, aucune boucle possible |
 | 429 | Limite par utilisateur, génération simultanée du même utilisateur, **sémaphore de génération plein** |
 | 502 | Réponse du moteur invalide (`InvalidResponse`) |
@@ -288,6 +288,11 @@ Les critères marqués **[CI]** se vérifient en intégration continue avec le p
 | CA-R27 [CI] (m10) | 201e résultat en mémoire (tous utilisateurs) ⇒ le plus ancien est évincé ; son `save` ⇒ 404. |
 | CA-R28 (n5) | Déconnexion ⇒ points en cours absents du `localStorage` ; un autre compte ouvrant le mode sur le même navigateur ne voit pas les points du précédent. |
 | CA-R29 [CI] (n8, R3) | Instance démarrée sans aucun sondage exécuté (cache vide) ⇒ `options` : `available: false`, couverture configurée présente ; `route` ⇒ 503 sans appel au moteur. Après `run_task('routing_health')` réussi ⇒ `available: true`. Avec `INBOX_ENABLED=0` et sans `DEM_URL`, la tâche `routing_health` est bien planifiée par l'ordonnanceur (`tick(now)`). |
+| CA-R35 [CI/recette] (RB-2.1, E-6) | Éditeur de points ouvert puis « Créer une trace » ⇒ l'éditeur est fermé ; constructeur ouvert puis ouverture de l'éditeur ⇒ le constructeur est fermé (points en cours conservés en `localStorage`) ; un clic sur la carte avec le constructeur ouvert ajoute **un** point de trace et n'ouvre **aucun** formulaire de point. Test de comportement dans un navigateur (pas une recherche de chaîne), ou recette manuelle à défaut. |
+| CA-R36 [CI/recette] (RB-2.6, E-7) | Points en cours dans le constructeur, puis déconnexion depuis **le tableau de bord**, **l'administration**, **le profil** et **les tronçons** (une fois chacun) ⇒ aucune clé `kmlviewer.routeBuilder.*` dans le `localStorage` après la déconnexion, y compris quand la fonction bêta n'est pas disponible pour le compte. La valeur stockée ne contient que les points, l'activité et la distance. |
+| CA-R37 [CI] (§7, E-8) | Quota de stockage de l'utilisateur atteint, `save` d'un résultat valide ⇒ **413** avec le message « Quota de stockage atteint : supprime des activités » ; aucune activité créée ; le résultat reste en mémoire et un `save` après libération de place ⇒ 200. |
+| CA-R38 [CI] (RB-4.7, E-24) | **1 point** : provider factice dont la boucle `round_trip` commence à plus de `snap_tolerance_m` (50 m) de P1, ou ne se referme pas sur son point de départ ⇒ trace écartée comme à ≥ 2 points ; si aucune graine ne donne de trace valable ⇒ **422** « Le point 1 est trop loin d'une voie praticable : rapproche-le d'un chemin. » (ou « Aucune trace possible… » si la fermeture seule échoue) ; boucle qui part à 30 m de P1 et se referme ⇒ 200, `route_meta` avec écart et recouvrement. |
+| CA-R39 [CI] (P-TR5-7, E-26) | `APP_TIMEZONE=Europe/Paris`, horloge injectée au 2026-11-25 à 23 h 30 UTC : `route` ⇒ `filename` (nom prérempli) « Trace planifiée du 26/11/2026 » ; `save` sans `name` ⇒ même date. Au 2026-11-25 à 12 h UTC ⇒ « …du 25/11/2026 ». |
 
 ## 9. Cas limites et risques
 
@@ -425,7 +430,7 @@ Points que la spec laissait implicites, relevés avant le développement de TR5 
 - **P-TR5-4 Contrat de `route`** : `seed` entier de 0 à 2³¹ − 1, facultatif (absent ⇒ tiré par le serveur). Réponse : payload du visualiseur + `route_meta` (RB-4.9) avec en plus `seed` (graine de la trace retenue), **`next_seed`** (graine qui suit la dernière essayée : le front la renvoie pour « Autre proposition », RB-4.5, RB-4.12), `attempts`, `ascent_m` / `descent_m` (`null` sans altitude, RB-4.8) et `warnings: [{code, message}]` à codes stables (`min_distance`, `target_gap`, `overlap`, `add_waypoint`, `closing_point_removed`, `engine`).
 - **P-TR5-5 `routing.profiles`** : **gardé en code** (table RB-3.1) pour la bêta, pas dans le registre : sa validation dépend de la liste annoncée par le moteur, donc de l'état du cache de santé. Il entrera au registre si le besoin apparaît. *Retire une ligne de §5.6 : à confirmer.*
 - **P-TR5-6 Génération en cours après « Annuler »** : la place « une génération simultanée par utilisateur » reste prise jusqu'à la fin côté serveur (budget de temps) ; une nouvelle demande pendant ce temps ⇒ 429 « une génération est encore en cours, réessaie dans quelques secondes ». Le limiteur horaire compte chaque génération **acceptée** (après validation, avant le premier appel au moteur) ; une requête refusée en 400 ne compte pas.
-- **P-TR5-7 Enregistrement** : `ingest_bytes(kind='planned', source='route_builder', defer_elevation=True)` puis `wake('dem_backfill')`, comme un upload (RB-4.8) ; nom par défaut daté dans `APP_TIMEZONE`.
+- **P-TR5-7 Enregistrement** : `ingest_bytes(kind='planned', source='route_builder', defer_elevation=True)` puis `wake('dem_backfill')`, comme un upload (RB-4.8) ; nom par défaut daté dans `APP_TIMEZONE`, **y compris celui que le front préremplit** (`filename` du résultat de `route`) : le code livré date à l'heure du serveur (à corriger, décision de coord, 2026-11-25, à relire par l'utilisateur, E-26, CA-R39).
 - **P-TR5-8 Taille comptée pour le plafond de 256 Mo** (RB-5.2) : octets du GPX + octets du payload sérialisé en JSON, par résultat.
 - **P-TR5-9 Diagnostic pour l'onglet admin** (RB-1.2, RB-1.3) : exposé à l'API admin des fonctions bêta (admin-space §15 P-T14-5) : `configured`, `available`, `checked_at`, `info_bbox`, `coverage_contained` (rectangle configuré contenu dans celui de `/info`), profils annoncés.
 
@@ -435,5 +440,5 @@ Points que la spec laissait implicites, relevés avant le développement de TR5 
 - **P-TR6-3 Champ distance** : `type=number`, `min` 1, `max` = `options.max_km`, `step` 0,5 ; obligatoire avec 1 point ; vide avec ≥ 2 points ⇒ pas de cible (RB-3.2).
 - **P-TR6-4 Couverture** : rectangle `coverage_bbox` tracé en pointillés en mode édition ; clic hors rectangle ⇒ point refusé, message in-page « hors de la zone couverte ».
 - **P-TR6-5 Après génération** : trace injectée comme un upload ; panneau avec distance, D+ (si présent), écart à la cible, avertissements (`message`), boutons **Enregistrer** (nom prérempli, modifiable), **Autre proposition** (envoie `next_seed`), **Modifier les points** (retour à l'édition, points conservés). Enregistrement réussi ⇒ lien vers la trace dans la bibliothèque ; 409 ⇒ « déjà enregistrée » avec le lien.
-- **P-TR6-6 Stockage local** : clé `kmlviewer.routeBuilder.v1.<id du compte>` ; à l'envoi du formulaire de déconnexion, suppression de toutes les clés de préfixe `kmlviewer.routeBuilder.` ; à l'ouverture du mode, suppression des clés d'un autre compte (RB-2.6). Piles annuler/rétablir en mémoire seulement, 100 états au plus.
+- **P-TR6-6 Stockage local** : clé `kmlviewer.routeBuilder.v1.<id du compte>` ; à l'envoi du formulaire de déconnexion, **sur toute page** (script commun), suppression de toutes les clés de préfixe `kmlviewer.routeBuilder.` ; seuls les points, l'activité et la distance sont stockés (RB-2.6) ; à l'ouverture du mode, suppression des clés d'un autre compte (RB-2.6). Piles annuler/rétablir en mémoire seulement, 100 états au plus.
 - **P-TR6-7 Bibliothèque** : badge « Planifiée » et filtre « Toutes · Réalisées · Planifiées » sur la liste servie par `activity_store.list_for_user` (RB-5.5), défaut « Toutes ».

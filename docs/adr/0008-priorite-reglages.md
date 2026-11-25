@@ -10,6 +10,7 @@ Des réglages aujourd'hui en env deviennent modifiables depuis l'admin. La spec 
 - L'env devient valeur initiale et de repli. Tout réglage **du registre** est modifiable dans l'UI.
 - « Revenir à la valeur par défaut » = supprimer la ligne en base ; l'env (ou le défaut) redevient effectif.
 - Les secrets suivent la même règle (secret en base > secret en env).
+  - **Amendement du 2026-11-25** (décision de coord, 2026-11-25, à relire par l'utilisateur, matrice de conformité E-17) : en v1, **les secrets ne viennent que de la base** ; aucune variable d'env de secret n'est lue. La règle ci-dessus reste le cadre si un secret d'env est ajouté un jour (avec la liaison à la destination d'env d'ADR-0011).
 
 ## Garde-fous rendus nécessaires par ce choix
 - **Frontière stricte** : les réglages d'amorçage et de sécurité (`SECRET_KEY`, `SECRETS_KEY`, `AUTH_MODE`, `OIDC_*`, `PUBLIC_URL`, `WEBAUTHN_RP_ID`, `OUTBOUND_ALLOWED_HOSTS`, `TRUSTED_HOSTS`, `TRUST_PROXY*`, `SESSION_*`, `DATA_DIR`, `DB_PATH`, `LOG_LEVEL`) et les bornes anti-abus **ne sont pas dans le registre** : ni stockables en base, ni modifiables dans l'UI. Tout ajout au registre touchant l'authentification, les sessions, les limites dures ou une destination sortante passe par une revue sécurité.
