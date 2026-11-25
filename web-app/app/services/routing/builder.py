@@ -61,7 +61,7 @@ class BuildConfig:
     total_budget_s: float = 30.0
     detour_strategy: str = 'hybrid'
     seed_retries: int = 2
-    coverage_bbox: Optional[tuple] = None        # emprise de la zone : (lat_min, lon_min, lat_max, lon_max) ; RB-1.3, avant tout appel
+    coverage_bbox: Optional[tuple] = None        # emprise de la zone (lat_min, lon_min, lat_max, lon_max) ; RB-1.3
     coverage_polygon: Optional[tuple] = None     # sommets (lon, lat) du polygone en vigueur (RB-1.3b) ; None : le rectangle
 
     def zone_vertices(self) -> Optional[list]:

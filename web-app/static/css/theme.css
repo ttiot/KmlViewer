@@ -1455,3 +1455,21 @@ input[type="range"] {
     font-weight: 600;
     color: var(--text);
 }
+
+/* La mention et l'erreur partagent une seule ligne réservée au-dessus de la carte : la carte ne se décale jamais pendant un geste */
+.polygon-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.polygon-editor > .poly-slot {
+    grid-row: 1;
+    grid-column: 1;
+    min-height: 1.5em;
+    margin: 0;
+}
+
+.polygon-editor > .poly-slot[hidden] {
+    display: block;
+    visibility: hidden;
+}

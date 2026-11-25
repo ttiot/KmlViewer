@@ -430,9 +430,9 @@ const AdminSettings = (() => {
     function polygonEditor(setting) {
         const key = setting.key;
         const holder = el('div', { class: 'polygon-editor' });
-        const mention = el('p', { class: 'hint mb-1', hidden: true }, 'Zone actuelle : le rectangle. Modifie un sommet pour en faire un polygone.');
+        const mention = el('p', { class: 'hint mb-1 poly-slot', hidden: true }, 'Zone actuelle : le rectangle. Modifie un sommet pour en faire un polygone.');
         const dims = el('p', { class: 'hint mb-1' });
-        const problem = el('p', { class: 'setting-error', role: 'alert', hidden: true });
+        const problem = el('p', { class: 'setting-error poly-slot', role: 'alert', hidden: true });     // même case que la mention : la carte ne bouge jamais
         const notice = el('p', { class: 'hint mb-1', role: 'status' });                // « 50 sommets au plus. », « 3 sommets au moins. »
         const preview = el('div', { class: 'poly-preview', role: 'group',
             'aria-label': 'Carte de la zone couverte : déplace les sommets, ou saisis-les dans la liste' });
@@ -536,7 +536,7 @@ const AdminSettings = (() => {
             const issue = S.polygonIssues[key] || (rect ? null : Zone.check(value));
             problem.textContent = issue || '';
             problem.hidden = !issue;
-            mention.hidden = !rect;
+            mention.hidden = !rect || !!issue;
             const vs = shown();
             if (vs.length >= 3 && drawable(vs)) {
                 const { width, height } = Zone.sides(vs);

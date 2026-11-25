@@ -218,7 +218,8 @@ def poly_editor(page, c):
     page.mouse.up()
     page.wait_for_timeout(300)
     c('ramené à sa place : erreur levée, trait plein', problem(page) == '' and not dashed(page), (problem(page), dashed(page)))
-    # la boîte de la carte se décale d'une dizaine de pixels au premier appui (mise en page) : tolérance de 15 px (≈ 0,35°) ici
+    # au premier geste la boîte de la carte se décale (mention retirée, liseré « non enregistré » : 13 px à droite) :
+    # tolérance de 15 px (≈ 0,35°) tant que la mise en page bouge pendant le geste
     c('ramené à sa place : le sommet est revenu', closeto(vertices(page)[2], RECT[2], 0.35), vertices(page)[2])
     # relâché hors de la carte : l'erreur reste, « Enregistrer » ne s'ouvre pas, les poignées restent actives, la liste corrige
     rb27.mouse_drag(page, centre(page, 3), away)

@@ -56,8 +56,8 @@ def validate(value) -> list:
         raise ValueError("Zone : emprise de 2 000 km de côté au plus.")
     crossing = first_crossing(vertices)
     if crossing is not None:
-        (i, j), (k, l) = crossing
-        raise ValueError(f"Zone : le contour se croise (arêtes {i}–{j} et {k}–{l}).")
+        (a, b), (c, d) = crossing
+        raise ValueError(f"Zone : le contour se croise (arêtes {a}–{b} et {c}–{d}).")
     return vertices
 
 
@@ -129,7 +129,7 @@ def rectangle_vertices(bbox) -> list:
 
 
 def effective_zone(get: Callable[[str], object]) -> list:
-    """Sommets `[lon, lat]` de la zone en vigueur ; `[]` si ni polygone ni rectangle exploitable. `get` : clé -> valeur du registre."""
+    """Sommets `[lon, lat]` de la zone en vigueur ; `[]` si ni polygone ni rectangle exploitable. `get` : clé -> valeur."""
     try:
         polygon = validate(get('routing.coverage_polygon'))
     except (KeyError, ValueError):

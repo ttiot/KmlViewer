@@ -226,7 +226,7 @@ class Setting:
 
     @staticmethod
     def _polygon(value):
-        """Zone couverte en polygone (EF-6.20) : `[]` (aucun polygone) ou 3 à 50 sommets `[lon, lat]` ; contrôles dans `zone.validate`."""
+        """Zone couverte en polygone (EF-6.20) : `[]` ou 3 à 50 sommets `[lon, lat]` ; contrôles dans `zone.validate`."""
         from app.services.routing import zone
         return zone.validate(value)
 

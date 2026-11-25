@@ -83,7 +83,7 @@ class DetourContext:
     budget: Budget
     bbox: tuple                      # (lat_min, lon_min, lat_max, lon_max) où les points techniques doivent rester (RB-S7)
     accepts: Callable = lambda points: True       # contrôle d'ordre et de fermeture d'un candidat
-    area: Optional[list] = None      # sommets [lon, lat] du polygone : un point technique n'en sort jamais (RB-1.3b) ; None : l'emprise suffit
+    area: Optional[list] = None      # sommets [lon, lat] du polygone : aucun point technique n'en sort (RB-1.3b)
 
     def in_tolerance(self, distance_m: float) -> bool:
         return abs(distance_m - self.target_m) <= self.tolerance * self.target_m
@@ -170,7 +170,7 @@ class LateralPoints(DetourStrategy):
             for i, (a, b) in enumerate(zip(seq, seq[1:])):
                 waypoints.append(a)
                 tech = _clamp(_offset_point(a, b, heights[i] * scale, sides[i]), ctx.bbox)
-                if ctx.area:                                      # RB-1.3b : ramené dans le polygone, ou pas de point à ce tronçon
+                if ctx.area:                           # RB-1.3b : ramené dans le polygone, ou pas de point à ce tronçon
                     tech = zone.pull_inside(ctx.area, ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), tech)
                 if tech is not None:
                     waypoints.append(tech)
