@@ -496,3 +496,52 @@ def test_a_connection_that_never_completes_is_cut_at_the_deadline():
         for filler in fillers:
             filler.close()
         listener.close()
+
+
+def test_consecutive_calls_never_reuse_a_connection_the_previous_call_cut_even_with_a_keep_alive_server():
+    """Régression CI (Python 3.15) : un serveur qui GARDE la connexion ouverte la laissait au pool ; l'appel suivant la réutilisait
+    après le shutdown de fin d'appel et échouait (reprise 5xx sautée, sonde /info sans emprise)."""
+    import socket as socket_module
+    import threading as threading_module
+    listener = socket_module.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(5)
+    stop = threading_module.Event()
+    served = []
+    body = json.dumps({'paths': [{'distance': 10.0, 'points': {'coordinates': [[3.0, 50.0], [3.1, 50.1]]}}]}).encode()
+
+    def handle(conn):
+        conn.settimeout(3)
+        try:
+            while not stop.is_set():
+                data = conn.recv(65536)
+                if not data:
+                    return
+                served.append(data)
+                status = b'503 Service Unavailable' if len(served) == 1 else b'200 OK'
+                payload = b'down' if len(served) == 1 else body
+                conn.sendall(b'HTTP/1.1 ' + status + b'\r\nContent-Type: application/json\r\nContent-Length: '
+                             + str(len(payload)).encode() + b'\r\nConnection: keep-alive\r\n\r\n' + payload)   # ignore « Connection: close »
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def serve():
+        listener.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                continue
+            threading_module.Thread(target=handle, args=(conn,), daemon=True).start()
+
+    threading_module.Thread(target=serve, daemon=True).start()
+    try:
+        import time as time_module
+        gh = GraphHopperProvider(f'http://127.0.0.1:{listener.getsockname()[1]}', guard=lambda d: None, timeout_s=5)
+        result = gh.route([LILLE, (50.7, 3.1)], 'foot', time_module.monotonic() + 10)        # 503 puis reprise sur une AUTRE connexion
+        assert result.distance_m == 10.0 and len(served) == 2
+    finally:
+        stop.set()
+        listener.close()

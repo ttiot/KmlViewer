@@ -74,11 +74,18 @@ class _Registry:
         _cut(sock)
 
     def close(self) -> None:
+        """Échéance : coupe les sockets de l'appel (et ceux créés plus tard)."""
         with self._lock:
             self.closed = True
             socks, self._socks = self._socks, []
         for sock in socks:
             _cut(sock)
+
+    def detach(self) -> None:
+        """Fin NORMALE de l'appel : on ne touche plus aux sockets (ils appartiennent à la session de l'appel, qui les ferme)."""
+        with self._lock:
+            self.closed = True
+            self._socks = []
 
 
 def _cut(sock) -> None:
@@ -146,7 +153,7 @@ class GraphHopperProvider(RoutingProvider):
         self._timeout = float(timeout_s)
         self._key = api_key or None
         self._guard = guard
-        self._session = session if session is not None else _new_session()
+        self._session = session                          # None : une session NEUVE par appel (aucune connexion réutilisée)
         self._clock = clock
 
     # -- transport ---------------------------------------------------------------------------------------------------
@@ -184,21 +191,29 @@ class GraphHopperProvider(RoutingProvider):
         if not done.wait(max(0.0, time_left(deadline, self._clock))):
             registry.close()
             raise RoutingTimeout()
-        registry.close()
+        registry.detach()
         if 'error' in outcome:
             raise outcome['error']
         return outcome['value']
 
     def _exchange(self, path, params, timeout, deadline, headers):
         expired = lambda: deadline is not None and time_left(deadline, self._clock) <= 0      # noqa: E731
+        own = self._session is None
+        session = _new_session() if own else self._session
         try:
-            response = self._session.get(f'{self._base}{path}', params=params, timeout=timeout, allow_redirects=False,
-                                         stream=True, headers=headers)
+            response = session.get(f'{self._base}{path}', params=params, timeout=timeout, allow_redirects=False,
+                                   stream=True, headers=headers)
         except requests.Timeout:
+            if own:
+                session.close()
             raise RoutingTimeout() from None
         except requests.TooManyRedirects:
+            if own:
+                session.close()
             raise InvalidResponse() from None
         except Exception:  # noqa: BLE001 - connexion coupée par l'échéance ou injoignable : jamais le détail
+            if own:
+                session.close()
             raise (RoutingTimeout() if expired() else RoutingUnavailable()) from None
         try:
             status = response.status_code
@@ -225,6 +240,8 @@ class GraphHopperProvider(RoutingProvider):
             return status, bytes(body)
         finally:
             response.close()
+            if own:
+                session.close()                      # ferme la connexion de CET appel, jamais celle d'un autre
 
     def _call(self, path: str, params, deadline: float):
         """GET avec reprises limitées sur 5xx / connexion, jamais au-delà de l'échéance."""
