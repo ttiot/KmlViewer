@@ -976,7 +976,13 @@ def dashed(page):
     return (page.locator(RECT_PATH).get_attribute('stroke-dasharray') or 'none') not in ('none', '', '0')
 
 
+def in_view(page, which):
+    """La page est plus longue que la fenêtre : la poignée est amenée dans la partie visible (défilement immédiat)."""
+    handle(page, which).evaluate("e => e.scrollIntoView({ behavior: 'instant', block: 'center' })")
+
+
 def mouse_drag(page, which, dx, dy, release=True, steps=12):
+    in_view(page, which)
     x, y = centre_of(handle(page, which))
     page.mouse.move(x, y)
     page.mouse.down()
@@ -990,6 +996,7 @@ def mouse_drag(page, which, dx, dy, release=True, steps=12):
 
 def touch_hold(page, which, dx, dy, steps=12):
     """Doigt posé sur la poignée puis déplacé, SANS relâcher : renvoie la fonction qui lève le doigt."""
+    in_view(page, which)
     x, y = centre_of(handle(page, which))
     cdp = page.context.new_cdp_session(page)
     cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
@@ -1910,6 +1917,9 @@ def main():
                      settings_registry, settings_hidden_error, settings_reading, settings_rectangle_map]
         import rb27                                              # RB-2.7 : CA-R41 à CA-R48 (tests_browser/rb27.py)
         runs += rb27.RUNS
+        if SETTINGS:
+            import zone_front                                    # polygone : CA-86, CA-R50, CA-R51 (tests_browser/zone_front.py)
+            runs += zone_front.RUNS
         only = os.environ.get('BENCH_ONLY')                      # sous-chaîne du nom de la fonction : ne rejoue que ces scénarios
         if only:
             runs = [r for r in runs if only in r.__name__]

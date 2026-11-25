@@ -1,0 +1,544 @@
+{
+ "description": "Jeu de cas commun de la zone couverte (CA-R51) : joué par la CI contre app/services/routing/zone.py (tests/test_zone_edge.py) et, plus tard, par le banc contre la fonction du front. Point = [latitude, longitude] ; sommets = [longitude, latitude] ; expected = appartenance à la zone sur la carte (Web Mercator), bord compris.",
+ "zones": {
+  "rectangle_par_defaut": {
+   "rectangle": [
+    1.35,
+    48.83,
+    6.42,
+    51.55
+   ]
+  },
+  "u_ouvert_au_nord": {
+   "polygon": [
+    [
+     2,
+     49
+    ],
+    [
+     5,
+     49
+    ],
+    [
+     5,
+     51
+    ],
+    [
+     4,
+     51
+    ],
+    [
+     4,
+     50
+    ],
+    [
+     3,
+     50
+    ],
+    [
+     3,
+     51
+    ],
+    [
+     2,
+     51
+    ]
+   ]
+  },
+  "triangle_nord_ouest": {
+   "polygon": [
+    [
+     2.0,
+     48.9
+    ],
+    [
+     6.3,
+     51.5
+    ],
+    [
+     2.0,
+     51.5
+    ]
+   ]
+  },
+  "triangle_sud_est": {
+   "polygon": [
+    [
+     2.0,
+     48.9
+    ],
+    [
+     6.3,
+     48.9
+    ],
+    [
+     6.3,
+     51.5
+    ]
+   ]
+  },
+  "losange": {
+   "polygon": [
+    [
+     3,
+     49
+    ],
+    [
+     4,
+     50
+    ],
+    [
+     3,
+     51
+    ],
+    [
+     2,
+     50
+    ]
+   ]
+  }
+ },
+ "cases": [
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "Lille",
+   "point": [
+    50.6292,
+    3.0573
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "Liège",
+   "point": [
+    50.6326,
+    5.5797
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "Londres",
+   "point": [
+    51.5072,
+    -0.1276
+   ],
+   "expected": false
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "Amsterdam",
+   "point": [
+    52.3676,
+    4.9041
+   ],
+   "expected": false
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "angle sud-ouest",
+   "point": [
+    48.83,
+    1.35
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "angle sud-est",
+   "point": [
+    48.83,
+    6.42
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "angle nord-est",
+   "point": [
+    51.55,
+    6.42
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "angle nord-ouest",
+   "point": [
+    51.55,
+    1.35
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "bord sud",
+   "point": [
+    48.83,
+    3.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "bord nord",
+   "point": [
+    51.55,
+    3.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "bord ouest",
+   "point": [
+    50,
+    1.35
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "bord est",
+   "point": [
+    50,
+    6.42
+   ],
+   "expected": true
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "1e-6 au sud du bord sud",
+   "point": [
+    48.829999,
+    3.5
+   ],
+   "expected": false
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "1e-6 au nord du bord nord",
+   "point": [
+    51.550001,
+    3.5
+   ],
+   "expected": false
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "1e-6 à l'ouest du bord ouest",
+   "point": [
+    50,
+    1.349999
+   ],
+   "expected": false
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "1e-6 à l'est du bord est",
+   "point": [
+    50,
+    6.420001
+   ],
+   "expected": false
+  },
+  {
+   "zone": "rectangle_par_defaut",
+   "name": "centre",
+   "point": [
+    50,
+    4
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "échancrure",
+   "point": [
+    50.5,
+    3.5
+   ],
+   "expected": false
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "branche gauche",
+   "point": [
+    50.5,
+    2.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "branche droite",
+   "point": [
+    50.5,
+    4.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "base",
+   "point": [
+    49.5,
+    3.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "sommet extérieur sud-ouest",
+   "point": [
+    49,
+    2
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "sommet intérieur de l'échancrure",
+   "point": [
+    50,
+    3
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "sur l'arête verticale de l'échancrure",
+   "point": [
+    50.5,
+    3.0
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "1e-6 dans l'échancrure",
+   "point": [
+    50.5,
+    3.000001
+   ],
+   "expected": false
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "1e-6 dans la branche",
+   "point": [
+    50.5,
+    2.999999
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "1e-6 hors de l'arête extérieure est",
+   "point": [
+    49.5,
+    5.000001
+   ],
+   "expected": false
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "milieu de l'arête nord de la branche gauche",
+   "point": [
+    51,
+    2.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "milieu du fond de l'échancrure",
+   "point": [
+    50,
+    3.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "dans l'emprise, au-dessus de l'échancrure",
+   "point": [
+    50.9,
+    3.5
+   ],
+   "expected": false
+  },
+  {
+   "zone": "u_ouvert_au_nord",
+   "name": "hors de l'emprise",
+   "point": [
+    52,
+    3.5
+   ],
+   "expected": false
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "arête diagonale de 420 km : entre la droite lon/lat et la droite de la carte, côté sud de la carte",
+   "point": [
+    50.2088,
+    4.15
+   ],
+   "expected": false
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "au-dessus des deux droites",
+   "point": [
+    50.2268,
+    4.15
+   ],
+   "expected": true
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "sous les deux droites",
+   "point": [
+    50.19,
+    4.15
+   ],
+   "expected": false
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "sur l'arête diagonale (carte)",
+   "point": [
+    50.21770822,
+    4.15
+   ],
+   "expected": true
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "1e-6° au sud de l'arête diagonale (carte)",
+   "point": [
+    50.21770722,
+    4.15
+   ],
+   "expected": false
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "1e-6° au nord de l'arête diagonale (carte)",
+   "point": [
+    50.21770922,
+    4.15
+   ],
+   "expected": true
+  },
+  {
+   "zone": "triangle_nord_ouest",
+   "name": "sommet",
+   "point": [
+    48.9,
+    2.0
+   ],
+   "expected": true
+  },
+  {
+   "zone": "triangle_sud_est",
+   "name": "même point entre les deux droites, triangle opposé : dedans sur la carte",
+   "point": [
+    50.2088,
+    4.15
+   ],
+   "expected": true
+  },
+  {
+   "zone": "triangle_sud_est",
+   "name": "au-dessus des deux droites",
+   "point": [
+    50.2268,
+    4.15
+   ],
+   "expected": false
+  },
+  {
+   "zone": "triangle_sud_est",
+   "name": "sous les deux droites",
+   "point": [
+    50.19,
+    4.15
+   ],
+   "expected": true
+  },
+  {
+   "zone": "losange",
+   "name": "centre",
+   "point": [
+    50,
+    3
+   ],
+   "expected": true
+  },
+  {
+   "zone": "losange",
+   "name": "rayon horizontal par un sommet : dedans",
+   "point": [
+    50,
+    2.5
+   ],
+   "expected": true
+  },
+  {
+   "zone": "losange",
+   "name": "rayon horizontal par un sommet : dehors à l'ouest",
+   "point": [
+    50,
+    1.9
+   ],
+   "expected": false
+  },
+  {
+   "zone": "losange",
+   "name": "rayon horizontal par un sommet : dehors à l'est",
+   "point": [
+    50,
+    4.1
+   ],
+   "expected": false
+  },
+  {
+   "zone": "losange",
+   "name": "sur le sommet est",
+   "point": [
+    50,
+    4.0
+   ],
+   "expected": true
+  },
+  {
+   "zone": "losange",
+   "name": "près de la pointe est",
+   "point": [
+    50,
+    3.9
+   ],
+   "expected": true
+  },
+  {
+   "zone": "losange",
+   "name": "sous le centre",
+   "point": [
+    49.5,
+    3.0
+   ],
+   "expected": true
+  },
+  {
+   "zone": "losange",
+   "name": "loin à l'ouest",
+   "point": [
+    50,
+    1.5
+   ],
+   "expected": false
+  }
+ ]
+}

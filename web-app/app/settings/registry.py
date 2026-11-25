@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlsplit
 
-TYPES = ('int', 'float', 'bool', 'str', 'enum', 'list', 'url', 'email', 'timezone', 'basemaps', 'rectangle')
+TYPES = ('int', 'float', 'bool', 'str', 'enum', 'list', 'url', 'email', 'timezone', 'basemaps', 'rectangle', 'polygon')
 BASEMAP_KEYS = frozenset({'name', 'url', 'subdomains', 'attribution', 'max_zoom'})
 # Sections du registre, dans l'ordre d'affichage des sous-onglets de l'admin (EF-6.9)
 SECTIONS = ('Sécurité', 'E-mail', 'Carte', 'Traces planifiées', 'Altitude', 'Dossier surveillé', 'Stockage', 'Général')
@@ -58,7 +58,7 @@ class Setting:
             'str': not self.max_length, 'enum': not self.choices,
             'list': not self.max_items or not self.max_length, 'bool': False,
             'url': not self.max_length or not self.schemes, 'email': not self.max_length,
-            'timezone': not self.max_length, 'basemaps': not self.max_items, 'rectangle': False,
+            'timezone': not self.max_length, 'basemaps': not self.max_items, 'rectangle': False, 'polygon': False,
         }[self.type]
         if missing:
             raise ValueError(f"Réglage {self.key!r} : bornes obligatoires manquantes")
@@ -93,6 +93,8 @@ class Setting:
             return self._basemaps(value)
         if kind == 'rectangle':
             return self._rectangle(value)
+        if kind == 'polygon':
+            return self._polygon(value)
         if kind == 'url':
             return self._url(value)
         if kind == 'email':
@@ -222,6 +224,12 @@ class Setting:
             raise ValueError("Rectangle : côté de 2 000 km au plus")
         return [lon_min, lat_min, lon_max, lat_max]
 
+    @staticmethod
+    def _polygon(value):
+        """Zone couverte en polygone (EF-6.20) : `[]` (aucun polygone) ou 3 à 50 sommets `[lon, lat]` ; contrôles dans `zone.validate`."""
+        from app.services.routing import zone
+        return zone.validate(value)
+
     def _email(self, value):
         """Une seule adresse, sans blanc, ni saut de ligne, ni séparateur ou caractère de liste d'en-têtes."""
         text = self._string(value, self.max_length)
@@ -326,6 +334,7 @@ _ENTRIES = (
     _int('routing.seed_retries', 2, 0, 2, 'Traces planifiées', "Essais de graine supplémentaires", unit=''),
     Setting('routing.coverage_bbox', 'rectangle', [1.35, 48.83, 6.42, 51.55], 'Traces planifiées',
             "Zone couverte (lon min, lat min, lon max, lat max)"),
+    Setting('routing.coverage_polygon', 'polygon', [], 'Traces planifiées', "Zone couverte (polygone)"),
     _int('routing.max_concurrent', 2, 1, 4, 'Traces planifiées', "Générations simultanées sur l'instance", unit=''),
     # Tâches de fond (EF-6.5) : relues à chaque tour de l'ordonnanceur, aucun redémarrage
     Setting('INBOX_ENABLED', 'bool', True, 'Dossier surveillé', "Surveiller le dossier d'import", env='INBOX_ENABLED'),

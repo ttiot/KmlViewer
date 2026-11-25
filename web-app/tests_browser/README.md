@@ -57,6 +57,10 @@ Les deux images locales (`kmlviewer-bench-app:<hachage de requirements.txt>` et 
   (n) rectangle édité sur la carte (CA-83) : poignées, souris, doigt réel (`hasTouch` + CDP), clavier, bornes, champs synchronisés, `PATCH` unique, aucune requête hors tuiles autorisées.
 - **(j) / (l) Invitations** : profil d'un compte SSO (cookie signé par l'application, IdP jamais joint), puis onglet Invitations de l'administration (CA-84 : « Émise par », statuts, compte créé, comptes supprimés, texte seul).
 - **(k) Constructeur** : points effacés du stockage local après l'enregistrement (réussi ou « déjà enregistrée »), gardés sinon (CA-R40).
+- **(w) (w2) (x) (y) Zone couverte en polygone** (`zone_front.py`, CA-86, CA-R50, CA-R51) : (w) éditeur de Réglages (rectangle en 4 sommets, contour croisé refusé et corrigé,
+  insertion sur une arête à 9 / 12 px, clic droit, minimum 3 et maximum 50, contour fermé collé, clavier, liste, un seul `PATCH`, « Inutilisé » sur la ligne du rectangle, retour au rectangle,
+  390 px) ; (w2) mêmes gestes au doigt réel ; (x) constructeur : contour de la zone, refus dans l'échancrure d'un U, point glissé dans l'échancrure avec retour exact ;
+  (y) le jeu de cas commun `zone_cases.json` (49 cas, aussi joué par la CI contre le serveur) rejoué contre `Zone.contains` et `Zone.check` du front.
 - **(p0) à (v2) RB-2.7** (`rb27.py`, CA-R41 à CA-R48) : déplacer, insérer par appui sur la trace (tolérances 10 / 16 px, doigt réel), ajouter, retirer, clavier,
   échec et « Annuler » (retour exact), historique (onze gestes, plafond de 10 résultats), verrouillage pendant le calcul, points limites, trace enregistrée intacte.
   Le résultat de départ est une génération réelle, gardée ; les régénérations sont répondues par un double (`RouteMock`) qui peut les retarder ou les faire échouer

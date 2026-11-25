@@ -20,7 +20,7 @@ import numpy as np
 
 from app.services import geo
 from app.services.file_formats import MAX_FILE_POINTS
-from app.services.routing import detours, profiles, quality
+from app.services.routing import detours, profiles, quality, zone
 from app.services.routing.base import (InvalidRequest, InvalidResponse, NoRouteFound, RoutingError, RoutingProvider,
                                        RoutingTimeout, validate_point)
 
@@ -61,16 +61,26 @@ class BuildConfig:
     total_budget_s: float = 30.0
     detour_strategy: str = 'hybrid'
     seed_retries: int = 2
-    coverage_bbox: Optional[tuple] = None        # (lat_min, lon_min, lat_max, lon_max) ; RB-1.3, vérifié avant tout appel
+    coverage_bbox: Optional[tuple] = None        # emprise de la zone : (lat_min, lon_min, lat_max, lon_max) ; RB-1.3, avant tout appel
+    coverage_polygon: Optional[tuple] = None     # sommets (lon, lat) du polygone en vigueur (RB-1.3b) ; None : le rectangle
+
+    def zone_vertices(self) -> Optional[list]:
+        """Sommets `[lon, lat]` de la zone en vigueur : le polygone, sinon le rectangle ; None sans zone (RB-1.3b)."""
+        if self.coverage_polygon:
+            return [list(v) for v in self.coverage_polygon]
+        if self.coverage_bbox is not None:
+            lat_min, lon_min, lat_max, lon_max = self.coverage_bbox
+            return zone.rectangle_vertices([lon_min, lat_min, lon_max, lat_max])
+        return None
 
     @classmethod
     def from_settings(cls, get: Callable[[str], object]) -> 'BuildConfig':
-        bbox = None
+        vertices = zone.effective_zone(get)                        # polygone s'il y en a un, sinon le rectangle (RB-1.3b)
+        bbox = zone.envelope(vertices) if vertices else None       # (lat_min, lon_min, lat_max, lon_max)
         try:
-            raw = get('routing.coverage_bbox')                     # registre : [lon_min, lat_min, lon_max, lat_max]
-            bbox = (float(raw[1]), float(raw[0]), float(raw[3]), float(raw[2])) if raw else None     # -> (lat, lon, lat, lon)
-        except (KeyError, TypeError, ValueError, IndexError):
-            bbox = None
+            polygon = tuple(tuple(v) for v in zone.validate(get('routing.coverage_polygon')))
+        except (KeyError, ValueError):
+            polygon = ()
         return cls(max_waypoints=int(get('routing.max_waypoints')), max_distance_km=float(get('routing.max_distance_km')),
                    tolerance_pct=float(get('routing.distance_tolerance_pct')),
                    snap_tolerance_m=float(get('routing.snap_tolerance_m')),
@@ -78,7 +88,8 @@ class BuildConfig:
                    overlap_warning_pct_2pts=float(get('routing.overlap_warning_pct_2pts')),
                    max_calls=int(get('routing.max_calls')), total_budget_s=float(get('routing.total_budget_s')),
                    detour_strategy=str(get('routing.detour_strategy')),
-                   seed_retries=int(get('routing.seed_retries')), coverage_bbox=bbox)
+                   seed_retries=int(get('routing.seed_retries')), coverage_bbox=bbox,
+                   coverage_polygon=polygon or None)
 
 
 @dataclass
@@ -176,10 +187,10 @@ def prepare(raw_points, activity, distance_km, seed, config: BuildConfig) -> Pre
     diagonal = float(geo.haversine(min(lats), min(lons), max(lats), max(lons)))
     if diagonal > config.max_distance_km * 1000.0:
         raise InvalidBuild("Points trop éloignés les uns des autres")
-    if config.coverage_bbox is not None:
-        lat_min, lon_min, lat_max, lon_max = config.coverage_bbox
+    area = config.zone_vertices()
+    if area is not None:
         for number, point in enumerate(points, start=1):                     # numéro d'ORIGINE, avant tout appel
-            if not (lat_min <= point[0] <= lat_max and lon_min <= point[1] <= lon_max):
+            if not zone.contains(area, point[0], point[1]):
                 raise InvalidBuild(f"Le point {number} est hors de la zone couverte.")
     kept, numbers = _deduplicated(points)
     warnings: List[dict] = []
@@ -356,7 +367,7 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
         last_seed = seed + attempt
         ctx = detours.DetourContext(provider=provider, profile=profile, points=kept, base_points=base_points, base_distance_m=d0,
                                     target_m=target_m, tolerance=tolerance, seed=last_seed, budget=budget, bbox=bbox,
-                                    accepts=accepts)
+                                    accepts=accepts, area=config.coverage_polygon and config.zone_vertices())
         outcome = strategy.run(ctx)
         tried += 1
         seen = quality.fingerprint(outcome.points) in avoid          # déjà proposée : écartée si une autre existe

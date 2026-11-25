@@ -1314,7 +1314,8 @@ input[type="range"] {
     max-width: 10rem;
 }
 
-.rect-preview {
+.rect-preview,
+.poly-preview {
     height: 320px;
     margin: 8px 0;
     border: 1px solid var(--border);
@@ -1322,7 +1323,8 @@ input[type="range"] {
 }
 
 @media (max-width: 576px) {
-    .rect-preview {
+    .rect-preview,
+.poly-preview {
         height: 240px;
     }
 }
@@ -1380,6 +1382,76 @@ input[type="range"] {
     margin-left: auto;
 }
 
-.rect-preview path.leaflet-interactive {
+.rect-preview path.leaflet-interactive,
+.poly-preview path.leaflet-interactive {
     cursor: inherit;      /* le contour ne se saisit pas : glisser dessus déplace la carte (EF-6.19) */
+}
+
+/* Polygone de la zone couverte (EF-6.21) : numéro du sommet au survol et au focus, sommet sélectionné, liste des coordonnées */
+.poly-handle .poly-handle-num {
+    position: absolute;
+    left: 50%;
+    bottom: 100%;
+    transform: translateX(-50%);
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 0.75rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.poly-handle:hover .poly-handle-num,
+.poly-handle:focus .poly-handle-num,
+.poly-handle:focus-visible .poly-handle-num {
+    visibility: visible;
+}
+
+.poly-handle.is-selected::after {
+    background: #dc3545;
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px #dc3545;
+}
+
+.poly-preview.is-over-edge,
+.poly-preview.is-over-edge.leaflet-grab,
+.poly-preview.is-over-edge.leaflet-dragging .leaflet-grab {
+    cursor: pointer;
+}
+
+.poly-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.poly-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px 12px;
+}
+
+.poly-row .field {
+    flex: 0 1 10rem;
+    max-width: 10rem;
+}
+
+.poly-row .poly-num {
+    min-width: 1.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.poly-row .setting-error {
+    flex-basis: 100%;
+    margin: 0;
+}
+
+.setting-unused {
+    font-weight: 600;
+    color: var(--text);
 }

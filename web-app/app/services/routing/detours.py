@@ -22,7 +22,7 @@ from typing import Callable, List, Optional, Sequence
 import numpy as np
 
 from app.services import geo
-from app.services.routing import quality
+from app.services.routing import quality, zone
 from app.services.routing.base import NoRouteFound, RoutingError, RoutingTimeout
 
 M_PER_DEG = 111_194.9
@@ -83,6 +83,7 @@ class DetourContext:
     budget: Budget
     bbox: tuple                      # (lat_min, lon_min, lat_max, lon_max) où les points techniques doivent rester (RB-S7)
     accepts: Callable = lambda points: True       # contrôle d'ordre et de fermeture d'un candidat
+    area: Optional[list] = None      # sommets [lon, lat] du polygone : un point technique n'en sort jamais (RB-1.3b) ; None : l'emprise suffit
 
     def in_tolerance(self, distance_m: float) -> bool:
         return abs(distance_m - self.target_m) <= self.tolerance * self.target_m
@@ -165,11 +166,16 @@ class LateralPoints(DetourStrategy):
         # Ampleur initiale variée avec la graine (au-delà des côtés) : plus de variantes distinctes pour peu de tronçons
         best, scale, previous = out, (1.0, 0.8, 1.25)[(ctx.seed >> len(chords)) % 3] if len(chords) <= 16 else 1.0, None
         for iteration in range(1, MAX_ITERATIONS + 1):
-            waypoints, techs = [], []
+            waypoints, techs, tech_segments = [], [], []
             for i, (a, b) in enumerate(zip(seq, seq[1:])):
                 waypoints.append(a)
-                waypoints.append(_clamp(_offset_point(a, b, heights[i] * scale, sides[i]), ctx.bbox))
-                techs.append(len(waypoints) - 1)
+                tech = _clamp(_offset_point(a, b, heights[i] * scale, sides[i]), ctx.bbox)
+                if ctx.area:                                      # RB-1.3b : ramené dans le polygone, ou pas de point à ce tronçon
+                    tech = zone.pull_inside(ctx.area, ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), tech)
+                if tech is not None:
+                    waypoints.append(tech)
+                    techs.append(len(waypoints) - 1)
+                    tech_segments.append(i)
             waypoints.append(seq[-1])
             try:
                 result = ctx.budget.call(ctx.provider.route, waypoints, ctx.profile)
@@ -177,7 +183,7 @@ class LateralPoints(DetourStrategy):
                 if exc.waypoint_index not in techs:
                     out.warnings.append('user_point_unreachable')
                     break
-                bad = techs.index(exc.waypoint_index)
+                bad = tech_segments[techs.index(exc.waypoint_index)]
                 if iteration % 2 == 1:
                     sides[bad] = -sides[bad]                       # autre côté d'abord
                 else:

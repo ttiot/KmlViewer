@@ -56,11 +56,15 @@ const RouteBuilder = (() => {
     function alertText(text) { $('rbAlert').textContent = text; }       // role="alert" : échec d'un recalcul (RB-2.7)
 
     // -- géométrie ---------------------------------------------------------------------------------------------------------
+    // Zone en vigueur : sommets [lon, lat] du polygone, sinon les 4 angles du rectangle (RB-1.3b) ; même fonction que le serveur
+    function coverageVertices() {
+        const options = state.options || {};
+        if (Array.isArray(options.coverage_polygon) && options.coverage_polygon.length >= 3) return options.coverage_polygon;
+        return options.coverage_bbox ? Zone.rectangleVertices(options.coverage_bbox) : null;
+    }
     function inCoverage(lat, lon) {
-        const box = state.options && state.options.coverage_bbox;
-        if (!box) return true;
-        const [lonMin, latMin, lonMax, latMax] = box;
-        return lat >= latMin && lat <= latMax && lon >= lonMin && lon <= lonMax;
+        const vertices = coverageVertices();
+        return !vertices || Zone.contains(vertices, lat, lon);
     }
     const rad = (d) => (d * Math.PI) / 180;
     function dist(a, b) {
@@ -576,9 +580,9 @@ const RouteBuilder = (() => {
         $('rbDistance').max = state.options.max_km;
         $('rbDistance').step = state.options.step_km;
         restore();
-        if (state.options.coverage_bbox) {
-            const [lonMin, latMin, lonMax, latMax] = state.options.coverage_bbox;
-            state.coverage = L.rectangle([[latMin, lonMin], [latMax, lonMax]], { color: '#0d6efd', weight: 1, dashArray: '6 6', fill: false,
+        const zone = coverageVertices();
+        if (zone) {                                        // contour discret de la zone couverte : polygone ou rectangle (RB-1.3b)
+            state.coverage = L.polygon(zone.map(([lon, lat]) => [lat, lon]), { color: '#0d6efd', weight: 1, dashArray: '6 6', fill: false,
                 interactive: false }).addTo(Viewer.map);
         }
         if (!state.options.available) {

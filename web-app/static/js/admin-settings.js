@@ -11,7 +11,7 @@ const AdminSettings = (() => {
 
     // Contrôle de saisie de CHAQUE type du registre ; aucun ne passe par une zone JSON hors du volet « Avancé » (EF-6.12)
     const CONTROL_FOR_TYPE = { bool: 'switch', enum: 'select', int: 'number', float: 'number', str: 'text', url: 'text', email: 'text',
-        timezone: 'text', list: 'chips', basemaps: 'basemap-cards', rectangle: 'rectangle-fields' };
+        timezone: 'text', list: 'chips', basemaps: 'basemap-cards', rectangle: 'rectangle-fields', polygon: 'polygon-map' };
     const MAX_RECTANGLE_SIDE_M = 2_000_000;
     const SIZE_MESSAGE = 'Côtés de 2 000 km au plus.';
     const STEP = 0.0001, MAP_LAT = 85.0511;                  // pas des champs ; limite de la projection Web Mercator (EF-6.19)
@@ -21,7 +21,7 @@ const AdminSettings = (() => {
 
     const S = {
         settings: [], byKey: {}, sections: [], version: null, alerts: [], secrets: {}, edits: {}, errors: {}, tab: null, search: '',
-        jsonViews: {}, onlyModified: false, loaded: false, stale: true, confirm: null, previewMap: null, registerUnload: false,
+        jsonViews: {}, polygonIssues: {}, onlyModified: false, loaded: false, stale: true, confirm: null, previewMaps: [], registerUnload: false,
     };
 
     // -- utilitaires -------------------------------------------------------------------------------------------------------
@@ -53,10 +53,17 @@ const AdminSettings = (() => {
             case 'bool': return value ? 'oui' : 'non';
             case 'int': case 'float': return `${value}${unit}`;
             case 'basemaps': return `${(value || []).length} fond(s) : ${(value || []).map((b) => b.name).join(', ') || '—'}`;
+            case 'polygon': return polygonSummary(value);
             case 'rectangle': return Array.isArray(value) ? `lon ${value[0]} → ${value[2]}, lat ${value[1]} → ${value[3]}` : '—';
             case 'list': return (value || []).join(', ') || '—';
             default: return value === '' || value === null || value === undefined ? '(vide)' : String(value);
         }
+    }
+    function polygonSummary(vertices) {
+        if (!Array.isArray(vertices) || !vertices.length) return 'aucun polygone (rectangle)';
+        if (Zone.check(vertices)) return `${vertices.length} sommets`;
+        const { width, height } = Zone.sides(vertices);
+        return `${vertices.length} sommets, emprise ≈ ${Math.round(width / 1000)} km × ${Math.round(height / 1000)} km`;
     }
     const originOf = (setting) => (setting.source === 'env' ? 'Environnement' : setting.source === 'base' ? 'Base' : 'Défaut');
 
@@ -133,6 +140,10 @@ const AdminSettings = (() => {
                 return null;
             case 'basemaps': return validateBasemaps(value, setting);
             case 'rectangle': return validateRectangle(value);
+            case 'polygon': {
+                const message = S.polygonIssues[setting.key] || Zone.check(value);      // une seule fonction de contrôle, celle du serveur (EF-6.20)
+                return message ? { message } : null;
+            }
             case 'list': return (value || []).length > setting.max_items ? { message: `${setting.max_items} éléments au plus.` } : null;
             case 'enum': return setting.choices.includes(value) ? null : { message: 'Valeur non permise.' };
             case 'str': case 'email': case 'url': case 'timezone':
@@ -142,7 +153,7 @@ const AdminSettings = (() => {
     }
     function validateTab(section) {
         let first = null;
-        sectionSettings(section).filter((s) => isDirty(s.key)).forEach((setting) => {
+        sectionSettings(section).filter((s) => isDirty(s.key) || (s.type === 'polygon' && S.polygonIssues[s.key])).forEach((setting) => {
             const problem = validateOne(setting);
             if (problem) { S.errors[setting.key] = problem; first = first || setting.key; }
         });
@@ -371,7 +382,7 @@ const AdminSettings = (() => {
                 return;
             }
             map = L.map(preview, { zoomControl: false, attributionControl: false });
-            S.previewMap = map;
+            S.previewMaps.push(map);
             const maps = S.byKey['map.basemaps'], wanted = S.byKey['map.default_basemap'];
             const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
             if (base && tileHosts(base, maps.allowlist || []).every((h) => h.ok)) App.basemapLayer(base).addTo(map);      // seulement si autorisé
@@ -413,6 +424,295 @@ const AdminSettings = (() => {
         return holder;
     }
 
+    // Polygone : carte Leaflet éditable + liste des sommets (EF-6.20, EF-6.21). Les contrôles sont ceux du serveur (Zone.check).
+    // Valeur `[]` : aucun polygone, la carte montre le rectangle enregistré ; le premier geste fait de ses 4 sommets la valeur saisie.
+    const TOLERANCE_MOUSE = 10, TOLERANCE_TOUCH = 16;
+    function polygonEditor(setting) {
+        const key = setting.key;
+        const holder = el('div', { class: 'polygon-editor' });
+        const mention = el('p', { class: 'hint mb-1', hidden: true }, 'Zone actuelle : le rectangle. Modifie un sommet pour en faire un polygone.');
+        const dims = el('p', { class: 'hint mb-1' });
+        const problem = el('p', { class: 'setting-error', role: 'alert', hidden: true });
+        const notice = el('p', { class: 'hint mb-1', role: 'status' });                // « 50 sommets au plus. », « 3 sommets au moins. »
+        const preview = el('div', { class: 'poly-preview', role: 'group',
+            'aria-label': 'Carte de la zone couverte : déplace les sommets, ou saisis-les dans la liste' });
+        const help = el('p', { class: 'hint' }, 'Clique ou glisse sur un côté pour ajouter un sommet ; glisse un sommet pour le déplacer ; clic droit pour le retirer.');
+        const listPane = el('details', { class: 'advanced poly-list-pane' });
+        const listBody = el('div', { class: 'poly-list' });
+        let map = null, shape = null, handles = [], selected = null, hover = null, gesture = null, listCount = -1;
+        const issues = new Map();                                                       // champs de la liste en erreur : index -> message
+
+        const rectangle = () => Zone.rectangleVertices(loadedValue('routing.coverage_bbox'));
+        const isRect = () => !(Array.isArray(current(key)) && current(key).length);
+        const shown = () => (isRect() ? rectangle() : current(key)).map((v) => [...v]);
+        const drawable = (vs) => Array.isArray(vs) && vs.length >= 3 && vs.every((v) => Number.isFinite(v[0]) && Number.isFinite(v[1])
+            && Math.abs(v[0]) <= 180 && Math.abs(v[1]) <= MAP_LAT);
+        let lastDrawn = shown();
+        const commit = (vs) => {
+            setEdit(key, vs);
+            delete S.polygonIssues[key];
+            if (issues.size) { issues.clear(); listCount = -1; }                       // les erreurs de champ disparaissent : la liste est reconstruite
+            notice.textContent = '';
+            refresh();
+        };
+        const clampVertex = (lon, lat) => [r4(clampTo(lon, -180, 180)), r4(clampTo(lat, -MAP_LAT, MAP_LAT))];
+        const midpoint = (a, b) => {                                                     // milieu pris dans la projection de la carte
+            const [ax, ay] = Zone.project(a[0], a[1]), [bx, by] = Zone.project(b[0], b[1]);
+            return clampVertex(...Zone.unproject((ax + bx) / 2, (ay + by) / 2));
+        };
+
+        // -- actions sur les sommets (carte, clavier, liste) ------------------------------------------------------------------
+        const insertAfter = (index, vertex = null) => {
+            const vs = shown();
+            if (vs.length >= Zone.MAX_VERTICES) { notice.textContent = '50 sommets au plus.'; return false; }
+            vs.splice(index + 1, 0, vertex || midpoint(vs[index], vs[(index + 1) % vs.length]));
+            commit(vs);
+            focusHandle(index + 1);
+            return true;
+        };
+        const removeAt = (index) => {
+            const vs = shown();
+            if (vs.length <= Zone.MIN_VERTICES) { notice.textContent = '3 sommets au moins.'; return false; }
+            vs.splice(index, 1);
+            if (selected === index) selected = null; else if (selected !== null && selected > index) selected -= 1;
+            commit(vs);
+            focusHandle(Math.min(index, vs.length - 1));
+            return true;
+        };
+        const focusHandle = (index) => { const node = handles[index] && handles[index].getElement(); if (node) node.focus(); };
+
+        // -- liste des sommets : alternative complète à la carte, au clavier --------------------------------------------------
+        const buildList = () => {
+            const vs = shown();
+            listCount = vs.length;
+            listPane.querySelector('summary').textContent = `Coordonnées des sommets (${vs.length})`;
+            listBody.replaceChildren(...vs.map((vertex, i) => {
+                const field = (axis, label, bound) => {
+                    const input = el('input', { type: 'number', class: 'form-control', step: STEP, min: -bound, max: bound, value: vertex[axis],
+                        'aria-label': `${label} du sommet ${i + 1}`, 'data-axis': axis,
+                        oninput: () => onField(i, axis, input) });
+                    return el('div', { class: 'field' }, el('label', {}, label), input);
+                };
+                return el('div', { class: 'poly-row', 'data-index': i },
+                    el('span', { class: 'poly-num' }, String(i + 1)), field(0, 'Longitude', 180), field(1, 'Latitude', MAP_LAT),
+                    el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: () => insertAfter(i) }, 'Ajouter après'),
+                    el('button', { type: 'button', class: 'btn btn-sm btn-outline-danger', onclick: () => removeAt(i) }, 'Retirer'),
+                    el('p', { class: 'setting-error', role: 'alert', hidden: true }));
+            }));
+        };
+        const syncList = () => {
+            if (listCount !== shown().length) { buildList(); return; }
+            shown().forEach((vertex, i) => listBody.querySelectorAll(`[data-index="${i}"] input`).forEach((input) => {
+                if (document.activeElement !== input) input.value = vertex[Number(input.dataset.axis)];
+            }));
+        };
+        const onField = (index, axis, input) => {
+            const row = listBody.querySelector(`[data-index="${index}"]`);
+            const error = row.querySelector('.setting-error');
+            const number = input.value === '' ? NaN : Number(input.value);
+            const bound = axis === 0 ? 180 : MAP_LAT;
+            let message = '';
+            if (!Number.isFinite(number)) message = 'Une valeur est requise.';
+            else if (Math.abs(number) > bound) message = 'Zone : longitude de −180 à 180, latitude de −85,0511 à 85,0511.';
+            error.textContent = message;
+            error.hidden = !message;
+            if (message) { issues.set(`${index}-${axis}`, message); input.setAttribute('aria-invalid', 'true'); }
+            else { issues.delete(`${index}-${axis}`); input.removeAttribute('aria-invalid'); }
+            S.polygonIssues[key] = [...issues.values()][0];
+            if (!S.polygonIssues[key]) delete S.polygonIssues[key];
+            if (message) { refresh(); return; }                                          // le polygone garde sa dernière valeur valide
+            const vs = shown();
+            vs[index][axis] = number;
+            setEdit(key, vs);
+            if (issues.size) S.polygonIssues[key] = [...issues.values()][0];
+            refresh();
+        };
+
+        // -- dessin : un seul L.polygon et un marqueur par sommet, jamais recréés à la saisie ----------------------------------
+        const bounds = () => shape.getBounds();
+        const refresh = () => {
+            const rect = isRect();
+            const value = current(key);
+            const issue = S.polygonIssues[key] || (rect ? null : Zone.check(value));
+            problem.textContent = issue || '';
+            problem.hidden = !issue;
+            mention.hidden = !rect;
+            const vs = shown();
+            if (vs.length >= 3 && drawable(vs)) {
+                const { width, height } = Zone.sides(vs);
+                dims.textContent = `Emprise ≈ ${Math.round(width / 1000)} km × ${Math.round(height / 1000)} km · ${vs.length} sommets`;
+            } else dims.textContent = `${vs.length} sommets`;
+            if (drawable(vs)) lastDrawn = vs;
+            if (map && shape) {
+                const spots = lastDrawn.map(([lon, lat]) => [lat, lon]);
+                shape.setLatLngs(spots);
+                shape.setStyle(issue ? { color: '#dc3545', dashArray: '6 6' } : { color: '#0d6efd', dashArray: null });
+                if (handles.length !== spots.length) buildHandles(); else handles.forEach((m, i) => { if (!m.isDragging) m.setLatLng(spots[i]); });
+                handles.forEach((m, i) => {
+                    const node = m.getElement();
+                    if (node) { node.setAttribute('aria-label', `Sommet ${i + 1} sur ${handles.length} : flèches pour déplacer, Suppr pour retirer, Insér pour ajouter un sommet après`);
+                        node.classList.toggle('is-selected', selected === i); node.title = `Sommet ${i + 1}`; }
+                });
+            }
+            syncList();
+            removeButton.disabled = selected === null;
+            backButton.hidden = rect;
+        };
+        const buildHandles = () => {
+            handles.forEach((m) => map.removeLayer(m));
+            handles = lastDrawn.map(([lon, lat], i) => {
+                const icon = L.divIcon({ className: 'rect-handle poly-handle', html: el('span', { class: 'poly-handle-num' }, String(i + 1)), iconSize: [28, 28] });
+                const marker = L.marker([lat, lon], { draggable: true, icon, keyboard: true, zIndexOffset: 100 }).addTo(map);
+                marker.on('dragstart', () => { marker.isDragging = true; });
+                marker.on('drag', () => {
+                    const at = marker.getLatLng();
+                    if (!Number.isFinite(at.lat) || !Number.isFinite(at.lng)) return;
+                    const vs = shown();
+                    vs[i] = clampVertex(at.lng, at.lat);
+                    commit(vs);
+                });
+                marker.on('dragend', () => { marker.isDragging = false; refresh(); });          // se recale sur les valeurs arrondies
+                marker.on('click', () => { selected = selected === i ? null : i; refresh(); });
+                marker.on('contextmenu', () => removeAt(i));
+                const node = marker.getElement();
+                node.setAttribute('role', 'button');
+                node.addEventListener('keydown', (event) => {
+                    const dir = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[event.key];
+                    if (dir) {
+                        event.preventDefault(); event.stopPropagation();
+                        const step = event.shiftKey ? 0.1 : 0.01, vs = shown();
+                        vs[i] = clampVertex(vs[i][0] + dir[0] * step, vs[i][1] + dir[1] * step);
+                        commit(vs);
+                    } else if (event.key === 'Insert' || event.key === '+') { event.preventDefault(); event.stopPropagation(); insertAfter(i); }
+                    else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); event.stopPropagation(); removeAt(i); }
+                });
+                return marker;
+            });
+        };
+        const fit = () => {
+            if (!map || !shape || !drawable(lastDrawn)) return;
+            const size = map.getSize();
+            if (!size.x || !size.y) return;
+            map.invalidateSize({ animate: false });
+            map.fitBounds(bounds(), { padding: [14, 14], animate: false });
+        };
+
+        // -- appui sur une côté : le nouveau sommet suit le pointeur jusqu'au relâchement (EF-6.21) ---------------------------
+        const nearestEdge = (point) => {
+            const pts = lastDrawn.map(([lon, lat]) => map.latLngToContainerPoint([lat, lon]));
+            let best = null;
+            pts.forEach((a, i) => {
+                const b = pts[(i + 1) % pts.length];
+                const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+                const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / len2));
+                const d = Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+                if (!best || d < best.distance) best = { distance: d, edge: i, latlng: map.containerPointToLatLng([a.x + t * dx, a.y + t * dy]) };
+            });
+            return best;
+        };
+        const toleranceFor = (event) => (event.pointerType === 'mouse' || !event.pointerType ? TOLERANCE_MOUSE : TOLERANCE_TOUCH);
+        const clearHover = () => {
+            if (hover) { map.removeLayer(hover); hover = null; }
+            preview.classList.remove('is-over-edge');
+        };
+        const onDown = (event) => {
+            if (!map || gesture || (event.button !== undefined && event.button > 0) || !drawable(lastDrawn)) return;
+            if (event.target.closest && event.target.closest('.leaflet-marker-icon, .leaflet-control')) return;      // un sommet passe avant une arête
+            const hit = nearestEdge(map.mouseEventToContainerPoint(event));
+            if (!hit || hit.distance > toleranceFor(event)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (shown().length >= Zone.MAX_VERTICES) { notice.textContent = '50 sommets au plus.'; return; }
+            clearHover();
+            map.dragging.disable();
+            const start = isRect() ? [] : current(key).map((v) => [...v]);
+            const at = map.mouseEventToLatLng(event);
+            const vs = shown();
+            const index = hit.edge + 1;
+            vs.splice(index, 0, clampVertex(at.lng, at.lat));
+            commit(vs);
+            gesture = { index, start };
+            const move = (e) => {
+                const latlng = map.mouseEventToLatLng(e);
+                if (!Number.isFinite(latlng.lat) || !Number.isFinite(latlng.lng)) return;
+                const next = shown();
+                next[index] = clampVertex(latlng.lng, latlng.lat);
+                commit(next);
+            };
+            const finish = (keep) => {
+                document.removeEventListener('pointermove', move);
+                document.removeEventListener('pointerup', up);
+                document.removeEventListener('pointercancel', cancel);
+                document.removeEventListener('keydown', onKey, true);
+                map.dragging.enable();
+                gesture = null;
+                if (!keep) commit(start);                                                 // Échap : le nouveau sommet disparaît
+                else refresh();
+            };
+            const up = () => finish(true);
+            const cancel = () => finish(false);
+            const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } };
+            document.addEventListener('pointermove', move);
+            document.addEventListener('pointerup', up);
+            document.addEventListener('pointercancel', cancel);
+            document.addEventListener('keydown', onKey, true);
+        };
+        const onMove = (event) => {
+            if (!map || gesture || event.pointerType !== 'mouse') return;
+            if ((event.target.closest && event.target.closest('.leaflet-marker-icon, .leaflet-control')) || !drawable(lastDrawn)) { clearHover(); return; }
+            const hit = nearestEdge(map.mouseEventToContainerPoint(event));
+            if (!hit || hit.distance > TOLERANCE_MOUSE) { clearHover(); return; }
+            if (!hover) {
+                hover = L.circleMarker(hit.latlng, { radius: 5, color: '#fff', weight: 2, fillColor: '#0d6efd', fillOpacity: 1, interactive: false }).addTo(map);
+                hover.bindTooltip('Clique ou glisse pour ajouter un sommet', { direction: 'top', offset: [0, -6] });
+                hover.openTooltip();
+                preview.classList.add('is-over-edge');
+            }
+            hover.setLatLng(hit.latlng);
+        };
+
+        const init = () => {
+            if (typeof L === 'undefined' || !holder.isConnected || map || !drawable(lastDrawn)) return;
+            if (!preview.clientWidth || !preview.clientHeight) {
+                if (typeof ResizeObserver === 'function') {
+                    const watcher = new ResizeObserver(() => { if (preview.clientWidth && preview.clientHeight) { watcher.disconnect(); init(); } });
+                    watcher.observe(preview);
+                }
+                return;
+            }
+            map = L.map(preview, { zoomControl: false, attributionControl: false });
+            S.previewMaps.push(map);
+            const maps = S.byKey['map.basemaps'], wanted = S.byKey['map.default_basemap'];
+            const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
+            if (base && tileHosts(base, maps.allowlist || []).every((h) => h.ok)) App.basemapLayer(base).addTo(map);
+            shape = L.polygon(lastDrawn.map(([lon, lat]) => [lat, lon]), { color: '#0d6efd', weight: 2, fill: false, interactive: false }).addTo(map);
+            fit();
+            preview.addEventListener('pointerdown', onDown, true);                       // avant Leaflet : un appui sur un côté ne déplace pas la carte
+            preview.addEventListener('pointermove', onMove);
+            preview.addEventListener('pointerleave', clearHover);
+            buildHandles();
+            refresh();
+        };
+
+        const removeButton = el('button', { type: 'button', class: 'btn btn-sm btn-outline-danger mt-1', disabled: true,
+            onclick: () => { if (selected !== null) removeAt(selected); } }, 'Retirer le sommet');
+        const backButton = el('span', { class: 'mt-1' });
+        const backStart = el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: () => backButton.replaceChildren(
+            el('span', { class: 'me-1' }, 'Revenir au rectangle enregistré ?'),
+            el('button', { type: 'button', class: 'btn btn-sm btn-danger me-1', onclick: () => { selected = null; backButton.replaceChildren(backStart); commit([]); } }, 'Confirmer'),
+            el('button', { type: 'button', class: 'btn btn-sm btn-link', onclick: () => backButton.replaceChildren(backStart) }, 'Annuler')) }, 'Revenir au rectangle');
+        backButton.append(backStart);
+        listPane.append(el('summary', {}, 'Coordonnées des sommets'), listBody);
+        holder.append(mention, dims, problem, preview, help, notice,
+            el('div', { class: 'd-flex flex-wrap gap-2' }, el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary mt-1', onclick: fit }, 'Recadrer'),
+                removeButton, backButton),
+            listPane, advancedPane(setting, () => { selected = null; issues.clear(); notice.textContent = ''; listCount = -1; refresh(); fit(); }));
+        buildList();
+        refresh();
+        setTimeout(init, 0);
+        return holder;
+    }
+
     // Volet « Avancé » : JSON brut de la valeur EN COURS DE SAISIE (basemaps et rectangle seulement)
     function advancedPane(setting, redraw) {
         const area = el('textarea', { class: 'form-control mono', rows: setting.type === 'rectangle' ? 2 : 8, 'aria-label': `JSON de ${setting.label}` },
@@ -423,12 +723,18 @@ const AdminSettings = (() => {
         const apply = () => {
             let parsed;
             try { parsed = JSON.parse(area.value); } catch (_) { problem.textContent = 'JSON invalide.'; problem.hidden = false; return; }
+            if (setting.type === 'polygon' && Array.isArray(parsed) && parsed.length >= 4 && same(parsed[0], parsed[parsed.length - 1])) {
+                parsed = parsed.slice(0, -1);                    // contour fermé : le doublon final est retiré avant d'appliquer (EF-6.21)
+            }
             const shape = setting.type === 'rectangle'
                 ? Array.isArray(parsed) && parsed.length === 4 && parsed.every((v) => typeof v === 'number')
-                : Array.isArray(parsed) && parsed.every((b) => b && typeof b === 'object' && !Array.isArray(b));
+                : setting.type === 'polygon'
+                    ? Array.isArray(parsed) && parsed.every((v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number'))
+                    : Array.isArray(parsed) && parsed.every((b) => b && typeof b === 'object' && !Array.isArray(b));
             if (!shape) { problem.textContent = 'Forme inattendue.'; problem.hidden = false; return; }
             problem.hidden = true;
             setEdit(setting.key, setting.type === 'basemaps' ? parsed.map((b) => ({ subdomains: 'abc', attribution: '', max_zoom: 19, ...b })) : parsed);
+            delete S.polygonIssues[setting.key];
             redraw();
             area.value = JSON.stringify(current(setting.key), null, 2);
             pane.open = false;
@@ -457,6 +763,7 @@ const AdminSettings = (() => {
             case 'chips': return chipsEditor(setting);
             case 'basemap-cards': return basemapEditor(setting);
             case 'rectangle-fields': return rectangleEditor(setting);
+            case 'polygon-map': return polygonEditor(setting);
             default: return textEditor(setting);
         }
     }
@@ -473,7 +780,7 @@ const AdminSettings = (() => {
     }
 
     // Ligne : un en-tête (libellé, « ? », pastille, aide, description) et un éditeur (champ, rétablissement, erreurs) (EF-6.18)
-    const WIDE = ['basemaps', 'rectangle'];
+    const WIDE = ['basemaps', 'rectangle', 'polygon'];
     function row(setting) {
         const badges = [];
         if (setting.source === 'env') badges.push(el('span', { class: 'badge-soft is-warn' }, 'Environnement'));      // aucune pastille « Défaut » (EF-6.11)
@@ -489,11 +796,14 @@ const AdminSettings = (() => {
                 toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
             } }, '?') : null;
         const hintText = hint(setting);
+        const polygon = S.byKey['routing.coverage_polygon'];       // un polygone en vigueur : la ligne du rectangle n'est que le repli (EF-6.20)
+        const unused = setting.key === 'routing.coverage_bbox' && polygon && Array.isArray(polygon.value) && polygon.value.length > 0;
         return el('div', { class: `setting-row${isDirty(setting.key) ? ' is-dirty' : ''}${WIDE.includes(setting.type) ? ' is-wide' : ''}`,
             'data-setting': setting.key, 'data-type': setting.type },
         el('div', { class: 'setting-head' },
             el('div', { class: 'setting-title' }, el('label', { class: 'setting-label', for: `f-${setting.key}` }, setting.label), toggle, ...badges),
-            hintText ? el('p', { class: 'setting-hint' }, hintText) : null, description),
+            hintText ? el('p', { class: 'setting-hint' }, hintText) : null,
+            unused ? el('p', { class: 'setting-hint setting-unused', 'data-unused': 'true' }, "Inutilisé : la zone polygonale s'applique.") : null, description),
         el('div', { class: 'setting-editor' }, el('div', { class: 'setting-control' }, editorFor(setting)), resetControl(setting),
             setting.type === 'basemaps' ? null : errorLine(setting.key)));
     }
@@ -563,7 +873,8 @@ const AdminSettings = (() => {
     }
 
     function renderPanel() {
-        if (S.previewMap) { S.previewMap.remove(); S.previewMap = null; }
+        S.previewMaps.forEach((m) => m.remove());
+        S.previewMaps = [];
         const panel = $('settingsPanel');
         panel.setAttribute('aria-labelledby', `stab-${slug(S.tab)}`);
         const all = sectionSettings(S.tab);
@@ -699,7 +1010,7 @@ const AdminSettings = (() => {
         } catch (error) { notify(error.message, 'danger'); }
     }
     function cancelEdits() {
-        sectionSettings(S.tab).forEach((s) => { delete S.edits[s.key]; delete S.errors[s.key]; });
+        sectionSettings(S.tab).forEach((s) => { delete S.edits[s.key]; delete S.errors[s.key]; delete S.polygonIssues[s.key]; });
         S.confirm = null;
         renderAll();
     }

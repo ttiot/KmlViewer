@@ -149,6 +149,7 @@
     <script src="{{ url_for('static', filename='js/viewer/analysis.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/editor.js') }}"></script>
     <script src="{{ url_for('static', filename='js/viewer/library.js') }}"></script>
-    {% if route_builder_available() %}<script src="{{ url_for('static', filename='js/viewer/route-builder.js') }}"></script>{% endif %}
+    {% if route_builder_available() %}<script src="{{ url_for('static', filename='js/zone.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/viewer/route-builder.js') }}"></script>{% endif %}
     <script src="{{ url_for('static', filename='js/viewer/main.js') }}"></script>
 {% endblock %}

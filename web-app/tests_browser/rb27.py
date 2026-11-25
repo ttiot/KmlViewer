@@ -156,7 +156,7 @@ def new_view(page, touch=False, size=(1280, 800)):
 
 
 def opened(page, mock, *, touch=False, generate=True, distance='20', points=POINTS, patched=True, view=None,
-           stored_points=False):
+           stored_points=False, zoom=14, result_zoom=15):
     """Constructeur ouvert avec `points` posés ; avec `generate`, « Terminer » : renvoie (page, mock) avec un résultat affiché."""
     view = view or new_view(page, touch)
     if patched:
@@ -170,7 +170,7 @@ def opened(page, mock, *, touch=False, generate=True, distance='20', points=POIN
     view.click('#routeBuilderOpen')
     expect(view.locator('#routeBuilderPanel')).to_be_visible()
     centre = [sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)]
-    view.evaluate('(c) => Viewer.map.setView(c, 14, { animate: false })', centre)
+    view.evaluate('([c, z]) => Viewer.map.setView(c, z, { animate: false })', [centre, zoom])
     if stored_points:                                                     # petit écran : le panneau couvre la carte (pas de clic)
         view.evaluate("""async ([points, distance]) => {
             const id = (await (await fetch('/api/me')).json()).user.id;
@@ -181,12 +181,16 @@ def opened(page, mock, *, touch=False, generate=True, distance='20', points=POIN
         expect(view.locator('#emptyState')).to_be_visible()
         view.click('#routeBuilderOpen')
         expect(view.locator('#routeBuilderPanel')).to_be_visible()
-        view.evaluate('(c) => Viewer.map.setView(c, 14, { animate: false })', centre)
+        view.evaluate('([c, z]) => Viewer.map.setView(c, z, { animate: false })', [centre, zoom])
     else:
         for point in points:
             x, y = to_page(view, point)
             view.mouse.click(x, y)
-    expect(view.locator('#rbCount')).to_have_text(re.compile(rf'^{len(points)} point'))
+    try:
+        expect(view.locator('#rbCount')).to_have_text(re.compile(rf'^{len(points)} point'), timeout=4000)
+    except AssertionError:
+        raise AssertionError(f"{len(points)} points attendus, compteur « {host.norm(view.locator('#rbCount').inner_text())} », "
+                             f"message « {host.norm(view.locator('#rbMessage').inner_text())} », points {stored(view)}") from None
     if distance:
         view.fill('#rbDistance', distance)
     if generate:
@@ -197,7 +201,7 @@ def opened(page, mock, *, touch=False, generate=True, distance='20', points=POIN
             shown = host.norm(view.locator('#rbMessage').inner_text())
             raise AssertionError(f"« Terminer » sans résultat : message « {shown} », "
                                  f"requêtes {len(mock.posts)}, mode {mock.mode}") from None
-        view.evaluate('(c) => Viewer.map.setView(c, 15, { animate: false })', centre)
+        view.evaluate('([c, z]) => Viewer.map.setView(c, z, { animate: false })', [centre, result_zoom])
         view.wait_for_timeout(300)
     return view, mock
 

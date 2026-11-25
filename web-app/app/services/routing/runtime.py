@@ -16,6 +16,7 @@ from app.secrets_store import SecretsError
 from app.services.routing.base import Health, RoutingError, RoutingUnavailable
 from app.services.routing.builder import BuildConfig
 from app.services.routing.graphhopper import GraphHopperProvider
+from app.services.routing import zone
 from app.services.routing.results import ResultStore
 from app.settings import effective
 
@@ -120,7 +121,8 @@ class RoutingRuntime:
         """P-TR5-9 : pour l'onglet admin des fonctions bêta (RB-1.2, RB-1.3)."""
         with self._lock:
             health = self._health
-        coverage = effective(self.cfg, 'routing.coverage_bbox')
+        area = zone.effective_zone(lambda key: effective(self.cfg, key))      # polygone, sinon rectangle (RB-1.3b)
+        coverage = zone.envelope_lonlat(area) if area else None
         info = health['bbox'] if health else None
         contained = None
         if info and coverage:
