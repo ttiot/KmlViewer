@@ -13,7 +13,7 @@ from flask import current_app, g, jsonify, request, session
 from app import audit
 from app.api import bp
 from app.api.payload import json_body
-from app.auth import factors, passwords, second_factor, users, webauthn_factor
+from app.auth import factors, mfa_limit, passwords, second_factor, users, webauthn_factor
 from app.auth.notify import security_notice
 from app.db import get_db, write_transaction
 from app.errors import ApiError
@@ -56,13 +56,16 @@ def _check_password(user, data) -> None:
         raise ApiError('Service occupé, réessaie dans un instant.', 429) from None
     if not ok:
         raise ApiError('Mot de passe incorrect.', 403)
+    for limiter, key in ((limiters.password_ip, ip_key(request.remote_addr)),
+                         (limiters.password_identifier, normalize_key(user['username']))):
+        limiter.refund(key)                                      # un succès ne consomme pas le budget
 
 
 def _check_totp(user, data) -> None:
-    allowed, _retry = current_app.extensions['limiters'].mfa_account.hit(int(user['id']))
-    if not allowed:
-        raise ApiError('Trop de tentatives, réessaie plus tard.', 429)
+    if mfa_limit.blocked(user['id']) is not None:
+        raise ApiError(mfa_limit.MESSAGE, 429)
     if not second_factor.verify_totp(get_db(), current_app.extensions['secrets'], user['id'], data.get('code')):
+        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403)
 
 
@@ -101,12 +104,12 @@ def mfa_totp_confirm():
     data = json_body()
     pending = current_app.extensions['pending']
     secret = pending.get_enrollment(_owner(user))
-    allowed, _retry = current_app.extensions['limiters'].mfa_account.hit(int(user['id']))
-    if not allowed:
-        raise ApiError('Trop de tentatives, réessaie plus tard.', 429)
+    if mfa_limit.blocked(user['id']) is not None:
+        raise ApiError(mfa_limit.MESSAGE, 429)
     code = second_factor.normalize_totp(data.get('code'))
     step = second_factor.matching_step(secret, code) if secret and code else None
     if step is None:
+        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403 if secret else 409)
     db = get_db()
     store = current_app.extensions['secrets']
@@ -190,15 +193,15 @@ def mfa_webauthn_options():
 def mfa_webauthn_verify():
     user = _password_user()
     data = json_body(large=False)
-    allowed, _retry = current_app.extensions['limiters'].mfa_account.hit(int(user['id']))
-    if not allowed:
-        raise ApiError('Trop de tentatives, réessaie plus tard.', 429)
+    if mfa_limit.blocked(user['id']) is not None:
+        raise ApiError(mfa_limit.MESSAGE, 429)
     pending = current_app.extensions['pending']
     try:
         credential_id, public_key, sign_count, transports = webauthn_factor.verify_registration(
             current_app.config, pending, f"profile:{user['id']}:{user['session_token']}", data.get('credential'))
         name = webauthn_factor.clean_name(data.get('name'), 'Clé de sécurité')
     except webauthn_factor.WebAuthnError as exc:
+        mfa_limit.failed(user['id'])
         raise ApiError(str(exc), 403) from None
     db = get_db()
     with write_transaction(db):
@@ -245,13 +248,13 @@ def mfa_webauthn_remove(key_id):
 
 def _check_totp_or_recovery(user, data) -> None:
     """Second facteur exigé pour une suppression : code TOTP ou de secours (le compte peut n'avoir que des clés)."""
-    allowed, _retry = current_app.extensions['limiters'].mfa_account.hit(int(user['id']))
-    if not allowed:
-        raise ApiError('Trop de tentatives, réessaie plus tard.', 429)
+    if mfa_limit.blocked(user['id']) is not None:
+        raise ApiError(mfa_limit.MESSAGE, 429)
     code = data.get('code')
     kind = second_factor.kind_of(code)
     db = get_db()
     ok = (second_factor.verify_totp(db, current_app.extensions['secrets'], user['id'], code) if kind == 'totp'
           else second_factor.consume_recovery(db, user['id'], code) if kind == 'recovery' else False)
     if not ok:
+        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403)

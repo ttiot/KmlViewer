@@ -76,6 +76,14 @@ class RateLimiter(ABC):
         ...
 
     @abstractmethod
+    def peek(self, key) -> tuple:
+        """`(allowed, retry_after_s)` SANS compter l'accès : pour ne compter que les ÉCHECS d'un facteur (T11, recette)."""
+
+    @abstractmethod
+    def refund(self, key) -> None:
+        """Rend un accès compté d'avance (un succès ne consomme pas le budget) ; jamais en dessous de zéro."""
+
+    @abstractmethod
     def footprint(self) -> int:
         """Nombre d'emplacements occupés (constant pour les compartiments, borné pour la LRU)."""
 
@@ -134,6 +142,19 @@ class _Counter:
             return True, 0, (index, current + 1, previous)
         return False, _retry_after(limit, self.window_s, now, index, current, previous), (index, current, previous)
 
+    def _peek_state(self, index, current, previous):
+        """Décision SANS écriture : (allowed, retry_after)."""
+        now = self._clock()
+        limit = self.limit
+        index, current, previous = _roll(self.window_s, now, index, current, previous)
+        if _estimate(self.window_s, now, index, current, previous) < limit:
+            return True, 0
+        return False, _retry_after(limit, self.window_s, now, index, current, previous)
+
+    def _refund_state(self, index, current, previous):
+        index, current, previous = _roll(self.window_s, self._clock(), index, current, previous)
+        return index, max(0, current - 1), previous
+
 
 class BucketLimiter(_Counter, RateLimiter):
     """Famille « identifiant » : compartiments fixes indexés par HMAC de la clé normalisée."""
@@ -159,6 +180,17 @@ class BucketLimiter(_Counter, RateLimiter):
             self._index[slot], self._current[slot], self._previous[slot] = index, current, previous
         return allowed, retry
 
+    def peek(self, key):
+        slot = self._slot(key)
+        with self._lock:
+            return self._peek_state(self._index[slot], self._current[slot], self._previous[slot])
+
+    def refund(self, key) -> None:
+        slot = self._slot(key)
+        with self._lock:
+            self._index[slot], self._current[slot], self._previous[slot] = self._refund_state(
+                self._index[slot], self._current[slot], self._previous[slot])
+
     def footprint(self) -> int:
         return len(self._index)
 
@@ -182,6 +214,15 @@ class LruLimiter(_Counter, RateLimiter):
             while len(self._states) > self._max:
                 self._states.popitem(last=False)
         return allowed, retry
+
+    def peek(self, key):
+        with self._lock:
+            return self._peek_state(*self._states.get(key, (-1, 0, 0)))
+
+    def refund(self, key) -> None:
+        with self._lock:
+            if key in self._states:
+                self._states[key] = self._refund_state(*self._states[key])
 
     def footprint(self) -> int:
         with self._lock:

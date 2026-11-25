@@ -556,3 +556,23 @@ def test_next_seed_follows_the_last_tried_seed_and_the_retained_seed_is_reported
     assert gen.meta['seed_dependent'] is True
     base = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', None, 4, CFG)
     assert base.meta['seed_dependent'] is False and base.meta['strategy'] == 'base'
+
+
+def test_avoid_skips_a_known_geometry_and_warns_when_nothing_else_exists():
+    d0 = d0_of()
+    first = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', d0 * 1.6 / 1000, 1, CFG)
+    avoid = frozenset({first.meta['fingerprint']})
+    prepared = builder.prepare(POINTS, 'run', d0 * 1.6 / 1000, 1, CFG)
+    other = builder.execute(FakeProvider(sinuosity=0.05), prepared, CFG, avoid=avoid)
+    assert other.meta['fingerprint'] not in avoid and other.meta['attempts'] >= 2 and other.meta['seed_used'] > 1
+    assert not any(w['code'] == 'no_alternative' for w in other.warnings)
+    base = generate(FakeProvider(sinuosity=0.05), POINTS, 'run', None, 1, CFG)                  # boucle de base : aucune variante
+    again = builder.execute(FakeProvider(sinuosity=0.05), builder.prepare(POINTS, 'run', None, 2, CFG), CFG,
+                            avoid=frozenset({base.meta['fingerprint']}))
+    assert any(w['code'] == 'no_alternative' for w in again.warnings) and again.meta['fingerprint'] == base.meta['fingerprint']
+
+
+def test_fingerprints_follow_the_geometry_only():
+    a = [(50.0 + i * 1e-4, 3.0) for i in range(40)]
+    assert quality.fingerprint(a) == quality.fingerprint(list(a))
+    assert quality.fingerprint(a) != quality.fingerprint(a[::-1]) and quality.fingerprint(a) != quality.fingerprint(a[:-1])

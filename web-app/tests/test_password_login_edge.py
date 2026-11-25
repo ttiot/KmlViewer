@@ -339,11 +339,11 @@ def test_a_limited_request_does_not_consume_the_identifier_bucket_when_the_ip_re
     assert login(app, 'alice', GOOD, ip=new_ip()).status_code == 200
 
 
-def test_a_successful_login_still_counts_against_the_limit_observation(app, conn):
-    """Observation (non bloquante) : le limiteur est consulté avant le hachage, donc il compte aussi les connexions réussies."""
+def test_a_successful_login_does_not_count_against_the_limit(app, conn):
+    """Décision de recette : le comptage se fait AVANT le hachage (r9) mais un SUCCÈS rend son accès : jamais de blocage par ses succès."""
     add(conn, 'alice')
-    statuses = [login(app, 'alice', GOOD).status_code for _ in range(7)]
-    assert statuses[0] == 200 and 429 in statuses
+    statuses = [login(app, 'alice', GOOD).status_code for _ in range(12)]
+    assert statuses == [200] * 12
 
 
 # ===== 3. Sémaphore de hachage saturé ===========================================================================================

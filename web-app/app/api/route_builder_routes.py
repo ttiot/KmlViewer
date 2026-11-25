@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 MAX_SEED = 2 ** 31 - 1
 MAX_NAME = 200
+MAX_SEEN = 20
 
 
 def _runtime():
@@ -74,7 +75,8 @@ def _error(exc) -> ApiError:
     if isinstance(exc, builder.InvalidBuild):
         return ApiError(str(exc), 400)
     if isinstance(exc, builder.UnreachablePoint):
-        return ApiError(f"Le point {exc.number} est hors de la zone couverte.", 422)           # CA-R20 : numéro d'ORIGINE
+        # Le point est DANS la zone couverte (sinon 400 avant tout appel) mais le moteur ne l'accroche à aucune voie (tolérance)
+        return ApiError(f"Le point {exc.number} est trop loin d'une voie praticable : rapproche-le d'un chemin.", 422)
     if isinstance(exc, NoRouteFound):
         return ApiError("Aucune trace possible avec ces points : essaie d'autres points.", 422)     # CA-R19
     if isinstance(exc, RoutingTimeout):
@@ -84,6 +86,14 @@ def _error(exc) -> ApiError:
     if isinstance(exc, InvalidResponse):
         return ApiError("Réponse du service de routage invalide.", 502)
     return ApiError("Erreur de routage.", 502)
+
+
+def _previous_fingerprints(runtime, user_id, previous_id) -> frozenset:
+    """Empreintes des propositions déjà vues, lues dans le résultat précédent de CET utilisateur (inconnu : ensemble vide)."""
+    previous = runtime.results.get(user_id, previous_id) if isinstance(previous_id, str) else None
+    if previous is None:
+        return frozenset()
+    return frozenset(previous.meta.get('seen') or ([previous.meta['fingerprint']] if previous.meta.get('fingerprint') else []))
 
 
 def _request_fields(data):
@@ -109,6 +119,7 @@ def route_builder_route_generate():
         raise ApiError("Service de routage en cours de démarrage." if state == 'starting'
                        else "Service de routage momentanément indisponible.", 503)
     user_id = current_user_id()
+    avoid = _previous_fingerprints(runtime, user_id, data.get('previous_result_id'))   # « Autre proposition » (RB-4.5, RB-4.12)
     refused = runtime.acquire(user_id)
     if refused == 'user':
         raise ApiError("Une génération est encore en cours, réessaie dans quelques secondes.", 429)
@@ -121,7 +132,7 @@ def route_builder_route_generate():
             response_error.retry_after = retry
             raise response_error
         try:
-            generation = builder.execute(runtime.provider(), prepared, config)
+            generation = builder.execute(runtime.provider(), prepared, config, avoid=avoid)
         except (builder.InvalidBuild, RoutingTimeout, RoutingUnavailable, InvalidResponse, NoRouteFound) as exc:
             raise _error(exc) from None
         except Exception:  # noqa: BLE001 - jamais de détail interne
@@ -137,14 +148,13 @@ def route_builder_route_generate():
     meta['warnings'] = list(generation.warnings)
     meta['next_seed'] = (meta.get('last_seed', seed) + 1) % (MAX_SEED + 1)
     meta['seed'] = meta.get('seed_used', meta.get('last_seed', seed))         # graine de la trace RETENUE (P-TR5-4)
-    if data.get('seed') is not None and not meta.get('seed_dependent', True):
-        # « Autre proposition » demandée mais la graine ne change rien (boucle de base, distance déjà dans la tolérance)
-        meta['warnings'].append({'code': 'no_alternative',
-                                 'message': "Aucune autre proposition : ces points ne laissent pas de variante."})
+    seen = list(avoid)[-MAX_SEEN:] + [meta['fingerprint']] if meta.get('fingerprint') else list(avoid)
+    meta['seen'] = list(dict.fromkeys(seen))[-MAX_SEEN:]                       # propositions déjà vues de cette série
     payload = {**parsed, 'filename': generation.name, 'success': True}
     result_id = runtime.results.put(user_id, generation.gpx, payload, meta)
     meta['result_id'] = result_id
-    return jsonify({**payload, 'route_meta': meta})
+    public = {k: v for k, v in meta.items() if k != 'seen'}                 # la série vue reste côté serveur
+    return jsonify({**payload, 'route_meta': public})
 
 
 def _clean_name(value, fallback: str) -> str:

@@ -151,6 +151,13 @@ def register_cli(app) -> None:
                 target = matches[0]
                 if target['auth_method'] != 'password':
                     raise click.ClickException("Seul un compte à mot de passe peut reprendre un amorçage.")
+                if not target['is_active']:
+                    # EF-0.3b : un compte DÉSACTIVÉ ne reprend pas d'amorçage (refus tracé, aucun jeton émis)
+                    from app.audit import record
+                    record(db, 'user.bootstrap_refused', actor=Actor.cli(), target_type='user', target_id=target['id'],
+                           details={'reason': 'compte désactivé', 'reset_password': bool(reset_password)})
+                    db.commit()
+                    raise click.ClickException("Ce compte est désactivé : réactive-le d'abord (EF-0.3b).")
                 if factors.has_second_factor(db, target['id']):
                     raise click.ClickException("Ce compte a déjà un second facteur : promouvoir avec `flask user-admin`.")
                 target_id, address = target['id'], target['email'] or email

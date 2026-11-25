@@ -153,7 +153,10 @@ const RouteBuilder = (() => {
         const body = { points: state.points, activity: $('rbActivity').value };
         const distance = $('rbDistance').value;
         if (distance) body.distance_km = Number(distance);
-        if (seed !== null) body.seed = seed;
+        if (seed !== null) {                                   // « Autre proposition » : graine suivante ET empreinte de la précédente
+            body.seed = seed;
+            if (state.result) body.previous_result_id = state.result.meta.result_id;
+        }
         state.lastRequest = { ...body };
         state.controller = new AbortController();
         $('rbCancel').hidden = false;

@@ -106,3 +106,12 @@ def decimate(points, limit: int):
         return points
     step = (len(points) - 1) / (limit - 1)
     return [points[round(i * step)] for i in range(limit)]
+
+
+def fingerprint(points) -> str:
+    """Empreinte de la GÉOMÉTRIE d'une trace (points arrondis à ~1 m, un sur trois + le dernier)."""
+    import hashlib
+    pts = list(points)
+    sample = pts[::3] + pts[-1:]
+    digest = hashlib.sha1(';'.join(f'{lat:.5f},{lon:.5f}' for lat, lon in sample).encode('ascii')).hexdigest()
+    return digest[:20]

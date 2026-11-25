@@ -178,8 +178,9 @@ def prepare(raw_points, activity, distance_km, seed, config: BuildConfig) -> Pre
         raise InvalidBuild("Points trop éloignés les uns des autres")
     if config.coverage_bbox is not None:
         lat_min, lon_min, lat_max, lon_max = config.coverage_bbox
-        if not all(lat_min <= p[0] <= lat_max and lon_min <= p[1] <= lon_max for p in points):
-            raise InvalidBuild("Un point est hors de la zone couverte")
+        for number, point in enumerate(points, start=1):                     # numéro d'ORIGINE, avant tout appel
+            if not (lat_min <= point[0] <= lat_max and lon_min <= point[1] <= lon_max):
+                raise InvalidBuild(f"Le point {number} est hors de la zone couverte.")
     kept, numbers = _deduplicated(points)
     warnings: List[dict] = []
     if len(kept) > 1 and quality_distance(kept[-1], kept[0]) < DUPLICATE_M:
@@ -203,8 +204,12 @@ def generate(provider: RoutingProvider, raw_points, activity, distance_km, seed,
 
 
 def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, *, clock: Callable = time.monotonic,
-            today: Optional[datetime] = None) -> Generation:
-    """Calcule la trace d'une entrée validée : boucle de base, détours, essais de graine, contrôles, GPX."""
+            today: Optional[datetime] = None, avoid=frozenset()) -> Generation:
+    """
+    Calcule la trace d'une entrée validée : boucle de base, détours, essais de graine, contrôles, GPX. `avoid` : empreintes des
+    propositions déjà vues (« Autre proposition ») : une trace de même géométrie est écartée au profit de la graine suivante, dans
+    la limite des essais ; sinon la meilleure est rendue avec l'avertissement `no_alternative`.
+    """
     entry, target_m, kept, numbers, warnings, seed = (prepared.entry, prepared.target_m, prepared.kept, prepared.numbers,
                                                       list(prepared.warnings), prepared.seed)
     budget = detours.Budget(config.max_calls, config.total_budget_s, clock)
@@ -214,17 +219,20 @@ def execute(provider: RoutingProvider, prepared: Prepared, config: BuildConfig, 
             'target_m': target_m, 'seed': seed}
     if len(kept) == 1:
         trace, elevations, tried, last_seed = _single_point(provider, kept[0], entry.profile, target_m, tolerance, seed,
-                                                            budget, config, meta, notes, numbers[0])
+                                                            budget, config, meta, notes, numbers[0], avoid)
         meta.update(d0_m=None, detours=0, strategy='round_trip', seed_dependent=True)
     else:
         trace, elevations, tried, last_seed = _loop(provider, kept, numbers, entry.profile, target_m, tolerance, seed, budget,
-                                                    config, meta, warnings, notes)
+                                                    config, meta, warnings, notes, avoid)
 
     for note in dict.fromkeys(notes):
         warnings.append(_warning('engine', note))
     if elevations is not None and len(elevations) == len(trace):
         elevations = quality.decimate(list(elevations), MAX_FILE_POINTS)     # mêmes indices que la trace
     trace = quality.decimate(trace, MAX_FILE_POINTS)  # borne des fichiers (TR2-2)
+    meta['fingerprint'] = quality.fingerprint(trace)
+    if meta['fingerprint'] in avoid:
+        warnings.append(_warning('no_alternative', "Aucune autre proposition différente trouvée pour ces points."))
     distance = quality.length_m(trace)
     overlap = quality.overlap_rate(trace)
     threshold = config.overlap_warning_pct_2pts if len(kept) == 2 else config.overlap_warning_pct
@@ -257,7 +265,8 @@ def _elevation_gain(elevations, count: int):
     return round(ascent, 1), round(descent, 1)
 
 
-def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta, notes, number=1):
+def _single_point(provider, start, profile, target_m, tolerance, seed, budget, config, meta, notes, number=1,
+                  avoid=frozenset()):
     """RB-4.1 : boucle native ; hors tolérance ⇒ graine suivante dans la limite des essais et du budget."""
     best, tried, last_seed = None, 0, seed
     for attempt in range(1 + config.seed_retries):
@@ -279,22 +288,23 @@ def _single_point(provider, start, profile, target_m, tolerance, seed, budget, c
         tried += 1
         notes.extend(result.warnings)
         trace = list(result.points)
-        candidate = (abs(quality.length_m(trace) - target_m), quality.overlap_rate(trace), trace, result.elevations_m)
-        if best is None or candidate[:2] < best[:2]:
+        seen = quality.fingerprint(trace) in avoid                  # déjà proposée : écartée si une autre existe
+        candidate = (seen, abs(quality.length_m(trace) - target_m), quality.overlap_rate(trace), trace, result.elevations_m)
+        if best is None or candidate[:3] < best[:3]:
             best = candidate
             meta['seed_used'] = last_seed
-        if candidate[0] <= tolerance * target_m:
+        if not seen and candidate[1] <= tolerance * target_m:
             break
     if best is None:
         raise RoutingTimeout()
-    return best[2], best[3], tried, last_seed
+    return best[3], best[4], tried, last_seed
 
 
 def _enough_left(budget) -> bool:
     return budget.calls_left() >= MIN_SEED_CALLS and budget.time_left() >= MIN_SEED_SECONDS
 
 
-def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, config, meta, warnings, notes):
+def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, config, meta, warnings, notes, avoid=frozenset()):
     """RB-4.2 à RB-4.4 : boucle de base, comparaison à la cible, détours et essais de graine."""
     sequence = list(kept) + [kept[0]]
     try:
@@ -338,11 +348,12 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
                                     accepts=accepts)
         outcome = strategy.run(ctx)
         tried += 1
-        key = (abs(outcome.distance_m - target_m), quality.overlap_rate(outcome.points))
+        seen = quality.fingerprint(outcome.points) in avoid          # déjà proposée : écartée si une autre existe
+        key = (seen, abs(outcome.distance_m - target_m), quality.overlap_rate(outcome.points))
         if best is None or key < best_key:
             best, best_key = outcome, key
             meta['seed_used'] = last_seed
-        if ctx.in_tolerance(outcome.distance_m):
+        if not seen and ctx.in_tolerance(outcome.distance_m):
             break
     meta.update(detours=best.detours, strategy=strategy.name, iterations=best.iterations, seed_dependent=True)
     notes.extend(best.engine_warnings)

@@ -698,3 +698,60 @@ def test_reset_password_needs_an_account_and_an_eligible_one(app, conn):
     plain = add(conn, 'plain')
     token = _invite_link(app, '--account', 'plain')                                          # sans --reset-password : mot de passe actuel
     assert tokens.inspect(conn, token) == 'confirm_password' and plain
+
+
+# --- Recette : le limiteur ne compte que les ÉCHECS ----------------------------------------------------------------------------------
+
+def test_ten_successful_logins_in_a_row_are_never_blocked_then_five_failures_are_429(app, conn):
+    from app.ratelimit import Limiters
+    user, secret, codes = enrolled(app, conn)
+    app.extensions['limiters'] = Limiters(clock=lambda: 0.0)                       # seuils PAR DÉFAUT (5 / 15 min), horloge figée
+    for code in codes:                                                              # 10 connexions réussies (codes de secours)
+        client = app.test_client()
+        assert login(client).get_json()['step'] == 'mfa'
+        ok = post(client, '/auth/password/mfa', {'code': code}, csrf_of(client, '/auth/password/mfa'))
+        assert ok.status_code == 200, ok.get_data()
+    statuses = []
+    for _ in range(7):
+        client = app.test_client()
+        step = login(client)
+        if step.status_code != 200:
+            statuses.append(step.status_code)
+            continue
+        statuses.append(post(client, '/auth/password/mfa', {'code': '000001'}, csrf_of(client, '/auth/password/mfa')).status_code)
+    assert statuses[:5] == [401] * 5 and 429 in statuses[5:]
+
+
+def test_a_success_never_consumes_the_budget_of_the_password_or_the_second_factor(app, conn):
+    from app.ratelimit import Limiters, Limits
+    user, secret, codes = enrolled(app, conn)
+    limiters = Limiters(limits=Limits(password_per_identifier=3, password_per_ip=100, mfa_per_account=3), clock=lambda: 0.0)
+    app.extensions['limiters'] = limiters
+    for code in (code_for(secret, 1), codes[0], codes[1], codes[2]):                 # 4 succès > 3 : jamais bloqué
+        client = app.test_client()
+        assert login(client).status_code == 200
+        assert post(client, '/auth/password/mfa', {'code': code}, csrf_of(client, '/auth/password/mfa')).status_code == 200
+    assert limiters.mfa_account.peek(user['id'])[0] is True
+    assert limiters.password_identifier.peek('alice')[0] is True
+
+
+def test_peek_and_refund_never_count_and_never_go_below_zero():
+    from app.ratelimit import BucketLimiter, LruLimiter
+    for limiter in (LruLimiter(2, 900, clock=lambda: 0.0), BucketLimiter(2, 900, clock=lambda: 0.0)):
+        assert limiter.peek('k') == (True, 0)
+        limiter.refund('k')                                                          # rien à rendre : pas de crédit négatif
+        assert limiter.hit('k')[0] and limiter.hit('k')[0] and not limiter.hit('k')[0]
+        assert limiter.peek('k')[0] is False
+        limiter.refund('k')
+        assert limiter.peek('k')[0] is True and limiter.hit('k')[0] is True
+
+
+def test_user_invite_account_refuses_a_disabled_account_with_an_audit_and_no_token_T_Doc3_A(app, conn):
+    off = add(conn, 'off')
+    conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (off['id'],))
+    conn.commit()
+    for extra in ([], ['--reset-password']):
+        result = app.test_cli_runner().invoke(args=['user-invite', '--admin', '--account', 'off', *extra])
+        assert result.exit_code != 0 and 'désactivé' in result.output and '/auth/token#t=' not in result.output
+    assert conn.execute("SELECT COUNT(*) FROM auth_tokens WHERE kind = 'bootstrap'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'user.bootstrap_refused'").fetchone()[0] == 2

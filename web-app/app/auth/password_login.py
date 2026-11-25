@@ -166,6 +166,8 @@ def password_login():
         return response
     if not ok or row is None:
         return jsonify(GENERIC_FAILURE), 401
+    limiters.password_identifier.refund(identifier)         # un SUCCÈS ne consomme pas le budget (compté avant hachage : r9)
+    limiters.password_ip.refund(ip_key(ip))
     if new_hash:                                                                           # rehachage (paramètres relevés)
         db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, row['id']))
         db.commit()

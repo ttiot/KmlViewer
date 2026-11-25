@@ -575,7 +575,7 @@ def test_the_422_message_is_the_specified_one_with_the_original_number_and_no_fo
     app.extensions['routing'].provider_factory = lambda: FakeProvider(unroutable=lambda p: tuple(p) == bad)
     client = session_for(app, add(conn, 'alice'))
     message = generate(client).get_json()['error']
-    assert message == 'Le point 3 est hors de la zone couverte.'
+    assert message == "Le point 3 est trop loin d'une voie praticable : rapproche-le d'un chemin."
     app.extensions['routing'].provider_factory = lambda: FakeProvider(fail=NoRouteFound())
     assert 'itinéraire' not in generate(client).get_json()['error'].lower()
 
@@ -654,11 +654,26 @@ def test_another_proposal_with_the_next_seed_gives_a_different_trace_end_to_end(
 
 def test_a_request_whose_trace_does_not_depend_on_the_seed_says_there_is_no_other_proposal(ready):
     client, _ = ready
-    plain = generate(client, seed=3).get_json()['route_meta']                              # pas de distance : boucle de base seule
-    assert any(w['code'] == 'no_alternative' for w in plain['warnings'])
-    assert not any(w['code'] == 'no_alternative' for w in generate(client).get_json()['route_meta']['warnings'])       # sans graine : rien
-    varied = generate(client, distance_km=30, seed=3).get_json()['route_meta']
-    assert not any(w['code'] == 'no_alternative' for w in varied['warnings'])
+    first = generate(client, seed=3).get_json()['route_meta']                              # pas de distance : boucle de base seule
+    assert not any(w['code'] == 'no_alternative' for w in first['warnings'])
+    again = generate(client, seed=4, previous_result_id=first['result_id']).get_json()['route_meta']
+    assert any(w['code'] == 'no_alternative' and 'différente' in w['message'] for w in again['warnings'])
+    varied = generate(client, distance_km=30, seed=3).get_json()
+    other = generate(client, distance_km=30, seed=4, previous_result_id=varied['route_meta']['result_id']).get_json()
+    assert not any(w['code'] == 'no_alternative' for w in other['route_meta']['warnings'])
+    assert _trace_print(varied) != _trace_print(other)
+
+
+def test_the_server_skips_a_proposal_already_seen_and_a_foreign_previous_id_is_ignored(app, conn, ready):
+    client, user = ready
+    first = generate(client, distance_km=30, seed=1).get_json()
+    # même graine que la précédente, MAIS l'empreinte est à éviter : la graine suivante est essayée
+    second = generate(client, distance_km=30, seed=1, previous_result_id=first['route_meta']['result_id']).get_json()
+    assert _trace_print(second) != _trace_print(first) and second['route_meta']['attempts'] >= 2
+    assert second['route_meta']['seed'] > 1 and 'seen' not in second['route_meta']
+    stranger = session_for(app, add(conn, 'mallory'))
+    third = generate(stranger, distance_km=30, seed=1, previous_result_id=first['route_meta']['result_id']).get_json()
+    assert _trace_print(third) == _trace_print(first) and third['route_meta']['attempts'] == 1       # id d'un autre : ignoré
 
 
 def _engine_up():
@@ -681,3 +696,11 @@ def test_another_proposal_differs_against_the_local_engine():
         seen.add(tuple((round(lat, 5), round(lon, 5)) for lat, lon in generation.points[::7]))
         seed = generation.meta['last_seed'] + 1
     assert len(seen) == 5
+
+
+def test_outside_the_coverage_is_a_400_with_the_original_number_and_too_far_from_a_way_is_a_422(ready):
+    client, _ = ready
+    outside = generate(client, points=[[50.63, 3.06], [51.51, -0.13], [50.64, 3.10]])
+    assert outside.status_code == 400 and outside.get_json()['error'] == 'Le point 2 est hors de la zone couverte.'
+    for text in (outside.get_json()['error'],):
+        assert 'itinéraire' not in text.lower()

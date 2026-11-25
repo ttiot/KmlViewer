@@ -96,9 +96,7 @@ def test_the_two_variants_do_not_cross(app, conn):
 
 
 @pytest.mark.parametrize('setup,label', [
-    pytest.param("UPDATE users SET is_active = 0 WHERE username = 'chef'", 'désactivé', marks=pytest.mark.xfail(
-        strict=True, reason="T-Doc3-A (EF-0.3b : « compte password ACTIF sans facteur seulement ; sinon refus ») : la CLI émet un lien (code 0) pour un "
-                            "compte DÉSACTIVÉ ; il sera refusé à la consommation (réponse neutre), mais l'opérateur croit avoir un lien utilisable")),
+    ("UPDATE users SET is_active = 0 WHERE username = 'chef'", 'désactivé'),                  # T-Doc3-A corrigé (EF-0.3b)
     ("UPDATE users SET auth_method = 'oidc', password_hash = NULL, sub = 'sub:chef' WHERE username = 'chef'", 'SSO'),
     ("UPDATE users SET totp_secret = x'01', totp_enabled_at = '2026-01-01T00:00:00Z' WHERE username = 'chef'", 'avec facteur'),
 ])
