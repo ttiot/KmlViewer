@@ -40,7 +40,8 @@ python -m pytest --cov=app
 Dossier surveillé, import depuis l'interface, statistiques par semaine / mois / année, tronçons
 personnels chronométrés, correction d'altitude par MNT, authentification OIDC (FusionAuth),
 sécurité et sauvegarde : voir [docs/bibliotheque.md](docs/bibliotheque.md).
-Configuration : copier `.env.example` en `.env` et lire [la section Configuration](#-configuration).
+Configuration : créer le `.env` en `0600` (`install -m 600 .env.example .env` : il contiendra des clés secrètes) et lire
+[la section Configuration](#-configuration). `TRUST_PROXY` vaut `0` dans le modèle (sans reverse proxy) : le passer à `1` derrière un proxy TLS.
 Procédures d'exploitation (perte de clé, perte d'un second facteur, bascule de mode, mise à jour,
 horloge, mémoire) : [docs/exploitation.md](docs/exploitation.md).
 
@@ -194,7 +195,8 @@ La CI publie l'image de la branche `ghcr.io/ttiot/kmlviewer:unstable-feature-adm
 Hub), qui contient tout : modes `oidc` / `local` / `password`, TOTP, codes de secours, WebAuthn, invitations, `/admin`,
 constructeur de traces. **Instance de test, base neuve, jamais en production.** Variables obligatoires du mode `password` :
 `AUTH_MODE`, `PUBLIC_URL`, `TRUSTED_HOSTS`, `SECRET_KEY`, `SECRETS_KEY` (et `SESSION_COOKIE_SECURE=0` pour un test local en HTTP
-seulement). Déploiement avec le compose, amorçage du premier admin, moteur de routage et **checklist « avant de tester »** :
+seulement) ; `.env` en `0600` et `TRUST_PROXY=0` sans reverse proxy. Le tag de branche **bouge à chaque push** : pour un test
+reproductible, épingler `sha-<7 caractères du commit>`. Déploiement avec le compose, amorçage du premier admin, moteur de routage et **checklist « avant de tester »** :
 [docs/exploitation.md](docs/exploitation.md#déployer-limage-publiée-pour-tester).
 
 ### Déploiement géré par Ansible
@@ -211,8 +213,13 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
   verrouillage). Une valeur saisie dans l'admin l'emporte et survit aux redéploiements ; écarts visibles avec
   `flask settings-list`, retour à la valeur d'Ansible avec `flask settings-reset <clé>`. Ne régler dans l'interface que
   ce qu'Ansible ne gère pas.
-- **Données** : volume nommé `kml-viewer-data` (`project_name` fixe), sauvegardes à sortir du serveur ; la `SECRETS_KEY`
-  est dans le Vault, pas dans les sauvegardes.
+- **Image** : une image locale `kml-viewer:local` déjà présente n'est **pas reconstruite** par `docker compose up -d` : `build:
+  always` dans la tâche Ansible, ou une image publiée épinglée ; vérifier la version servie (`/api/health`) après chaque déploiement.
+- **Journaux** : aucune rotation configurée par le compose : poser `json-file` `max-size`/`max-file` (`daemon.json`) sur l'hôte.
+- **Reverse proxy** : avec `TRUST_PROXY=1`, il doit poser `X-Forwarded-For` et `X-Forwarded-Proto` et ne jamais relayer ceux du
+  client ([détail](docs/exploitation.md#reverse-proxy--ce-quil-doit-poser-trust_proxy)).
+- **Données** : volume nommé `kml-viewer-data` (`project_name` fixe), sauvegardes à sortir du serveur, **archive en `0600`, image
+  épinglée, chiffrée avant de quitter le serveur** ; la `SECRETS_KEY` est dans le Vault, pas dans les sauvegardes.
 - **CLI** : canal **opérateur de confiance**, sans authentification propre : l'accès à `docker` équivaut à l'accès à la
   CLI, et aucun autre utilisateur système ne doit exister sur le serveur. Les commandes se lancent à la main
   (`docker compose exec` ou `run`), pas depuis un playbook.
@@ -366,7 +373,7 @@ la date, l'auteur et la destination liée.
 | `SECRET_KEY` | Signature des cookies de session. Refus de démarrer en `oidc`/`password` si elle est par défaut ou fait moins de 32 caractères (`openssl rand -hex 32`) | valeur par défaut (refusée) |
 | `SECRETS_KEY` | Clé(s) Fernet qui chiffrent les secrets en base (mot de passe SMTP, clé d'API, secrets TOTP). **Plusieurs clés séparées par des virgules** : la première chiffre, toutes déchiffrent. Distincte de `SECRET_KEY`. Obligatoire en mode `password` ; variable d'environnement seulement, **jamais dans la base ni dans `flask backup`**. Voir ci-dessous | vide |
 | `TRUSTED_HOSTS` | Noms d'hôte acceptés (virgules ; `.example.com` couvre aussi les sous-domaines). Tout autre en-tête `Host` reçoit 400, sauf pour `/api/health`. Obligatoire en `oidc` et `password` ; en `local`, vide = `localhost` et `127.0.0.1` | vide |
-| `TRUST_PROXY` | Nombre de reverse proxies de confiance (`X-Forwarded-For/Proto`) ; indispensable derrière un proxy TLS pour l'URL de callback OIDC | `0` |
+| `TRUST_PROXY` | Nombre de reverse proxies de confiance (`X-Forwarded-For/Proto`) ; indispensable derrière un proxy TLS pour l'URL de callback OIDC. Le proxy doit **poser** ces en-têtes et ne jamais relayer ceux du client ; **sans proxy, laisser `0`** (avec `1`, le client choisit son adresse et son schéma). Le `.env.example` a `0` ; passer à `1` derrière un proxy TLS. Voir [Reverse proxy](docs/exploitation.md#reverse-proxy--ce-quil-doit-poser-trust_proxy) | `0` |
 | `TRUST_PROXY_HOST` | `1` seulement si le proxy réécrit `Host` **et** pose `X-Forwarded-Host` (HAProxy : laisser à `0`) | `0` |
 | `SESSION_COOKIE_SECURE` | Cookie marqué `Secure`. Vide : activé d'office en `oidc` et `password` ; `0` : dérogation de développement en HTTP, signalée dans les logs | vide |
 | `SESSION_LIFETIME_HOURS` | Durée absolue d'une session, depuis la connexion | `12` |
@@ -388,8 +395,8 @@ Générer une clé :
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-# sans la bibliothèque `cryptography` sur l'hôte : la même commande dans l'image (vérifié)
-docker run --rm --entrypoint python ghcr.io/ttiot/kmlviewer:latest -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# `python` + `cryptography` disponibles sur le serveur : commande ci-dessus. Sinon, la même commande dans l'image de test (vérifié) :
+docker run --rm --entrypoint python ghcr.io/ttiot/kmlviewer:unstable-feature-admin-space-and-route-builder -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 Une valeur mal formée (autre chose qu'une clé Fernet) refuse le démarrage ; une valeur chiffrée en base
@@ -733,6 +740,18 @@ sont **toutes livrées**, WebAuthn et constructeur de traces compris. Restent, p
 | Mot de passe oublié sans SMTP | Aucun mail ne part : un admin génère un lien de réinitialisation (onglet Utilisateurs) et le transmet |
 | `./restart.sh` ne relit pas `.env` | Outil de développement local ; en déploiement, recréer le conteneur (`docker compose up -d`). Modification du script en attente de décision |
 | Diagnostic « fond par défaut indisponible » (nit T16-n3) | Si le fond de carte par défaut devient non autorisé, la carte retombe sur le premier fond autorisé sans le signaler dans l'administration |
+
+### Limites connues du déploiement
+
+- **Service d'altitude `opentopodata` (profil `dem`)** : contrairement au moteur de routage, il n'est **pas durci** : il tourne
+  en **root**, sans `cap_drop`, sans système de fichiers en lecture seule, sans limite de mémoire ni de processus (seul
+  `no-new-privileges` est posé), sur le réseau par défaut (accès sortant) ; il reçoit les coordonnées des traces. Il n'a aucun port
+  publié et son image est épinglée sur un commit. Durcissement envisagé (même protections que `graphhopper`, réseau interne
+  dédié) : non fait.
+- **Journaux des conteneurs** : aucune rotation n'est configurée par le compose, voir
+  [Journaux des conteneurs](docs/exploitation.md#journaux-des-conteneurs--prévoir-une-rotation).
+- **Image locale** : `docker compose up -d` ne reconstruit pas une image `kml-viewer:local` déjà présente, voir
+  [Mise à jour](docs/exploitation.md#sauvegarde-et-mise-à-jour).
 
 ## 🐛 Dépannage
 
