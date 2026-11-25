@@ -22,13 +22,14 @@ SETTINGS = os.environ.get('BENCH_SETTINGS_URL', '').rstrip('/')      # instance 
 REGISTRY = os.environ.get('BENCH_REGISTRY_URL', '').rstrip('/')
 DEM_APP = os.environ.get('BENCH_DEM_URL', '').rstrip('/')           # instance 5 : DEM_URL posé (service d'altitude factice)
 DEM_SVC = os.environ.get('BENCH_DEM_SVC', '').rstrip('/')           # service d'altitude factice : /gate/open, /gate/close
+NOPW = os.environ.get('BENCH_NOPW_URL', '').rstrip('/')            # mode oidc SANS SECRETS_KEY : invitations indisponibles
 OUT = os.environ.get('BENCH_OUT', '/out')
 results = []
 
 # Aucune sortie réseau (EF-6.17) : toute requête du navigateur vers un autre hôte que les applications de test est
 # INTERCEPTÉE (page.route), ENREGISTRÉE puis BLOQUÉE ; les tuiles des hôtes de tuiles reçoivent une image locale de 1 pixel.
 # La liste sert de preuve (CA-76).
-APP_HOSTS = {urllib.parse.urlsplit(u).netloc for u in (BASE, OIDC, SETTINGS, REGISTRY, DEM_APP) if u}
+APP_HOSTS = {urllib.parse.urlsplit(u).netloc for u in (BASE, OIDC, SETTINGS, REGISTRY, DEM_APP, NOPW) if u}
 TILE_HOST_SUFFIXES = ('tile.openstreetmap.org', 'tile.opentopomap.org', 'basemaps.cartocdn.com', 'server.arcgisonline.com',
                       'tiles.exemple.fr')
 PIXEL = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=')
@@ -1093,6 +1094,73 @@ def dem_correction_reaches_the_viewer(page):
     assert not problems, ' | '.join(problems)
 
 
+def sso_profile(page, base, account):
+    """Ouvre /profile d'un compte SSO de test (cookie signé par l'application, posé sans passer par l'IdP), contexte à part."""
+    with open(f"/sess/{'oidc' if base == OIDC else 'nopw'}.json", encoding='utf-8') as handle:
+        cookie = json.load(handle)[account]
+    context = page.context.browser.new_context(viewport={'width': 1280, 'height': 900}, locale='fr-FR')
+    context.route('**/*', intercept)
+    context.add_cookies([{'name': 'session', 'value': cookie, 'url': base}])
+    view = context.new_page()
+    view.goto(base + '/profile')
+    view.wait_for_selector('h1')
+    return view
+
+
+@scenario("(j) Profil d'un compte SSO : section Invitations (formulaire, création, crédit décrémenté), sans crédit, indisponible")
+def sso_invitations(page):
+    problems = []
+
+    def soft(label, check):
+        try:
+            check()
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f'{label} : {type(exc).__name__}: {str(exc)[:200]}')
+
+    # 1. compte SSO non admin avec 1 crédit : section, formulaire, invitation créée, crédit décrémenté
+    view = sso_profile(page, OIDC, 'sso-credit')
+    try:
+        def with_credit():
+            expect(view.locator('#p-inv')).to_be_visible()
+            expect(view.locator('#invCredits')).to_have_text('Crédits restants : 1', timeout=10000)
+            expect(view.locator('#invForm')).to_be_visible()
+            assert view.locator('#passwordForm').count() == 0, 'bloc mot de passe visible pour un compte SSO'
+            view.screenshot(path=f'{OUT}/31-profil-sso-avec-credit.png', full_page=True)
+            view.fill('#invEmail', 'ami@example.org')
+            view.click('#invForm button[type=submit]')
+            expect(view.locator('#invOneShot')).to_be_visible(timeout=10000)
+            assert OIDC in view.locator('#invOneShotValue').inner_text()
+            expect(view.locator('#invCredits')).to_have_text('Crédits restants : 0', timeout=10000)
+            expect(view.locator('#invForm')).to_be_hidden()
+            assert 'ami@example.org' in view.locator('#invList').inner_text()
+            view.screenshot(path=f'{OUT}/32-profil-sso-invitation-creee.png', full_page=True)
+        soft('SSO avec 1 crédit', with_credit)
+    finally:
+        view.context.close()
+    # 2. compte SSO sans crédit : section présente, formulaire absent, texte des crédits
+    view = sso_profile(page, OIDC, 'sso-nocredit')
+    try:
+        def without_credit():
+            expect(view.locator('#p-inv')).to_be_visible()
+            expect(view.locator('#invCredits')).to_have_text('Crédits restants : 0', timeout=10000)
+            expect(view.locator('#invForm')).to_be_hidden()
+            view.screenshot(path=f'{OUT}/33-profil-sso-sans-credit.png', full_page=True)
+        soft('SSO sans crédit', without_credit)
+    finally:
+        view.context.close()
+    # 3. invitations indisponibles (mode oidc sans SECRETS_KEY) : section absente
+    view = sso_profile(page, NOPW, 'sso-credit')
+    try:
+        def unavailable():
+            assert view.locator('#p-inv').count() == 0, 'section présente sans invitations'
+            assert view.locator('#invForm').count() == 0, 'formulaire présent sans invitations'
+            view.screenshot(path=f'{OUT}/34-profil-sso-invitations-indisponibles.png', full_page=True)
+        soft('invitations indisponibles', unavailable)
+    finally:
+        view.context.close()
+    assert not problems, ' | '.join(problems)
+
+
 @scenario("(f) /admin Réglages : confirmation DANS LA PAGE avant d'effacer un secret lié (jamais confirm())")
 def confirm_secret_erase(page):
     dialogs = []
@@ -1150,6 +1218,8 @@ def main():
         errors = []
         runs = [builder, admin_diagnostic, admin_audit, oidc_login, smtp_banner, confirm_secret_erase,
                 external_request_is_blocked, action_bar_mobile, action_bar_desktop]
+        if NOPW:
+            runs += [sso_invitations]
         if DEM_APP and DEM_SVC:
             runs += [dem_correction_reaches_the_viewer]
         if SETTINGS and REGISTRY:

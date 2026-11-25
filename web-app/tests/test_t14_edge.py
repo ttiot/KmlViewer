@@ -663,8 +663,9 @@ def test_the_mail_test_goes_to_the_validated_address_else_the_pending_one_else_4
 
 # ===== G. T15 : JS et gabarits ==================================================================================================
 
-SOURCES = ['static/js/admin.js', 'static/js/profile-security.js', 'static/js/password-enroll.js', 'static/js/password-mfa.js',
-           'static/js/password-login.js', 'static/js/password-forgot.js', 'static/js/token.js']
+SOURCES = ['static/js/admin.js', 'static/js/admin-settings.js', 'static/js/profile-security.js', 'static/js/profile-invitations.js',
+           'static/js/password-enroll.js', 'static/js/password-mfa.js', 'static/js/password-login.js', 'static/js/password-forgot.js',
+           'static/js/token.js']
 SINKS = re.compile(r'\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write|\beval\s*\(|new\s+Function|setTimeout\s*\(\s*[\'"`]|setInterval\s*\(\s*[\'"`]|'
                    r'\.srcdoc|createContextualFragment|dangerouslySet|\$\(.*\)\.html\(')
 

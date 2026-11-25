@@ -24,7 +24,7 @@ mkdir -p "$OUT"
 
 # Les quatre ports doivent être libres (un serveur de développement oublié sur le même port ferait jouer les scénarios sur la mauvaise application)
 for port in "${BENCH_PORT:-5277}" "${BENCH_OIDC_PORT:-5279}" "${BENCH_SETTINGS_PORT:-5281}" "${BENCH_REGISTRY_PORT:-5283}" \
-        "${BENCH_DEM_APP_PORT:-5285}" "${BENCH_DEM_SVC_PORT:-5290}"; do
+        "${BENCH_DEM_APP_PORT:-5285}" "${BENCH_DEM_SVC_PORT:-5290}" "${BENCH_NOPW_PORT:-5287}"; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
         echo "Le port $port est déjà utilisé : libère-le ou choisis-en un autre (BENCH_PORT, BENCH_OIDC_PORT, BENCH_SETTINGS_PORT, BENCH_REGISTRY_PORT)" >&2
         exit 2
@@ -52,13 +52,15 @@ OIDC_PORT="${BENCH_OIDC_PORT:-5279}"
 SETTINGS_PORT="${BENCH_SETTINGS_PORT:-5281}"
 REGISTRY_PORT="${BENCH_REGISTRY_PORT:-5283}"
 DEM_APP_PORT="${BENCH_DEM_APP_PORT:-5285}"
+NOPW_PORT="${BENCH_NOPW_PORT:-5287}"
 DEM_SVC_PORT="${BENCH_DEM_SVC_PORT:-5290}"
 NAME_OIDC="$NAME-oidc"
 NAME_SET="$NAME-settings"
 NAME_REG="$NAME-registry"
 NAME_DEM="$NAME-dem"
+NAME_NOPW="$NAME-nopw"
 NAME_DEMSVC="$NAME-demsvc"
-cleanup() { docker rm -f "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" "$NAME_DEM" "$NAME_DEMSVC" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" "$NAME_DEM" "$NAME_DEMSVC" "$NAME_NOPW" >/dev/null 2>&1 || true; rm -rf "${SESS:-/nonexistent}" 2>/dev/null || true; }
 trap cleanup EXIT
 
 # Instance 1 : mode local (administrateur implicite), moteur réel, e-mail volontairement NON configuré au départ (bandeau « SMTP absent »)
@@ -69,12 +71,25 @@ docker run -d --name "$NAME" --network host --tmpfs /data --tmpfs /tmp \
     "$APP_IMAGE" sh -c "python tests_browser/seed.py && exec gunicorn --bind 127.0.0.1:$PORT --workers 1 --threads 8 --no-control-socket kml_viewer:app" >/dev/null
 
 # Instance 2 : mode oidc de test (IdP factice jamais joint) avec comptes à mot de passe : page de connexion unique (SSO + formulaire)
+# et comptes SSO de test (seed_sso.py : cookies de session signés par l'application, SECRET_KEY fixe du banc) : profil, invitations
+BENCH_SECRET_KEY="${BENCH_SECRET_KEY:-bench-secret-key-0123456789abcdef-0123456789abcdef}"     # SECRET_KEY FIXE du banc (base jetable, jamais un secret)
+SESS="$(mktemp -d)"
 docker run -d --name "$NAME_OIDC" --network host --tmpfs /data --tmpfs /tmp \
-    -v "$WEB_APP:/app:ro" -w /app \
+    -v "$WEB_APP:/app:ro" -v "$SESS:/sess" -w /app \
     -e PYTHONPATH=/app -e PYTHONDONTWRITEBYTECODE=1 -e FLASK_ENV=production -e AUTH_MODE=oidc -e DATA_DIR=/data -e INBOX_ENABLED=0 \
-    -e OIDC_ISSUER=https://idp.invalid -e OIDC_CLIENT_ID=bench -e OIDC_CLIENT_SECRET=bench -e "SECRET_KEY=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+    -e OIDC_ISSUER=https://idp.invalid -e OIDC_CLIENT_ID=bench -e OIDC_CLIENT_SECRET=bench -e "SECRET_KEY=$BENCH_SECRET_KEY" \
     -e "SECRETS_KEY=$BENCH_SECRETS_KEY" -e "PUBLIC_URL=http://127.0.0.1:$OIDC_PORT" -e "TRUSTED_HOSTS=127.0.0.1" -e SESSION_COOKIE_SECURE=0 \
-    "$APP_IMAGE" gunicorn --bind "127.0.0.1:$OIDC_PORT" --workers 1 --threads 8 --no-control-socket kml_viewer:app >/dev/null
+    -e SSO_OUT=/sess -e SSO_NAME=oidc \
+    "$APP_IMAGE" sh -c "python tests_browser/seed_sso.py && exec gunicorn --bind 127.0.0.1:$OIDC_PORT --workers 1 --threads 8 --no-control-socket kml_viewer:app" >/dev/null
+
+# Instance 2 bis : mode oidc SANS SECRETS_KEY : les invitations sont indisponibles (EF-0.4) ; même comptes SSO de test
+docker run -d --name "$NAME_NOPW" --network host --tmpfs /data --tmpfs /tmp \
+    -v "$WEB_APP:/app:ro" -v "$SESS:/sess" -w /app \
+    -e PYTHONPATH=/app -e PYTHONDONTWRITEBYTECODE=1 -e FLASK_ENV=production -e AUTH_MODE=oidc -e DATA_DIR=/data -e INBOX_ENABLED=0 \
+    -e OIDC_ISSUER=https://idp.invalid -e OIDC_CLIENT_ID=bench -e OIDC_CLIENT_SECRET=bench -e "SECRET_KEY=$BENCH_SECRET_KEY" \
+    -e "PUBLIC_URL=http://127.0.0.1:$NOPW_PORT" -e "TRUSTED_HOSTS=127.0.0.1" -e SESSION_COOKIE_SECURE=0 \
+    -e SSO_OUT=/sess -e SSO_NAME=nopw \
+    "$APP_IMAGE" sh -c "python tests_browser/seed_sso.py && exec gunicorn --bind 127.0.0.1:$NOPW_PORT --workers 1 --threads 8 --no-control-socket kml_viewer:app" >/dev/null
 
 # Instance 3 : page Réglages (CA-72 à CA-77) : registre v1, en base SEULEMENT map.zoom, dans l'env SEULEMENT DEM_TIMEOUT=30 (ni INBOX_ENABLED, ni
 # aucune autre variable de réglage), tuiles autorisées : a.tiles.exemple.fr seulement ; SMTP : deux destinations permises (confirmation du secret lié)
@@ -101,7 +116,7 @@ docker run -d --name "$NAME_DEM" --network host --tmpfs /data --tmpfs /tmp \
     -e "BENCH_ENGINE_URL=$ENGINE" -e "DEM_URL=http://127.0.0.1:$DEM_SVC_PORT/v1/test" -e DEM_BACKFILL_INTERVAL=30 \
     "$APP_IMAGE" sh -c "python tests_browser/seed.py && exec gunicorn --bind 127.0.0.1:$DEM_APP_PORT --workers 1 --threads 8 --no-control-socket kml_viewer:app" >/dev/null
 
-URLS="http://127.0.0.1:$PORT http://127.0.0.1:$OIDC_PORT http://127.0.0.1:$SETTINGS_PORT http://127.0.0.1:$REGISTRY_PORT http://127.0.0.1:$DEM_APP_PORT"
+URLS="http://127.0.0.1:$PORT http://127.0.0.1:$OIDC_PORT http://127.0.0.1:$SETTINGS_PORT http://127.0.0.1:$REGISTRY_PORT http://127.0.0.1:$DEM_APP_PORT http://127.0.0.1:$NOPW_PORT"
 for _ in $(seq 1 90); do
     ready=1
     for url in $URLS; do curl -fsS -m 2 "$url/api/health" >/dev/null 2>&1 || ready=0; done
@@ -110,13 +125,13 @@ for _ in $(seq 1 90); do
 done
 for url in $URLS; do
     curl -fsS -m 2 "$url/api/health" >/dev/null 2>&1 || { echo "L'application ne démarre pas ($url) :" >&2
-        for name in "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" "$NAME_DEM"; do docker logs "$name" 2>&1 | tail -10 >&2; done; exit 3; }
+        for name in "$NAME" "$NAME_OIDC" "$NAME_SET" "$NAME_REG" "$NAME_DEM" "$NAME_NOPW"; do docker logs "$name" 2>&1 | tail -10 >&2; done; exit 3; }
 done
 sleep 6   # laisse passer le premier sondage de santé du moteur (diagnostic « disponible »)
 
 set +e
 docker run --rm --network host --ipc=host \
-    -v "$HERE:/work:ro" -v "$OUT:/out" -e "BENCH_URL=http://127.0.0.1:$PORT" -e "BENCH_OIDC_URL=http://127.0.0.1:$OIDC_PORT" -e "BENCH_SETTINGS_URL=http://127.0.0.1:$SETTINGS_PORT" -e "BENCH_REGISTRY_URL=http://127.0.0.1:$REGISTRY_PORT" -e "BENCH_DEM_URL=http://127.0.0.1:$DEM_APP_PORT" -e "BENCH_DEM_SVC=http://127.0.0.1:$DEM_SVC_PORT" -e BENCH_OUT=/out -e "BENCH_ONLY=${BENCH_ONLY:-}" -e PYTHONDONTWRITEBYTECODE=1 -e "BENCH_UID=$(id -u)" -e "BENCH_GID=$(id -g)" \
+    -v "$HERE:/work:ro" -v "$OUT:/out" -v "$SESS:/sess:ro" -e "BENCH_URL=http://127.0.0.1:$PORT" -e "BENCH_OIDC_URL=http://127.0.0.1:$OIDC_PORT" -e "BENCH_SETTINGS_URL=http://127.0.0.1:$SETTINGS_PORT" -e "BENCH_REGISTRY_URL=http://127.0.0.1:$REGISTRY_PORT" -e "BENCH_DEM_URL=http://127.0.0.1:$DEM_APP_PORT" -e "BENCH_DEM_SVC=http://127.0.0.1:$DEM_SVC_PORT" -e "BENCH_NOPW_URL=http://127.0.0.1:$NOPW_PORT" -e BENCH_OUT=/out -e "BENCH_ONLY=${BENCH_ONLY:-}" -e PYTHONDONTWRITEBYTECODE=1 -e "BENCH_UID=$(id -u)" -e "BENCH_GID=$(id -g)" \
     "$PLAYWRIGHT_IMAGE" python /work/scenarios.py
 STATUS=$?
 set -e

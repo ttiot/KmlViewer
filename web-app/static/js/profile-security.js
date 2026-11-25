@@ -1,4 +1,4 @@
-// Sécurité du compte (mot de passe, adresse, second facteur, invitations). Données du serveur : textContent seulement ; le QR code
+// Sécurité du compte (mot de passe, adresse, second facteur ; les invitations sont dans profile-invitations.js). Données du serveur : textContent seulement ; le QR code
 // (SVG produit par le serveur) est inséré via DOMParser dans un nœud dédié ; les codes de secours ne vont jamais dans le stockage du navigateur.
 'use strict';
 
@@ -129,19 +129,5 @@
         if (await act(post('/api/me/mfa/totp', creds(), 'DELETE'), () => notify('Code TOTP retiré.'))) loadMfa();
     });
 
-    // -- invitations -----------------------------------------------------------------------------------------------------
-    async function loadInvitations() {
-        const data = await act(api('/api/invitations'));
-        if (!data) return;
-        $('invCredits').textContent = data.is_admin ? 'Administrateur : invitations illimitées.' : `Crédits restants : ${data.invite_credits}`;
-        $('invForm').hidden = !data.can_invite;
-        $('invList').replaceChildren(...data.invitations.map((i) => el('li', {}, `${i.email || '—'} · ${i.status}`)));
-    }
-    $('invForm').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const r = await act(post('/api/invitations', { email: $('invEmail').value.trim() }));
-        if (r) { if (r.link) showOnce('Lien d’invitation (montré une seule fois) :', r.link); $('invEmail').value = ''; loadInvitations(); }
-    });
-
-    document.addEventListener('DOMContentLoaded', () => { loadMfa(); loadInvitations(); });
+    document.addEventListener('DOMContentLoaded', () => { loadMfa(); });
 })();

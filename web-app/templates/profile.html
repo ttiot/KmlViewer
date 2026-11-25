@@ -155,6 +155,19 @@
             </form>
         </div>
     </section>
+</div>
+{% endif %}
+
+{# Invitations : tout compte (SSO comme mot de passe) dès que les comptes à mot de passe sont disponibles (EF-3.2) ;
+   la page ne se charge pas sans cela et l'API répond 404 #}
+{% if password_accounts %}
+<div id="invitationsRoot" class="profile-form">
+    <div id="invOneShot" class="panel d-none" role="status" aria-live="polite">
+        <p class="mb-1" id="invOneShotText"></p>
+        <pre id="invOneShotValue" class="mb-2"></pre>
+        <button type="button" class="btn btn-secondary" id="invOneShotCopy">Copier</button>
+        <button type="button" class="btn btn-link" id="invOneShotClose">J'ai noté</button>
+    </div>
     <section class="panel" aria-labelledby="p-inv">
         <h2 class="eyebrow" id="p-inv">Invitations</h2>
         <p class="hint" id="invCredits"></p>
@@ -171,4 +184,5 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/profile.js') }}"></script>
 {% if current_user['auth_method'] == 'password' %}<script src="{{ url_for('static', filename='js/webauthn.js') }}"></script><script src="{{ url_for('static', filename='js/profile-security.js') }}"></script>{% endif %}
+{% if password_accounts %}<script src="{{ url_for('static', filename='js/profile-invitations.js') }}"></script>{% endif %}
 {% endblock %}
