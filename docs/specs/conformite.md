@@ -1,0 +1,345 @@
+# Matrice de conformité spec / code (avant la production)
+
+Statut : **v1, 2026-11-25** · Rôle : spec · Demandée par coord pour l'utilisateur.
+Specs : [admin-space](admin-space.md), [gpx-route-builder](gpx-route-builder.md) ; recette : [recette.md](recette.md).
+
+**Base relue** : `HEAD` = `9e415f1` (branche `feature/admin-space-and-route-builder`), plus l'arbre de travail non commité du 2026-11-25 matin, qui contient le correctif MFA-1 du limiteur du second facteur (`auth/mfa_limit.py` : `reserve` / `release`).
+
+**Méthode** : lecture du code et des tests, par trois lectures indépendantes. Les écarts importants ont été relus par spec dans le code.
+- **Aucun test n'a été exécuté** pour ce document. Un statut « testé » veut dire qu'un test existe et vérifie le point d'après sa lecture.
+- Les résultats d'exécution sont ceux du journal `STATUS.md` : CI GitHub verte sur `117660d`, 5 623 passed, couverture 96,13 % ; porte locale de `test` sur `37ad93c`.
+
+Chemins : code relatif à `web-app/app/`, tests relatifs à `web-app/tests/`.
+
+---
+
+## 1. Synthèse
+
+- **Toutes les fonctions des deux specs sont livrées**, WebAuthn (T12) et constructeur de traces (TR5, TR6) compris.
+- **Aucun écart bloquant de sécurité.** Les invariants forts sont livrés et testés :
+  - jetons hors des journaux ;
+  - état `mfa_pending` côté serveur ;
+  - TOTP et codes de secours anti-rejeu, concurrence comprise ;
+  - dernier admin protégé ;
+  - liste blanche des destinations sortantes ;
+  - liaison secret ↔ destination ;
+  - CSP `img-src` restreinte ;
+  - limiteur consulté avant le hachage ;
+  - `result_id` lié à l'utilisateur.
+- **Écarts restants : 28** (E-1 à E-28, §5), dont **6 à arbitrer avant la prod** (§5.1) et le reste mineur ou d'interface (§5.2, §5.3).
+- **Décisions de coord à relire** : 16 (§6).
+- **Trous de test** : §7. Les tests du front sont surtout statiques (recherche de chaînes dans le JS), pas des tests de comportement.
+- **Incohérences de spec** trouvées et corrigées pendant ce travail : §8.
+
+Légende des statuts :
+
+| Statut | Sens |
+|---|---|
+| **OK** | livré, et un test vérifie le comportement |
+| **OK (test partiel)** | livré ; le test ne couvre qu'une partie du critère |
+| **Non testé** | livré, sans test (ou avec un test statique seulement) |
+| **Écart** | le code fait autre chose que la spec (renvoi au §5) |
+| **Non livré** | absent du code |
+
+---
+
+## 2. admin-space : exigences fonctionnelles
+
+### 2.1 Modes, comptes à mot de passe, second facteur, invitations (§5.0 à §5.3)
+
+| Exigence | Statut | Code | Test principal | Remarque |
+|---|---|---|---|---|
+| EF-0.0 garde sur `auth_mode()`, `sub='local'` en mode `local` seulement | OK | `auth/guard.py` `_load_user_and_guard` ; `auth/modes.py` | `test_auth_modes.py::test_password_mode_without_session_closes_every_route_and_creates_no_local_account` | — |
+| EF-0.1 `password` explicite, incompatible avec `OIDC_ISSUER` | OK | `auth/checks.py` `_auth_mode` | `test_auth_modes.py::test_password_mode_is_never_deduced` | — |
+| EF-0.2 démarrage refusé sans garanties, cookie `Secure` | OK | `auth/checks.py` `_check_password_mode` | `test_auth_modes.py::test_password_mode_refuses_to_start_without_a_guarantee` | avertissement « SMTP absent » (`__init__.py`) non testé |
+| EF-0.3 amorçage du premier admin | OK | `cli.py` `user_invite` ; `auth/invitations.py` `accept` ; `auth/mfa_login.py` `_finish_enrollment` | `test_second_factor.py::test_the_bootstrap_ends_with_an_admin_having_one_factor_and_recovery_codes_and_no_session` | — |
+| EF-0.3b reprise `--account` / `--reset-password` | OK, écart mineur | `auth/invitations.py` `confirm_bootstrap`, `reset_bootstrap` ; `auth/token_routes.py` | `test_t11_edge.py::test_resuming_a_bootstrap_for_an_existing_account_asks_for_the_current_password_and_keeps_the_hash` ; `test_doc3_edge.py` | compte refusé à l'émission (décision n° 47) ; à la consommation, la réponse n'est pas celle de EF-3.6 : **E-9** |
+| EF-0.4 mode `oidc` sans `SECRETS_KEY` ou `PUBLIC_URL` | Écart | `auth/checks.py` `PASSWORD_ACCOUNTS` ; `api/admin_routes.py` `admin_secret_put` | `test_auth_modes.py::test_oidc_mode_enables_password_accounts_only_with_secrets_key_and_public_url` | saisie des secrets : **E-10** |
+| EF-0.5 conversion SSO → mot de passe | OK | `api/admin_routes.py` `admin_convert` ; `auth/invitations.py` `convert_account` | `test_admin_api.py::test_converting_an_sso_account_rewrites_it_in_one_transaction_and_demotes` | l'adresse passée en attente n'est signalée que dans l'audit et la liste : **E-11** |
+| EF-0.6 sessions d'une méthode non permise refusées | OK | `auth/modes.py` `method_permitted` | `test_auth_modes.py::test_switching_from_oidc_to_password_invalidates_sso_sessions` | — |
+| EF-1.1 création sur jeton seulement | OK | `auth/invitations.py` `accept` | `test_invitations_edge.py::test_no_anonymous_request_to_any_route_ever_creates_an_account` | — |
+| EF-1.2 identifiant, unicité, collisions venues de l'IdP | Écart | `auth/identifiers.py` ; `auth/users.py` `_flag_email_collision` | `test_invitations.py::test_a_taken_identifier_is_refused_case_insensitively_among_all_accounts_and_keeps_the_link` | collision d'**identifiant** : bandeau seulement, ni `WARNING` ni audit : **E-12** |
+| EF-1.2b identifiants réservés | OK | `auth/identifiers.py` `RESERVED_IDENTIFIERS` | `test_invitations_edge.py::test_reserved_names_in_any_spelling_give_the_exact_answer_of_a_taken_name` | — |
+| EF-1.3 `sub = pwd:<uuid4>` | OK | `auth/invitations.py` ; `auth/users.py` | `test_auth_modes.py::test_oidc_login_never_designates_a_password_namespace_sub` | — |
+| EF-1.4 / 1.4b politique et liste de 46 187 mots de passe courants | OK | `auth/passwords.py` ; `auth/wordlists/` (SHA-256 conforme) | `test_common_passwords.py::test_delivered_file_has_the_expected_size_and_hash` | — |
+| EF-1.5 argon2id, sémaphore de 2 places, limiteur avant hachage | OK | `auth/passwords.py` `HashGate` | `test_passwords.py::test_at_most_two_concurrent_hashes_even_under_load` | — |
+| EF-1.6 connexion en deux étapes, `mfa_pending` serveur (5 min, 10 000 états) | OK | `auth/password_login.py` ; `auth/pending.py` | `test_password_login.py::test_replaying_a_cookie_does_not_reset_the_attempt_counter` | un non-admin sans facteur sous la politique `admins` reçoit directement une session complète : conforme à §4 |
+| EF-1.7 changement de mot de passe | OK | `api/account_routes.py` `change_password` | `test_t11_edge.py::test_changing_the_password_needs_the_current_one_and_a_factor` | — |
+| EF-1.8 réinitialisation par un admin | Écart | `api/admin_routes.py` `RESET_LINK_TTL`, `admin_reset_link` | `test_t14_edge.py::test_the_reset_link_is_shown_once_single_use_one_hour_and_never_sent_to_the_admin_session` | lien valable **1 h** et **non envoyé** par mail : **E-1** |
+| EF-1.9 mot de passe oublié | OK | `auth/password_login.py` `_forgot_available`, `password_forgot` | `test_password_login.py::test_forgot_work_runs_only_in_the_queue_thread_never_in_the_request` | sans SMTP : §6, décision D-5 |
+| EF-1.10 SSO sans mot de passe, `password` sans OIDC | OK | `auth/password_login.py` ; `auth/users.py` | `test_password_login_edge.py::test_an_sso_or_none_account_never_logs_in_by_password_even_with_a_valid_hash_in_base_EF110` | — |
+| EF-1.11 routes publiques | OK | `auth/guard.py` `PUBLIC_ENDPOINTS` | `test_auth_modes_edge.py::test_the_list_of_public_endpoints_is_exactly_the_expected_one` | — |
+| EF-1.12 un jeton n'ouvre jamais de session complète | OK | `auth/token_routes.py` | `test_password_login_edge.py::test_consuming_an_invitation_opens_no_session_and_the_next_login_follows_the_policy_CA45` | — |
+| EF-2.1 TOTP et jusqu'à 10 clés | OK | `auth/second_factor.py` ; `auth/webauthn_factor.py` `MAX_KEYS` | `test_webauthn.py::test_at_most_ten_keys_and_a_duplicate_credential_is_refused` | — |
+| EF-2.2 invariant « admin = au moins un facteur » ; `mfa_policy=all` | OK, écart mineur | `auth/users.py` `set_admin` ; `auth/guard.py` `admin_required` ; `settings/store.py` `_check_mfa_policy` | `test_second_factor.py::test_the_policy_all_is_refused_while_an_active_password_account_has_no_factor_CA_13b` | contrôle hors de la transaction d'écriture : **E-2** |
+| EF-2.3 TOTP anti-rejeu atomique, secret chiffré | OK | `auth/second_factor.py` `verify_totp` | `test_second_factor.py::test_two_simultaneous_submissions_of_the_same_code_let_exactly_one_through` | — |
+| EF-2.4 WebAuthn (RP ID, origine, défi serveur, compteur) | OK, écart mineur | `auth/webauthn_factor.py` `rp_id`, `expected_origin`, `verify_authentication` ; `auth/pending.py` `take_challenge` | `test_webauthn.py::test_origin_rp_id_and_challenge_mismatches_are_refused_and_count_as_tries_CA_11` | HTTPS exigé : décision D-6 ; suffixes publics en liste courte : **E-13** |
+| EF-2.5 codes de secours | OK, écarts | `auth/second_factor.py` ; `api/mfa_routes.py` `mfa_recovery_codes` | `test_t11_edge.py::test_concurrent_use_of_one_recovery_code_lets_exactly_one_through` | notification et régénération : **E-3** |
+| EF-2.6 5 essais par état, limiteur par compte | OK (MFA-1 non commité) | `auth/pending.py` ; `auth/mfa_limit.py` | `test_mfa_limit_edge.py::test_exactly_five_failures_block_the_account_and_the_block_ends_with_the_window` | échecs seuls : décision D-8 |
+| EF-2.7 perte de tous les facteurs, `user-mfa-reset` | OK | `api/admin_routes.py` `admin_mfa_reset` ; `cli.py` `user_mfa_reset` | `test_auth_modes.py::test_user_mfa_reset_removes_factors_closes_sessions_demotes_and_warns_when_no_admin_is_left` | — |
+| EF-2.8 JS WebAuthn sans bibliothèque externe | OK | `static/js/webauthn.js` | `test_webauthn.py::test_the_front_script_is_served_by_the_application_without_external_library_EF_2_8` | — |
+| EF-3.1 à EF-3.11 invitations et crédits | OK | `auth/invitations.py` ; `auth/tokens.py` ; `api/invitations_routes.py` | `test_invitations.py::test_two_concurrent_creations_with_one_credit_succeed_once` ; `test_tokens.py::test_unknown_expired_used_revoked_and_malformed_tokens_are_indistinguishable` | expiration ⇒ crédit non rendu : pas de test (le code ne rend jamais de crédit) |
+
+### 2.2 E-mail, secrets, réglages, bêta, utilisateurs, audit, ordonnanceur (§5.4 à §5.10)
+
+| Exigence | Statut | Code | Test principal | Remarque |
+|---|---|---|---|---|
+| EF-4.1 SMTP (STARTTLS sans repli, `none` sans authentification) | OK | `settings/store.py` `_check_smtp` ; `mailer.py` `deliver` | `test_mailer.py::test_starttls_that_the_server_cannot_do_fails_and_nothing_is_ever_sent_in_clear` | — |
+| EF-4.2 e-mail de test ok/ko, durée = `smtp.timeout_s` | OK, écart mineur | `api/admin_routes.py` `admin_mail_test` ; `outbound.py` `run_neutral_test` | `test_mailer.py::test_the_test_mail_answers_ok_or_ko_only_and_always_after_the_smtp_timeout` | tentative abandonnée, pas interrompue : **E-14** |
+| EF-4.3 / 4.3b validation par aller-retour, session du compte cible | OK, écart mineur | `auth/token_routes.py` ; `auth/invitations.py` `verify_email` | `test_invitations.py::test_verify_email_over_http_needs_the_session_of_the_target_account` | renvoi non limité à 3 / h : **E-15** |
+| EF-4.4 `pending_email` jamais utilisée | OK (test partiel) | `auth/users.py` `match_login` ; `services/inbox_watcher.py` | `test_invitations.py::test_match_login_compares_canonical_addresses_without_sql_lower` | aucun test dédié à `pending_email` ignorée |
+| EF-4.5 adresse non validée : bandeau avec renvoi | Non livré | `templates/profile.html` (simple mention) | — | **E-15** |
+| EF-4.6 changement d'adresse | OK | `api/account_routes.py` `change_email` | `test_invitations.py::test_an_address_already_validated_on_another_account_is_refused_neutrally_and_the_pending_one_is_cleared` | — |
+| EF-4.7 / 4.9 textes, liens sur `PUBLIC_URL`, anti-injection | OK | `mailer.py` | `test_password_login_edge.py::test_forgot_link_uses_public_url_never_the_request_headers` ; `test_mailer_edge.py::test_hostile_recipients_are_refused_before_any_connection` | — |
+| EF-4.8 file d'envoi bornée, CLI synchrone | OK, écart mineur | `mailer.py` `MailQueue` ; `cli.py` `_notify` | `test_mailer.py::test_user_mfa_reset_with_a_dead_smtp_is_done_and_traced_but_exits_non_zero` | perte de la file au redémarrage non journalisée : **E-16** |
+| EF-4.10 adresses canoniques, migration `0014` | OK | `db.py` `_emails_canonical` | `test_emails_edge.py::test_the_migration_is_idempotent_and_a_second_pass_changes_and_audits_nothing` | — |
+| EF-5.1 à 5.4 secrets chiffrés, écriture seule | OK | `secrets_store.py` | `test_secrets_store.py::test_status_shows_no_value_and_last4_only_for_api_keys` | `last4` absent sous 12 caractères (prudent) |
+| EF-5.5 liaison secret ↔ destination | OK (secrets en base) ; voir E-17 | `secrets_store.py` ; `settings/store.py` | `test_outbound.py::test_changing_the_destination_clears_the_linked_secret_in_the_same_transaction` | aucun secret ne peut venir de l'env : **E-17** |
+| EF-5.6 « Tester » par service | Écart | `api/admin_routes.py` `admin_secret_test` ; `services/routing/runtime.py` `neutral_test` | `test_route_builder_api.py::test_the_engine_test_of_the_admin_calls_the_health_probe_and_answers_ok_or_ko_only` | moteur et SMTP livrés (l'écart « Tester » le moteur de la recette v3 est corrigé) ; **DEM non livré** : **E-18** |
+| EF-5.7 rotation et remise à zéro des clés | OK | `secrets_store.py` ; `cli.py` | `test_secrets_store.py::test_rotation_reencrypts_with_the_first_key_so_the_old_one_can_be_removed` | — |
+| EF-6.1 à 6.3c registre borné, base > env > défaut, diagnostic, CLI | OK | `settings/registry.py` ; `settings/store.py` | `test_settings.py::test_every_registry_entry_has_explicit_bounds` ; `::test_write_is_validated_and_the_batch_is_all_or_nothing` | — |
+| EF-6.4 version des réglages, rechargement par requête et par tour | OK, écart mineur | `settings/store.py` ; `settings/__init__.py` ; `background.py` `settings_reload` | `test_settings.py::test_next_request_sees_a_change_made_by_another_process` | la réponse du PATCH ne contient pas la version (P-T14-6) : **E-19** |
+| EF-6.5 / 6.6 périmètre, hors registre | OK | `settings/registry.py` | `test_t16.py::test_each_setting_has_the_documented_bounds_and_refuses_values_beyond_them` | — |
+| EF-6.8 liste blanche par service, CSP `img-src` | OK, écart mineur | `outbound.py` ; `security.py` ; `auth/checks.py` | `test_outbound.py::test_an_entry_authorizes_its_own_service_only_and_the_exact_port` ; `::test_csp_img_src_follows_the_tiles_entries` | diagnostic des destinations hors liste partiel : **E-20** |
+| EF-7.1 à 7.4 fonctions bêta | OK | `features.py` ; `api/admin_routes.py` | `test_tokens_features_edge.py::test_ca22_off_users_without_the_user_users_with_the_user_and_all` | — |
+| EF-8.1 à 8.4 utilisateurs, dernier admin, actions | OK | `api/users_routes.py` ; `api/admin_routes.py` | `test_admin_api.py::test_the_last_active_admin_is_protected_and_a_non_last_admin_can_be_disabled` | — |
+| EF-8.5 bandeau « collision d'identité » | OK (API), UI partielle | `api/users_routes.py` `identity_collisions` ; `static/js/admin.js` | `test_admin_api.py::test_identity_collisions_are_reported_case_insensitively` | numéros de comptes sans lien : **E-21** |
+| EF-9.1 `actor_type` et contrainte CHECK | OK | `db.py` ; `audit.py` | `test_audit.py::test_database_refuses_a_cli_row_with_an_account_and_a_user_row_without` | libellés d'acteur bruts dans l'UI : **E-21** |
+| EF-9.2 actions tracées | Écart | `api/users_routes.py` `update_user`, `delete_user` | `test_audit.py::test_cli_and_system_actions_are_typed_with_no_account_and_an_empty_label` | activation, désactivation et suppression de compte **non auditées** : **E-4** |
+| EF-9.3 consultation et purge | OK | `audit.py` ; `background.py` | `test_admin_api.py::test_the_audit_is_paginated_filtered_and_bounded` | — |
+| EF-10.1 / 10.1b démarrage, verrou des tâches partagées | OK ; diagnostic non exposé | `background.py` | `test_background.py::test_without_the_lock_only_process_tasks_run_and_the_lock_is_retried_every_tick` | `Scheduler.status()` n'est appelé par aucune route : **E-22** |
+| EF-10.2 à 10.4 tâches, `wake`, thread long, `tick(now)` | Écart | `background.py` ; `services/routing/runtime.py` `init_routing` | `test_background.py::test_a_blocked_long_task_never_freezes_the_short_ones_nor_gets_a_second_instance` | `routing_health` déclarée **longue** : **E-5** |
+| EF-10.5 thread de la file d'envoi | OK | `mailer.py` | `test_mailer.py::test_commands_do_not_start_a_queue_thread` | — |
+
+### 2.3 Sécurité (§6)
+
+| Exigence | Statut | Code | Test principal | Remarque |
+|---|---|---|---|---|
+| EF-S1 `admin_required` sur toutes les routes admin | OK | `api/admin_routes.py` ; `api/users_routes.py` | `test_t14_edge.py` (paramétré sur `url_map`) | — |
+| EF-S2 POST de même origine + jeton CSRF | OK | `auth/csrf.py` ; `auth/password_login.py` | `test_invitations_edge.py::test_a_cross_origin_post_is_refused_even_with_a_valid_csrf_token` | — |
+| EF-S3 limiteur à deux compteurs, tailles fixées | OK | `ratelimit.py` | `test_ratelimit.py::test_never_more_than_limit_per_fixed_window_nor_twice_per_sliding_window` ; `::test_default_sizes` | — |
+| EF-S4 comparaisons en temps constant | OK | `secrets_store.py` ; `ratelimit.py` | `test_tokens.py::test_constant_time_match_helper` | codes de secours comparés par égalité SQL sur l'empreinte (sans effet : l'empreinte est hachée) |
+| EF-S5 journaux sans secret | OK | `mailer.py` ; routes | `test_mailer_edge.py::test_no_link_token_or_password_in_logs_audit_exceptions_or_reprs_on_any_failure_path` | — |
+| EF-S6 `no-store` | OK | `security.py` | `test_t14_edge.py` | une assertion neutralisée par `or True` dans `test_admin_api.py` (§7) |
+| EF-S7 `PUBLIC_URL` seule source des liens | OK | `auth/tokens.py` `link` | `test_invitations.py::test_api_link_is_built_on_public_url_never_on_the_host_header` | — |
+| EF-S8 jeton dans le fragment, `inspect` neutre, aucun GET ne consomme | OK (test partiel) | `auth/token_routes.py` | `test_invitations.py::test_no_token_ever_reaches_the_application_or_access_log` | pas de capture du flux gunicorn (CA-5, §7) |
+| EF-S9 état et défis côté serveur | OK | `auth/pending.py` | `test_password_login.py::test_replaying_a_cookie_does_not_reset_the_attempt_counter` | — |
+| EF-S10 destinations sortantes | OK sauf « Tester » DEM | `outbound.py` | voir EF-6.8 | **E-18** |
+
+### 2.4 Interface (§9)
+
+| Point | Statut | Remarque |
+|---|---|---|
+| Onglets d'administration | Écart (accepté de fait) | 6 onglets : « Clés API » et « E-mail » fusionnés en « Clés API et e-mail » (`templates/admin.html`). Sans effet fonctionnel |
+| Bandeaux « SMTP absent », « destination hors liste » | Non livré | seul le bandeau de collision existe : **E-21** |
+| Réglages : source, surcharge d'env, retour au défaut, avertissement sur le secret | Partiel | la source est affichée ; le marqueur de surcharge ne l'est pas ; l'avertissement « le secret sera effacé » est une mention fixe ; hôtes de tuiles autorisés non affichés : **E-21** |
+| Diagnostic des tâches de fond | Non livré | **E-22** |
+| Connexion en mode `oidc` : SSO et formulaire sur la même page | Écart | `/auth/login` redirige directement vers l'IdP ; le formulaire n'est joignable que par `/auth/password/login`. **Sans effet en mode `password`** (choix de déploiement de l'utilisateur) : **E-21** |
+| Liens et codes affichés une fois, bouton « Copier » | OK | `static/js/admin.js` ; `templates/profile.html` |
+
+---
+
+## 3. admin-space : critères d'acceptation
+
+| CA | Statut | Test principal | Remarque |
+|---|---|---|---|
+| CA-1 | OK | `test_invitations_edge.py::test_no_anonymous_request_to_any_route_ever_creates_an_account` | — |
+| CA-2, CA-3 | OK | `test_invitations.py::test_two_concurrent_creations_with_one_credit_succeed_once` ; `::test_an_admin_creates_many_invitations_without_touching_credits` | — |
+| CA-4 | Écart mineur | `test_invitations_edge.py::test_a_member_cannot_raise_their_own_credits_through_the_invitation_api` | non-admin envoyant des crédits par `/api/invitations` ⇒ **400**, pas 403 : **E-23** |
+| CA-5 | OK (test partiel) | `test_invitations_edge.py::test_the_whole_flow_leaves_no_token_or_password_in_logs_audit_responses_or_the_database` | parcours d'invitation seulement ; pas de capture gunicorn |
+| CA-6 | OK (test partiel) | `test_invitations.py::test_revocation_by_the_owner_or_an_admin_only_and_the_credit_is_not_returned` | expiration non testée |
+| CA-7 | OK | `test_password_login_edge.py::test_the_sixth_attempt_on_the_same_identifier_is_refused_and_the_window_slides` | — |
+| CA-8, CA-8b | OK | `test_passwords.py::test_common_passwords_are_refused_after_nfkc_and_casefold` ; `test_common_passwords.py` | — |
+| CA-9 | OK | `test_password_login_edge.py::test_the_pending_state_expires_server_side_whatever_the_cookie_says` | — |
+| CA-10 | OK | `test_second_factor.py::test_two_simultaneous_submissions_of_the_same_code_let_exactly_one_through` | — |
+| CA-11 | OK | `test_webauthn.py` (tests `…_CA_11`) | — |
+| CA-12 | OK | `test_second_factor.py::test_recovery_codes_are_ten_unique_formatted_hashed_and_single_use` | — |
+| CA-13 | OK | `test_auth_modes.py::test_every_admin_route_refuses_a_password_admin_without_a_second_factor` | — |
+| CA-13b | OK (test partiel), écart mineur | `test_second_factor.py::test_a_batch_containing_the_refused_policy_is_rejected_as_a_whole` | « version inchangée » non vérifiée par un test ; **E-2** |
+| CA-14 | OK | `test_password_login_edge.py::test_a_cookie_issued_before_a_password_or_factor_change_is_refused_CA14` | — |
+| CA-15 | OK | `test_password_login.py::test_forgot_answers_identically_for_every_kind_of_account_and_sends_one_mail_to_the_eligible_one` | — |
+| CA-16 | OK (test partiel) | `test_invitations.py::test_who_can_invite` | voir EF-4.4 |
+| CA-17, CA-17b | OK | `test_invitations.py::test_accepting_an_invitation_creates_an_active_password_account_with_a_pending_address` ; `::test_verify_email_over_http_needs_the_session_of_the_target_account` | — |
+| CA-18, CA-19, CA-20 | OK | `test_mailer_edge.py::test_hostile_recipients_are_refused_before_any_connection` ; `test_secrets_store.py::test_application_refuses_to_start_when_a_value_cannot_be_decrypted` | — |
+| CA-21 à CA-21d | OK | `test_settings.py` ; `test_background_edge.py::test_interval_and_enabled_settings_are_read_at_every_tick_ca21d` | — |
+| CA-22, CA-23 | OK | `test_tokens_features_edge.py::test_ca22_off_users_without_the_user_users_with_the_user_and_all` ; `test_t14_edge.py` | — |
+| CA-24 | Écart | `test_audit.py` | actions de compte non auditées : **E-4** |
+| CA-24b | OK | `test_audit.py::test_an_sso_account_named_cli_stays_a_user_and_is_not_found_by_the_cli_filter` | — |
+| CA-25 | OK (test partiel) | `test_password_login.py::test_the_pages_and_endpoints_do_not_exist_outside_password_mode` | `/auth/password/mfa*`, `/enroll*`, `/auth/token/consume`, `/api/me/mfa` non couverts en mode `local` (le code répond 404) |
+| CA-26, CA-47 | OK | `test_migrations_edge.py::test_v5_database_keeps_its_data` ; `test_migrations.py::test_reverse_order_applies_only_the_missing_one` | — |
+| CA-27 | OK | `test_webauthn.py::test_a_key_keeps_an_admin_an_admin_after_secrets_reset_CA_27` | — |
+| CA-28, CA-29 | OK | `test_auth_modes.py::test_switching_from_oidc_to_password_invalidates_sso_sessions` | — |
+| CA-30 | OK (test partiel) | `test_t14_edge.py::test_consuming_the_conversion_link_rewrites_the_account_in_one_step_and_logs_nobody_in` | reconnexion OIDC avec l'ancien `sub` non testée (garantie par le code) |
+| CA-31 | Écart | `test_invitations.py::test_an_sso_address_taken_from_another_account_is_tolerated_but_flagged` | **E-12** |
+| CA-32, CA-33 | OK | `test_ratelimit.py::test_ip_flood_cannot_erase_a_targeted_identifier_counter` ; `test_t11_edge.py::test_bootstrap_makes_a_non_admin_account_in_enrollment_then_the_first_factor_grants_admin_in_one_step` | — |
+| CA-34, CA-35, CA-36 | OK | `test_mailer_edge.py::test_a_destination_forced_by_raw_sql_never_receives_the_password_bound_to_the_old_one` ; `test_outbound.py::test_a_url_forced_in_the_database_outside_the_list_disables_the_function_and_makes_no_call` | — |
+| CA-37 | Écart (partie DEM) | `test_outbound_edge.py::test_every_kind_of_probe_takes_the_service_timeout_within_ten_percent` | **E-18** |
+| CA-38, CA-39 | OK | `test_secrets_store.py::test_secrets_rotate_command` ; `test_invitations.py::test_an_admin_gets_409_for_a_taken_address_a_non_admin_gets_the_same_answer_as_for_a_free_one` | — |
+| CA-40 | OK (test unitaire) | `test_passwords.py::test_at_most_two_concurrent_hashes_even_under_load` | pas de test par 10 connexions HTTP |
+| CA-41, CA-42 | OK | `test_t16.py::test_a_basemap_forced_in_the_database_outside_the_list_is_not_sent_to_the_browser_and_is_audited` ; `test_outbound.py::test_malformed_entries_refuse_the_startup` | — |
+| CA-43, CA-48, CA-51 | OK, voir E-5 | `test_background.py::test_shared_tasks_of_the_second_scheduler_resume_when_the_first_stops` | CA-51 utilise un faux `routing_health` **court**, ce qui ne correspond pas à la configuration réelle |
+| CA-44, CA-50, CA-55 | OK | `test_invitations.py::test_two_concurrent_validations_of_the_same_address_succeed_once` ; `test_admin_api.py::test_the_address_moves_to_pending_when_a_password_account_already_holds_it` ; `test_invitations.py::test_migration_0014_never_fails_on_collisions_and_flags_them` | — |
+| CA-45, CA-46 | OK | `test_password_login_edge.py::test_consuming_an_invitation_opens_no_session_and_the_next_login_follows_the_policy_CA45` ; `::test_twenty_simultaneous_requests_over_the_identifier_limit_never_touch_the_hash_gate` | — |
+| CA-49, CA-52, CA-54 | OK | `test_mailer.py::test_user_mfa_reset_notifies_the_holder_before_returning` ; `test_tokens.py::test_user_invite_account_refuses_sso_accounts_accounts_with_a_factor_and_ambiguous_logins` ; `test_t11_edge.py::test_the_password_check_of_a_resumed_bootstrap_is_rate_limited_per_target_account_before_hashing` | — |
+
+---
+
+## 4. gpx-route-builder
+
+Abréviations : `RBR` = `api/route_builder_routes.py` ; `B` = `services/routing/builder.py` ; `RT` = `services/routing/runtime.py` ; `RS` = `services/routing/results.py` ; `GH` = `services/routing/graphhopper.py` ; `JS` = `static/js/viewer/route-builder.js`.
+
+### 4.1 Exigences
+
+| Exigence | Statut | Code | Test principal | Remarque |
+|---|---|---|---|---|
+| RB-1.1 bêta, 404, bouton absent | OK | `features.py` ; `RBR` ; `templates/viewer/toolbar.html` | `test_route_builder_api.py::test_the_feature_off_or_not_listed_or_an_unconfigured_engine_answers_404_everywhere` | — |
+| RB-1.2 non configuré (404) / injoignable (503) / cache vide | OK | `RT` `configured`, `state` | `test_route_builder_api_edge.py::test_a_cold_cache_is_starting_options_stay_visible_and_route_is_503_without_touching_the_engine_CA_R29` | diagnostic admin affiché en JSON brut, `checked_at` en secondes epoch : **E-21** |
+| RB-1.2 tâche `routing_health` (au démarrage, puis toutes les 60 s) | Écart | `RT` `init_routing` ; `background.py` | `test_route_builder_api.py::test_the_probe_follows_the_engine_and_the_task_is_scheduled_without_inbox_or_dem_CA_R24_R29` | **E-5** |
+| RB-1.3 rectangle de couverture, défaut `[1.35, 48.83, 6.42, 51.55]`, 400 avant tout appel | OK | `settings/registry.py` ; `B` | `test_route_builder_api.py::test_london_and_amsterdam_are_refused_and_lille_and_liege_accepted_CA_R20b` | décision D-2 |
+| RB-1.3 422 pour un point mal accroché | OK (spec alignée, §8) | `RBR` `_error` ; `GH` | `test_route_builder_api.py::test_the_422_message_is_the_specified_one_with_the_original_number_and_no_forbidden_word_CA_R19_R20` | « hors données » et « trop loin d'une voie » donnent le même message (le moteur ne les distingue pas) |
+| RB-1.3 diagnostic « rectangle non contenu » | OK | `RT` | `test_route_builder_api_edge.py::test_the_admin_diagnostic_reports_the_engine_state_and_the_coverage_containment` | — |
+| RB-2.1 entrée « Créer une trace », un seul mode actif | Écart | `JS` `open` ; `static/js/viewer/editor.js` | — | l'éditeur de points et le constructeur peuvent être ouverts ensemble : **E-6** |
+| RB-2.2 à RB-2.5 édition, annuler/rétablir, « Tout effacer » confirmé, prévisualisation | Non testé (test statique) | `JS` | `test_route_builder_api.py::test_the_builder_front_covers_rb_2_2_undo_keys_insert_before_touch_removal_and_in_page_confirmation` | corrigé depuis la recette v3 ; test par recherche de chaînes seulement |
+| RB-2.6 points en `localStorage`, effacés à la déconnexion et par compte | Écart partiel | `JS` `wipeOnLogout` ; `static/js/common.js` | `test_route_builder_api.py::test_a_401_clears_the_builder_points_stored_in_the_browser_TR6_n1` | effacement à la déconnexion depuis le visualiseur seulement : **E-7** |
+| RB-3.1 à RB-3.3 activités, distance, validation serveur | OK | `services/routing/profiles.py` ; `B` | `test_graphhopper.py::test_the_activity_table_matches_the_spec` ; `test_route_builder_api_edge.py::test_a_huge_integer_distance_is_a_400_never_a_500` | — |
+| RB-4.1 à RB-4.4 boucle, tolérance, détours | OK | `B` ; `services/routing/detours.py` | `test_route_builder.py::test_detours_converge_into_the_tolerance_within_four_iterations` | — |
+| RB-4.5 « Autre proposition » sans doublon | OK, avec limites | `RBR` ; `B` ; `JS` | `test_route_builder_api_edge.py::test_a_chain_of_other_proposals_never_repeats_the_previous_one_and_mostly_gives_new_ones` | décision D-9 ; sans autre trace dans le budget, la même revient avec l'avertissement `no_alternative` |
+| RB-4.6 budget de 15 appels et 30 s | OK | `services/routing/detours.py` | `test_route_builder.py::test_never_more_than_the_total_time_budget_with_a_slow_provider` | — |
+| RB-4.7 contrôles qualité | OK à partir de 2 points ; écart à 1 point | `services/routing/quality.py` ; `B` | `test_route_builder.py::test_the_trace_is_closed_and_passes_by_every_point_in_order` | à 1 point, ni accroche ni fermeture contrôlées : **E-24** |
+| RB-4.8 GPX, altitude du moteur si complète, MNT à l'enregistrement | OK, écart mineur | `B` ; `GH` ; `RBR` (`defer_elevation=True`, `wake('dem_backfill')`) | `test_route_builder.py::test_engine_elevation_is_kept_only_when_complete` ; `test_route_builder_api_edge.py::test_the_elevation_is_scheduled_at_save_time_through_the_dem_task` | décision D-1 ; une altitude non finie du moteur ⇒ 502 pour toute la génération : **E-25** |
+| RB-4.9 `route_meta` | OK | `B` ; `RBR` | `test_route_builder_api_edge.py::test_the_response_has_the_viewer_payload_plus_route_meta_with_stable_codes` | codes `no_alternative` et `user_point_unreachable` ajoutés à la liste de P-TR5-4 |
+| RB-4.10 progression et « Annuler » | Non testé | `JS` | — | — |
+| RB-4.11 à RB-4.14 hybride, essais de graine, seuils 25 / 40, suggestion d'ajouter un point | OK | `services/routing/detours.py` ; `B` | `test_route_builder.py::test_hybrid_falls_back_to_a_petal_when_lateral_points_do_not_reach_the_tolerance_CA_R30` ; `::test_overlap_threshold_depends_on_the_number_of_points` | — |
+| RB-5.1 enregistrement, nom écrit par l'API XML | OK | `RBR` ; `B` | `test_route_builder_api.py::test_save_default_name_is_dated_and_a_hostile_name_is_escaped_not_injected_CA_R25` | nom par défaut à l'heure du serveur : **E-26** |
+| RB-5.2 mémoire 30 min / 20 / 200 / 256 Mo, 409 avec SHA-256 | OK | `RS` ; `RBR` | `test_route_builder_api.py::test_eight_concurrent_saves_of_one_result_create_exactly_one_trace_TR5_1` | `ResultStore.clear_user` jamais appelé : **E-27** |
+| RB-5.3 à RB-5.6 `kind='planned'`, impacts, upload et inbox | OK | `services/ingest_service.py` ; `services/dashboard_service.py` ; `services/activity_store.py` ; `services/segment_service.py` | `test_planned_kind.py::test_a_planned_track_changes_neither_stats_records_types_nor_counter` | — |
+| §5.6 réglages `routing.*` | OK sauf `routing.provider` | `settings/registry.py` | `test_route_builder.py::test_config_from_settings_reads_the_registry_keys` | `routing.provider` absent (GraphHopper en dur) : **E-28** ; `routing.profiles` en code (P-TR5-5, décision D-3) |
+| §7 codes HTTP | OK sauf 413 | `RBR` | `test_route_builder_api.py::test_engine_errors_map_to_fixed_statuses_without_any_internal_detail` | quota atteint ⇒ **503** « Enregistrement impossible » au lieu de 413 : **E-8** |
+| RB-S1 à RB-S10 entrées, moteur non fiable, charge, journaux, `result_id` | OK | `B` ; `GH` ; `RT` ; `RS` | `test_route_builder_api_edge.py::test_every_invalid_request_is_a_400_without_any_engine_call_and_is_not_counted` ; `test_routing_tr_edge.py::test_a_gzip_bomb_is_refused_on_the_decoded_size` | clé API jamais en clair sauf `ROUTING_ALLOW_CLEARTEXT_KEY` : décision D-10 |
+| RB-S11 moteur : réseau interne, aucun port, conteneur durci, version épinglée | Non testé (ops) | `docker-compose.yml` ; `routing/Dockerfile` | — | vérifié par review (TR7) et par la recette de `test` |
+
+### 4.2 Critères d'acceptation
+
+| CA | Statut | Remarque |
+|---|---|---|
+| CA-R1 à CA-R15 | OK | tests dans `test_route_builder.py`, `test_route_builder_api.py`, `test_route_builder_api_edge.py`, `test_planned_kind.py` |
+| CA-R16 | OK (test partiel) | 429 immédiat testé ; « un upload passe dans `heavy_slot()` pendant 2 générations lentes » **non testé** |
+| CA-R17 | OK (statique pour le JS) | — |
+| CA-R18, CA-R19 | OK | `test_route_builder.py::test_a_new_strategy_is_added_without_touching_the_builder` ; `test_route_builder_api.py::test_no_user_visible_text_uses_the_word_itineraire_CA_R19` |
+| CA-R20, CA-R20b | OK | CA-R20 aligné sur le code (§8) |
+| CA-R21 [spike] | Consigné | ADR-0007 : cas transfrontaliers dans la tolérance |
+| CA-R22 à CA-R27, CA-R29 à CA-R33 | OK | CA-R27 testé avec un plafond réduit à 4 résultats |
+| CA-R4s, CA-R6s [spike] | Consigné | ADR-0010 : S1 87 %, S2 88 %, 0 violation d'ordre ou de fermeture (S1 et S2 mesurés séparément) |
+| CA-R28 | Écart partiel | **E-7** ; non rejoué dans un navigateur (recette de `test`, STATUS n° 44) |
+| CA-R34 [spike/recette] | **Non mesuré** | ADR-0010 ne donne qu'une borne haute estimée (95 %) pour l'hybride ; à mesurer en recette, ou à accepter tel quel |
+
+---
+
+## 5. Écarts connus
+
+Gravité : **à arbitrer** = décision de l'utilisateur avant la prod ; **mineur** = correction simple ou acceptation, sans risque de sécurité ; **interface** = présentation seulement.
+
+### 5.1 À arbitrer avant la prod
+
+| # | Exigence | Écart constaté (code) | Proposition de spec |
+|---|---|---|---|
+| E-1 | EF-1.8 | Le lien de réinitialisation créé par un admin vaut **1 h** (`RESET_LINK_TTL`) et n'est **pas envoyé** à l'adresse validée : il est seulement montré à l'admin, qui le transmet. Un test valide ce comportement. | **Accepter et aligner la spec** : 1 h est plus prudent que 24 h, et un admin qui transmet le lien lui-même correspond au mode d'emploi du README « mot de passe oublié sans SMTP ». Sinon : 24 h et envoi par mail (dev). |
+| E-2 | EF-2.2, CA-13b | Le refus de `auth.mfa_policy=all` est contrôlé **avant** la transaction d'écriture (`settings/store.py`, `_check_mfa_policy` puis `write_transaction`). Une invitation consommée entre les deux passe. | Fenêtre étroite, et le filet existe (enrôlement obligatoire à la connexion suivante). **Corriger** (déplacer le contrôle dans la transaction) ou accepter. |
+| E-3 | EF-2.5, P-T11-7, T12-n2 | (a) Un code de secours utilisé depuis le profil (changement de mot de passe ou d'adresse, retrait de clé) **ne déclenche pas** de notification. (b) Un compte qui n'a **que des clés** WebAuthn ne peut pas régénérer ses codes (TOTP exigé) et doit **brûler un code** pour retirer une clé. Ses codes s'épuisent sans moyen de les renouveler. | (a) Corriger : notifier partout. (b) **Décision** : accepter une assertion WebAuthn comme preuve dans le profil (suggestion T12-n2 de review), ou documenter « garder un TOTP ». |
+| E-4 | EF-9.2, CA-24 | Activation, désactivation et suppression d'un compte par un admin **ne sont pas auditées** (`api/users_routes.py` `update_user`, `delete_user` ; aucune action `user.activate` ni `user.delete`). | **Corriger** : la traçabilité des actions d'admin est une exigence de sécurité. |
+| E-5 | EF-10.3 (v5-6), RB-1.2, CA-51 | `routing_health` est enregistrée en tâche **longue** (`runtime.py`, `long=True`). Elle passe donc dans le fil unique des tâches longues, derrière `inbox` et `dem_backfill`. Au démarrage, ou pendant une longue passe d'altitude, le sondage attend : la fonction reste « en cours de démarrage » ou garde un état périmé. Le test CA-51 utilise un faux `routing_health` court et ne le voit pas. | **Corriger** (tâche courte avec un délai borné par `routing.timeout_s`), ou accepter. Sans `DEM_URL` ni inbox, aucun effet. |
+| E-6 | RB-2.1 | L'éditeur de points du visualiseur et le constructeur peuvent être actifs **en même temps**. Un clic sur la carte peut alors ajouter un point de trace **et** ouvrir le formulaire de point. | **Corriger** (fermer l'un à l'ouverture de l'autre). Gêne visible dès la recette. |
+
+### 5.2 Mineurs
+
+| # | Exigence | Écart | Proposition |
+|---|---|---|---|
+| E-7 | RB-2.6, CA-R28, P-TR6-6 | Les points en cours ne sont effacés à la déconnexion **que depuis le visualiseur** quand le mode est disponible. Une déconnexion depuis le tableau de bord, l'admin ou le profil les laisse dans le navigateur. Atténuations : clé suffixée par le compte, clés des autres comptes effacées à l'ouverture du mode, effacement sur 401. L'activité et la distance sont stockées aussi. | Corriger (effacement dans le script commun) ; navigateur partagé seulement. |
+| E-8 | §7 (413) | Quota atteint à l'enregistrement ⇒ **503** « Enregistrement impossible » au lieu de 413. Le message ne dit pas que le quota est atteint. | Corriger : le testeur croira à une panne. |
+| E-9 | EF-0.3b | Reprise d'amorçage pour un compte devenu inéligible (facteur obtenu, désactivé, converti) ⇒ 400 « Vérification impossible : mot de passe ou lien non valable. », au lieu de la réponse neutre de EF-3.6 (404). Le message est celui d'un mauvais mot de passe et ne révèle rien. | Accepter et aligner la spec. |
+| E-10 | EF-0.4 | En mode `oidc`, la saisie de secrets répond 409 (pas 404) et ne dépend que de `SECRETS_KEY`. L'admin n'affiche ni explication ni formulaire masqué. | Sans effet en mode `password`. À corriger si le mode `oidc` est utilisé. |
+| E-11 | EF-0.5 | Conversion SSO : l'adresse passée en attente n'est pas signalée dans la réponse à l'admin, seulement dans l'audit et la liste des comptes. | Accepter. |
+| E-12 | EF-1.2, CA-31 | Collision d'**identifiant** créée par l'IdP : bandeau dans l'admin, mais ni `WARNING` ni audit `identity.collision` (les collisions d'adresse en ont). | Mode `oidc` seulement. Corriger si ce mode est utilisé. |
+| E-13 | EF-2.4 | « Suffixe de domaine enregistrable » approché par une liste de 18 suffixes publics (`PUBLIC_SUFFIXES`), pas la Public Suffix List. `gouv.fr` ou `blogspot.com` passeraient. | Accepter : `WEBAUTHN_RP_ID` est fixé par l'exploitant (env), le risque est une erreur de configuration. Documenter. |
+| E-14 | EF-4.2, EF-5.6 | Les tests neutres rendent leur réponse à l'échéance, mais la tentative est **abandonnée** dans un thread, pas interrompue : un e-mail de test lent peut partir après une réponse « ko ». | Accepter et aligner la spec. |
+| E-15 | EF-4.3, EF-4.5 | Pas de bandeau « adresse non validée » ni de renvoi par l'utilisateur. Le renvoi par l'admin n'est pas limité à 3 / h. | Accepter pour la v1 : action d'admin seulement. Le bandeau est à faire plus tard. |
+| E-16 | EF-4.8 | La perte de la file d'envoi au redémarrage n'est pas journalisée. | Corriger (une ligne de journal). |
+| E-17 | EF-5.5 | Aucun secret ne peut venir de l'environnement : l'API le prévoit, mais aucun appelant ne lui passe de valeur d'env et aucune variable n'existe. | Aligner la spec : secrets en base seulement (plus simple et plus sûr). |
+| E-18 | EF-5.6, CA-37 | Le bouton « Tester » du **DEM** n'est pas livré (moteur et SMTP le sont). | Accepter pour la v1, ou à faire. |
+| E-19 | EF-6.4, P-T14-6 | La réponse de `PATCH /api/admin/settings` ne contient pas la version des réglages. | Accepter : l'UI n'en a pas besoin. |
+| E-20 | EF-6.8 | Le diagnostic n'affiche pas les destinations effectives **hors** liste blanche. L'appel est refusé et audité malgré tout. | Corriger avec E-21 (bandeau). |
+| E-23 | CA-4 | Un non-admin qui envoie des crédits par `/api/invitations` reçoit **400**, pas 403. Les crédits ne bougent pas. | Accepter et aligner le CA. |
+| E-24 | RB-4.7 | Avec 1 point, la distance de P1 à la trace (≤ 50 m) et la fermeture ne sont pas contrôlées. | Corriger (même contrôle qu'à 2 points). |
+| E-25 | RB-4.8 | Une seule altitude non finie dans la réponse du moteur fait échouer toute la génération en 502, au lieu d'ignorer l'altitude. | Sans effet aujourd'hui : le moteur est déployé sans altitude. Corriger plus tard. |
+| E-26 | P-TR5-7 | Le nom par défaut est daté à l'heure du serveur (`datetime.now()`), pas dans `APP_TIMEZONE`. Le front envoie toujours ce nom. | Corriger (date fausse autour de minuit). |
+| E-27 | RB-5.2 | `ResultStore.clear_user` (déconnexion, suppression du compte) n'est jamais appelé. | Accepter : les résultats expirent en 30 min et sont liés au compte. |
+| E-28 | §5.6 | Le réglage `routing.provider` n'existe pas : GraphHopper est en dur (`runtime.py`). | Aligner la spec : un seul fournisseur en v1, l'ajout d'un adaptateur reste possible (CA-R18). |
+
+### 5.3 Interface
+
+| # | Écart |
+|---|---|
+| E-21 | Admin : 6 onglets au lieu de 7 (« Clés API et e-mail » fusionnés) ; pas de bandeau « SMTP absent » ni « destination hors liste » ; marqueur de surcharge d'env non affiché ; avertissement « le secret sera effacé » sous forme de mention fixe, sans confirmation ; hôtes de tuiles autorisés non affichés ; libellés d'acteur bruts dans le journal (`user · cli`, `cli`, `system`) ; bandeau de collision sans lien vers les comptes ; diagnostic du moteur en JSON brut. En mode `oidc`, pas de page qui réunit SSO et formulaire. |
+| E-22 | Diagnostic de l'ordonnanceur (verrou détenu, état des tâches) : `Scheduler.status()` existe mais n'est exposé nulle part (EF-10.1b, §9). |
+
+---
+
+## 6. Décisions de coord à relire avant la prod
+
+Source : `STATUS.md`, section « Décisions de coord (à relire avant la prod) ». Le numéro renvoie à l'entrée du journal. Ces décisions ont été prises par coord, en autonomie, pendant la nuit du 24 au 25/11 (« il sera encore temps avant une prod de les remettre en question »).
+
+| # | Décision | N° | Effet pour l'utilisateur | Réversible ? |
+|---|---|---|---|---|
+| D-1 | **Altitude MNT calculée à l'enregistrement** de la trace, pas à la génération (RB-4.8). Altitude du moteur gardée seulement si elle est complète. | 1 | Pas de profil d'altitude ni de D+ avant l'enregistrement (le moteur est déployé sans altitude). | Oui (code) |
+| D-2 | **Rectangle de couverture** par défaut `[1.35, 48.83, 6.42, 51.55]`, réglable dans l'admin (`routing.coverage_bbox`). | 26 | Un point hors du rectangle ⇒ 400 sans appel au moteur. | Oui (réglage) |
+| D-3 | **Toutes les précisions par défaut de spec validées** (admin-space §15, gpx-route-builder §15), dont l'enrôlement valable 15 min (P-T11-2) et `routing.profiles` en code (P-TR5-5). | 2 | Comportements fixés sans question à l'utilisateur. | Oui |
+| D-4 | Interprétations de dev confirmées : essais de graine à 1 point = `1 + routing.seed_retries` ; distance minimale 1 km. | 1 | — | Oui |
+| D-5 | **Mot de passe oublié sans SMTP** : page et route en 404, lien absent de la page de connexion ; l'admin génère un lien de réinitialisation (1 h, voir E-1) et le transmet. | README « Non livré » | Sans SMTP, l'utilisateur dépend de l'admin. | Oui (configurer SMTP) |
+| D-6 | **WebAuthn exige HTTPS** : origine = `PUBLIC_URL` ; `http://localhost` en test ou debug seulement. | 44 (4) | Sur une instance de test en HTTP, les clés ne sont pas proposées. | Non (sécurité, M12) |
+| D-7 | **Retrait d'une clé WebAuthn** : mot de passe **et** code TOTP ou de secours (T12-n2 conservé). | 38 | Voir E-3 (b) pour un compte qui n'a que des clés. | Oui |
+| D-8 | **Limiteur du second facteur : échecs seuls**. Un essai est réservé avant la vérification et rendu au succès (correctif MFA-1, **dans l'arbre, non commité** au moment de cette relecture). | 44 (1), 47, 53, 54 | Des connexions réussies répétées ne bloquent plus le compte ; 5 échecs ⇒ 429. | Oui |
+| D-9 | **« Autre proposition » sans doublon** : le serveur écarte la trace précédente dans la limite du budget, sinon avertissement « Aucune autre proposition différente trouvée ». | 44 (2), 47 | — | Oui |
+| D-10 | **Clé API du moteur jamais envoyée en clair** (HTTP), sauf `ROUTING_ALLOW_CLEARTEXT_KEY` explicite de l'exploitant. | 27 | Moteur auto-hébergé sans clé : sans effet. | Oui |
+| D-11 | **Messages distincts** : 400 « Le point N est hors de la zone couverte. » (avant tout appel) ; 422 « Le point N est trop loin d'une voie praticable : rapproche-le d'un chemin. ». | 44 (3), 47 | Spec alignée (§8). | Oui |
+| D-12 | `user-invite --admin --account [--reset-password]` **refuse un compte désactivé** (audit `user.bootstrap_refused`). | 44, 47 | — | Oui |
+| D-13 | **Moteur GraphHopper validé définitivement** : image du projet (jar release 11.0 vérifié + Temurin 21), service `-Xmx1536m` / 2 Go, import `-Xmx6g`, mise à jour mensuelle par `routing/update.sh` avec retour arrière (ADR-0007). | 7, 8 | Environ 2,4 Go de disque, avec un pic d'environ 4 Go pendant la mise à jour (prévoir 5 Go). | Oui |
+| D-14 | Déploiement **géré par Ansible**, un seul opérateur a accès à la CLI ; `restart.sh` sans objet en production. | « Contexte de déploiement » | Les commandes CLI de secours (`user-mfa-reset`, `secrets-reset`) restent réservées à cet opérateur. | — |
+| D-15 | Défauts préexistants **non corrigés** : migrations positionnelles 1 à 5 sans verrou, `PRAGMA journal_mode=WAL` concurrent sur une base neuve. | « Défauts préexistants » | Risque faible avec **1 worker gunicorn** ; à garder ainsi. | — |
+| D-16 | Test de spec (`test_the_default_coverage_is_the_one_written_in_the_spec`) **sauté en CI** (seul `web-app` est monté). | 34, 36 | La concordance spec / code du rectangle ne se vérifie qu'en local. | Oui |
+
+Restent aussi ouverts pour l'utilisateur, hors décisions de coord :
+- appréciation visuelle des traces **gravel** (`spike/detours/out/echantillon/`) ;
+- **CA-R34** : taux réel de l'hybride dans la tolérance, non mesuré ;
+- nit T16-n3 : fond de carte par défaut indisponible, non signalé dans l'admin ;
+- `restart.sh`, en attente de décision.
+
+---
+
+## 7. Trous de test
+
+Aucun n'est un défaut du code. Ils diminuent la confiance accordée aux critères concernés.
+
+- **Front** : RB-2.2 à RB-2.6, RB-4.10, P-TR6-* et CA-R17 sont vérifiés par recherche de chaînes dans le JS, pas par un navigateur. La recette de `test` (STATUS n° 44) n'a pas pu rejouer : badge Planifiée, effacement des points à la déconnexion, progression et « Annuler », profil d'altitude, WebAuthn dans un navigateur. **À jouer à la main** (recette, étape 8).
+- **CA-5** : pas de capture du flux d'accès gunicorn ; parcours d'invitation seulement (ni réinitialisation, ni amorçage).
+- **CA-6** : expiration d'une invitation ⇒ crédit non rendu.
+- **CA-13b** : « version des réglages inchangée » après un refus.
+- **CA-25** : routes `/auth/password/mfa*`, `/enroll*`, `/auth/token/consume` et `/api/me/mfa` en mode `local`.
+- **CA-30** : reconnexion OIDC avec l'ancien `sub` après conversion.
+- **CA-40** : sémaphore testé en unitaire, pas par 10 connexions HTTP.
+- **CA-51** : le faux `routing_health` du test est une tâche courte, alors que la vraie est longue (E-5).
+- **CA-R16** : « un upload passe dans `heavy_slot()` pendant 2 générations lentes ».
+- **EF-0.2** : l'avertissement « SMTP absent » au démarrage.
+- **EF-4.4** : `pending_email` ignorée par `match_login` et par l'inbox.
+- `test_admin_api.py` : une assertion sur `no-store` est neutralisée par `or True`.
+- Non vérifié par spec : comportement interne de `py_webauthn` (attestation `none` par défaut, détection de la régression du compteur par le texte de l'exception).
+
+---
+
+## 8. Incohérences de spec trouvées et corrigées
+
+| Où | Incohérence | Correction |
+|---|---|---|
+| `gpx-route-builder.md` RB-1.3 et CA-R20 | 422 « hors de la zone couverte » pour un point mal accroché, alors que la décision de coord n° 47 a fixé « Le point N est trop loin d'une voie praticable… » (code et tests conformes à la décision). | Libellés alignés sur la décision et le code, avec la raison ; le 400 « hors de la zone couverte » est inchangé. |
+| `recette.md` (v3 → v3.1) | WebAuthn annoncé « non livré » ; trois écarts listés au §5 sont corrigés depuis (« Tester » le moteur, message « itinéraire », RB-2.2) ; étape 8.11 avec des messages périmés. | En-tête, §5, étapes 8.5 et 8.11 mis à jour ; renvoi vers ce document. |
+
+Restent à aligner sur décision de l'utilisateur, **sans modification faite** : E-1 (EF-1.8), E-9 (EF-0.3b), E-14 (EF-4.2/5.6), E-17 (EF-5.5), E-23 (CA-4), E-28 (`routing.provider`). Spec les aligne dès que l'arbitrage est rendu.

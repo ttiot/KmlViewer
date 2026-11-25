@@ -1,6 +1,6 @@
 # Recette manuelle — comptes à mot de passe, administration, traces planifiées (bêta)
 
-Statut : **v3, 2026-11-25** (TR5, TR6, Doc-3 et Doc-12 livrés) · Rôle : spec · Specs : [admin-space](admin-space.md), [gpx-route-builder](gpx-route-builder.md)
+Statut : **v3.1, 2026-11-25** (TR5, TR6, Doc-3, Doc-12 et T12 WebAuthn livrés ; v3.1 : §5 et étapes 8.5 / 8.11 mis à jour d'après la [matrice de conformité](conformite.md)) · Rôle : spec · Specs : [admin-space](admin-space.md), [gpx-route-builder](gpx-route-builder.md)
 Demandée par l'utilisateur (via coord) pour une **version de test**. Parcours pas à pas pour un testeur, avec le résultat attendu et le critère d'acceptation (CA) correspondant.
 
 Sources : code de l'arbre de travail jusqu'aux commits `85ca649` (TR5) et `15fc4f0` (TR6, Doc-3), `15b46ee` (Doc-12) ; README et `docs/exploitation.md` rédigés par doc (amorçage du premier admin et procédures du service de routage rejoués). Les messages cités entre guillemets sont ceux du code.
@@ -21,7 +21,7 @@ Sources : code de l'arbre de travail jusqu'aux commits `85ca649` (TR5) et `15fc4
 | 7. Activation de la bêta par liste | **Oui** | étape 0 faite, moteur sain |
 | 8. Trace planifiée | **Oui** | étapes 0 et 7 |
 
-Seul élément non livré : **WebAuthn (T12)** (§5). Écarts connus entre le code et la spec, à constater sans les remonter à nouveau : §5.
+Tout est livré, WebAuthn compris (**HTTPS obligatoire** pour les clés, §5). Écarts connus entre le code et la spec, à constater sans les remonter à nouveau : §5 et [conformite.md](conformite.md).
 
 ## 2. Environnement de test
 
@@ -203,8 +203,8 @@ Prérequis : `alice` dans la liste de la bêta ; `alice` a importé **une activi
    **Attendu** : « Hors de la zone couverte. », aucun point posé (RB-1.3).
 4. **Faire** : 1 point à Lille sans distance.
    **Attendu** : « Terminer » reste **désactivé** tant que la distance est vide (RB-3.2).
-5. **Faire** : poser, déplacer (glisser), retirer (clic droit) des points ; « Annuler le dernier », « Rétablir », « Effacer ».
-   **Attendu** : numérotation dans l'ordre, compteur « N points » à jour.
+5. **Faire** : poser, déplacer (glisser) des points ; clic ou appui sur un point ⇒ menu « Retirer / Insérer avant » ; Ctrl+Z / Ctrl+Y et les boutons d'annulation ; « Tout effacer ».
+   **Attendu** : numérotation dans l'ordre, compteur « N points » à jour ; « Tout effacer » demande une confirmation dans la page (RB-2.2).
 
 **Génération**
 6. **Faire** : 3 points autour de Lille (Citadelle, Vieux-Lille, Wazemmes), **Course à pied**, **15 km**, « Terminer ».
@@ -218,7 +218,7 @@ Prérequis : `alice` dans la liste de la bêta ; `alice` a importé **une activi
 10. **Faire** : 3 points espacés de 3 km, distance **5 km**.
     **Attendu** : avertissement « Distance minimale passant par tes points : X km. » ; aucun point retiré ni déplacé (RB-4.3).
 11. **Faire** : un point dans le rectangle mais hors des données (ex. Maastricht, Pays-Bas, ou Charleville-Mézières).
-    **Attendu** : 422 « Le point N ne peut pas être approché (hors réseau ou hors de la zone couverte). », ou « Aucun itinéraire trouvé… » selon la réponse du moteur (RB-1.3 ; voir §5) ; jamais de trace.
+    **Attendu** : 422 « Le point N est trop loin d'une voie praticable : rapproche-le d'un chemin. », ou « Aucune trace possible avec ces points : essaie d'autres points. » selon la réponse du moteur (RB-1.3, CA-R20) ; jamais de trace. Un point **hors du rectangle** donne au contraire 400 « Le point N est hors de la zone couverte. » sans appel au moteur.
 12. **Faire** : lancer une génération longue (15 points, 100 km), cliquer « Annuler » puis relancer aussitôt.
     **Attendu** : « Calcul abandonné (le serveur termine dans son budget de temps). » ; la relance immédiate peut répondre « Une génération est encore en cours, réessaie dans quelques secondes. » (P-TR5-6).
 
@@ -257,9 +257,8 @@ Prérequis : `alice` dans la liste de la bêta ; `alice` a importé **une activi
 
 | Élément | Nature | Conséquence pour la recette |
 |---|---|---|
-| **WebAuthn** (clés de sécurité) | non livré (**T12**) | seul le TOTP est proposé ; `WEBAUTHN_RP_ID` n'est pas lue |
-| « Tester » le moteur (Clés API et e-mail) | écart signalé à coord : aucune sonde branchée (`routing_test`) | répond « ko » même moteur sain ; l'état réel se lit dans le diagnostic de « Fonctions bêta » (étape 7.1) |
-| Message 422 « Aucun itinéraire trouvé : essaie d'autres points. » | écart signalé à coord : le mot « itinéraire » est banni de l'UI (CA-R19) | à constater seulement si aucune boucle n'est possible |
-| Édition des points (RB-2.2) : pas de raccourcis Ctrl+Z / Ctrl+Y, pas d'« insérer avant », « Effacer » sans confirmation, retrait par clic droit seulement (pas d'équivalent tactile) | écart signalé à coord | « Annuler le dernier » rattrape un effacement involontaire |
+| **WebAuthn** (clés de sécurité) | livré (T12) ; **exige HTTPS** (origine = `PUBLIC_URL`, `http://localhost` seulement en test/debug) | sur une instance de test en HTTP, les clés ne sont pas proposées : tester le TOTP seul, ou passer derrière un proxy TLS. Retirer une clé demande le mot de passe **et** un code TOTP ou de secours |
+| Limiteur du second facteur | ne compte que les **échecs** (décision de coord, STATUS n° 47) | l'étape 2.6 ne bloque plus un compte qui vient de se connecter |
+| Écarts relevés par la matrice de conformité | [conformite.md](conformite.md) §5 | aucun ne bloque la recette ; à constater sans les remonter à nouveau |
 | Retour arrière manuel de `routing/update.sh` | procédure à la main (`docs/exploitation.md`) | — |
 | Appréciation visuelle des traces gravel | à faire par l'utilisateur | sur l'échantillon du spike ou sur les traces de l'étape 8.9 |
