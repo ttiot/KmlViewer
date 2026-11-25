@@ -207,20 +207,33 @@ def poly_editor(page, c):
     # -- le nord-est jusqu'à (4,0 ; 48,0) : le contour se croise ; le ramener à sa place pendant le même geste lève l'erreur
     phase[0] = 'croisement'
     away = cal.pixel(4.0, 48.0)
-    rb27.mouse_drag(page, centre(page, 3), away, release=False)
+    boxes = {'ouverture': page.locator(PREVIEW).bounding_box()}
+    grab_at = centre(page, 3)
+    page.mouse.move(*grab_at)
+    page.mouse.down()
+    page.mouse.move(grab_at[0] - 5, grab_at[1] + 5)
     page.wait_for_timeout(250)
+    boxes['premier pas'] = page.locator(PREVIEW).bounding_box()
+    for i in range(1, 11):
+        page.mouse.move(grab_at[0] + (away[0] - grab_at[0]) * i / 10, grab_at[1] + (away[1] - grab_at[1]) * i / 10)
+    page.wait_for_timeout(250)
+    boxes['erreur affichée'] = page.locator(PREVIEW).bounding_box()
+    base = boxes['ouverture']
+    moved = {label: [round(box[k] - base[k], 1) for k in ('x', 'y', 'width', 'height')] for label, box in boxes.items()}
+    c('la boîte de la carte ne bouge pas pendant le geste (x, y, largeur, hauteur à 2 px près)',
+      all(abs(v) <= 2 for delta in moved.values() for v in delta), moved)
     c('contour croisé : message exact', problem(page) == 'Zone : le contour se croise (arêtes 1–2 et 3–4).', problem(page))
     c('contour croisé : trait pointillé', dashed(page))
     page.wait_for_timeout(300)
-    back = cal.rebase(1).pixel(*RECT[2])                           # origine de la carte relue : la mise en page a bougé
+    # Leaflet ignore tout mouvement à moins de 3 px du point d'appui : on revient à 5 px du point de départ, pas pile dessus
+    back = tuple(v + d for v, d in zip(cal.rebase(1).pixel(*RECT[2]), (5, 5)))
     for i in range(1, 11):
         page.mouse.move(away[0] + (back[0] - away[0]) * i / 10, away[1] + (back[1] - away[1]) * i / 10)
+    page.wait_for_timeout(80)                                     # Leaflet applique le dernier mouvement à l'image suivante
     page.mouse.up()
     page.wait_for_timeout(300)
     c('ramené à sa place : erreur levée, trait plein', problem(page) == '' and not dashed(page), (problem(page), dashed(page)))
-    # au premier geste la boîte de la carte se décale (mention retirée, liseré « non enregistré » : 13 px à droite) :
-    # tolérance de 15 px (≈ 0,35°) tant que la mise en page bouge pendant le geste
-    c('ramené à sa place : le sommet est revenu', closeto(vertices(page)[2], RECT[2], 0.35), vertices(page)[2])
+    c('ramené à sa place : le sommet est revenu', closeto(vertices(page)[2], RECT[2], 0.2), vertices(page)[2])
     # relâché hors de la carte : l'erreur reste, « Enregistrer » ne s'ouvre pas, les poignées restent actives, la liste corrige
     rb27.mouse_drag(page, centre(page, 3), away)
     page.wait_for_timeout(300)

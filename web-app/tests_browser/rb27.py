@@ -342,6 +342,7 @@ def mouse_drag(view, start, end, steps=10, release=True):
     for i in range(1, steps + 1):
         view.mouse.move(start[0] + (end[0] - start[0]) * i / steps, start[1] + (end[1] - start[1]) * i / steps)
     if release:
+        view.wait_for_timeout(80)                                  # Leaflet applique le dernier mouvement à l'image suivante
         view.mouse.up()
 
 

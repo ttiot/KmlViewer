@@ -1182,13 +1182,13 @@ input[type="range"] {
 
 /* Ligne : en-tête (libellé, aide) et éditeur ; deux colonnes dès 992 px */
 .setting-row {
-    padding: 14px 0;
+    padding: 14px 0 14px 10px;
     border-bottom: 1px solid var(--border);
+    border-left: 3px solid transparent;      /* liseré réservé : une ligne modifiée ne décale rien */
 }
 
 .setting-row.is-dirty {
-    border-left: 3px solid var(--warn);
-    padding-left: 10px;
+    border-left-color: var(--warn);
 }
 
 .setting-head,
@@ -1465,11 +1465,12 @@ input[type="range"] {
 .polygon-editor > .poly-slot {
     grid-row: 1;
     grid-column: 1;
-    min-height: 1.5em;
+    height: 2.8em;                      /* hauteur FIXE : mention et erreur, deux lignes au plus */
     margin: 0;
+    overflow: hidden;
 }
 
 .polygon-editor > .poly-slot[hidden] {
-    display: block;
+    display: block !important;          /* Bootstrap impose display: none !important sur [hidden] */
     visibility: hidden;
 }
