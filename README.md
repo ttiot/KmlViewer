@@ -388,6 +388,8 @@ Générer une clé :
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# sans la bibliothèque `cryptography` sur l'hôte : la même commande dans l'image (vérifié)
+docker run --rm --entrypoint python ghcr.io/ttiot/kmlviewer:latest -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 Une valeur mal formée (autre chose qu'une clé Fernet) refuse le démarrage ; une valeur chiffrée en base

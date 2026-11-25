@@ -39,7 +39,7 @@ web-app/app/
 │   ├── tokens.py · token_routes.py · invitations.py   jetons à usage unique, invitations
 │   ├── passwords.py       politique et hachage argon2id (liste : auth/wordlists/)
 │   ├── password_login.py · mfa_login.py · pending.py   connexion par mot de passe en deux étapes, état de connexion côté serveur
-│   ├── second_factor.py · factors.py   TOTP et codes de secours ; lecture et remise à zéro des facteurs (WebAuthn non livré)
+│   ├── second_factor.py · factors.py   TOTP et codes de secours ; lecture et remise à zéro des facteurs ; `webauthn_factor.py` : clés de sécurité
 │   └── ...                (api/admin_routes.py, account_routes.py, mfa_routes.py, invitations_routes.py : API d'administration et de profil)
 ├── api/                   une famille de routes par fichier, aucune logique métier
 │   ├── activities_routes.py · dashboard_routes.py · segments_routes.py · users_routes.py
