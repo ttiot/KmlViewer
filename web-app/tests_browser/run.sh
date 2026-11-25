@@ -101,7 +101,7 @@ sleep 6   # laisse passer le premier sondage de santé du moteur (diagnostic « 
 
 set +e
 docker run --rm --network host --ipc=host \
-    -v "$HERE:/work:ro" -v "$OUT:/out" -e "BENCH_URL=http://127.0.0.1:$PORT" -e "BENCH_OIDC_URL=http://127.0.0.1:$OIDC_PORT" -e "BENCH_SETTINGS_URL=http://127.0.0.1:$SETTINGS_PORT" -e "BENCH_REGISTRY_URL=http://127.0.0.1:$REGISTRY_PORT" -e BENCH_OUT=/out -e PYTHONDONTWRITEBYTECODE=1 -e "BENCH_UID=$(id -u)" -e "BENCH_GID=$(id -g)" \
+    -v "$HERE:/work:ro" -v "$OUT:/out" -e "BENCH_URL=http://127.0.0.1:$PORT" -e "BENCH_OIDC_URL=http://127.0.0.1:$OIDC_PORT" -e "BENCH_SETTINGS_URL=http://127.0.0.1:$SETTINGS_PORT" -e "BENCH_REGISTRY_URL=http://127.0.0.1:$REGISTRY_PORT" -e BENCH_OUT=/out -e "BENCH_ONLY=${BENCH_ONLY:-}" -e PYTHONDONTWRITEBYTECODE=1 -e "BENCH_UID=$(id -u)" -e "BENCH_GID=$(id -g)" \
     "$PLAYWRIGHT_IMAGE" python /work/scenarios.py
 STATUS=$?
 set -e

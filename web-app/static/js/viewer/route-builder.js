@@ -212,6 +212,7 @@ const RouteBuilder = (() => {
         clearOtherAccounts();
         state.active = true;
         root.hidden = false;
+        document.body.classList.add('rb-active');          // masque la barre d'actions de la trace tant que le constructeur est ouvert
         if (typeof updateEmptyState === 'function') updateEmptyState();      // le popup « Glisse-dépose » ne couvre plus la carte
         $('rbActivity').replaceChildren(...state.options.activities.map((a) => el('option', { value: a.key,
             selected: a.key === state.options.default_activity }, a.label)));
@@ -234,6 +235,7 @@ const RouteBuilder = (() => {
         if (!state.active) return;
         state.active = false;
         root.hidden = true;
+        document.body.classList.remove('rb-active');
         if (typeof updateEmptyState === 'function') updateEmptyState();      // rétablit l'état d'avant (vide si aucune trace)
         state.markers.forEach((m) => Viewer.map.removeLayer(m));
         state.markers = [];

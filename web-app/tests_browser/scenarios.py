@@ -813,6 +813,161 @@ def settings_hidden_error(page):
     assert any('smtp' in m.lower() or 'serveur' in m.lower() for m in messages), messages
 
 
+GPX = """<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="banc" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>Trace du banc</name><trkseg>
+""" + "\n".join(
+    f'<trkpt lat="{50.630 + i * 0.002:.4f}" lon="{3.050 + i * 0.002:.4f}"><ele>{20 + i}</ele>'
+    f'<time>2026-06-01T08:{i:02d}:00Z</time></trkpt>'
+    for i in range(12)) + "\n</trkseg></trk></gpx>"
+
+# Barre d'actions de la trace (« Exporter » / « Éditer la trace ») : masquée, ou ni sous le panneau du constructeur ni rognée
+BAR_PROBE = """() => {
+  const panel = document.getElementById('routeBuilderPanel').getBoundingClientRect();
+  return ['export', 'editor'].map((tool) => {
+    const b = document.querySelector(`[data-tool="${tool}"]`);
+    if (!b) return { tool, hidden: true, overlap: false, covered: false, rect: [] };
+    let hidden = b.closest('[hidden]') !== null;
+    for (let n = b; n; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden') hidden = true;
+    }
+    const r = b.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) hidden = true;
+    const apart = r.bottom <= panel.top || r.top >= panel.bottom || r.right <= panel.left || r.left >= panel.right;
+    const overlap = !hidden && !apart;
+    let covered = false;
+    let blocker = '';
+    if (!hidden) {
+      // la page défile en douceur par défaut : `instant` donne la mesure d'après
+      b.scrollIntoView({ block: 'center', behavior: 'instant' });
+      const q = b.getBoundingClientRect();
+      covered = [[q.left + q.width / 2, q.top + q.height / 2], [q.left + q.width / 2, q.bottom - 2]].some(([x, y]) => {
+        const e = document.elementFromPoint(x, y);
+        // les bulles passagères (#alertContainer) ne comptent pas
+        const hit = !!(e && (e === b || b.contains(e) || e.closest('#alertContainer')));
+        if (!hit) {
+          blocker = e ? `${e.tagName.toLowerCase()}#${e.id}.${String(e.className).slice(0, 40)}`
+            : `hors écran (${Math.round(y)})`;
+        }
+        return !hit;
+      });
+    }
+    return { tool, hidden, overlap, covered, blocker, rect: [r.left, r.top, r.width, r.height].map(Math.round) };
+  });
+}"""
+
+
+# Bulles de notification (#alertContainer) : aucune ne doit recouvrir le champ Distance ni un bouton du panneau du constructeur
+BUBBLE_PROBE = """() => {
+  const rect = (n) => n.getBoundingClientRect();
+  const popups = [...document.querySelectorAll('#alertContainer .alert-popup.show')].filter((n) => rect(n).width > 0);
+  const field = document.getElementById('rbDistance');
+  field.scrollIntoView({ block: 'center', behavior: 'instant' });
+  const targets = [['Distance', field], ...[...document.querySelectorAll('#routeBuilderPanel button')]
+    .filter((b) => rect(b).width > 0).map((b) => [b.textContent.trim() || b.id, b])];
+  const hits = [];
+  popups.forEach((popup) => {
+    const p = rect(popup);
+    targets.forEach(([name, node]) => {
+      const t = rect(node);
+      if (!(p.bottom <= t.top || p.top >= t.bottom || p.right <= t.left || p.left >= t.right)) {
+        hits.push(`${popup.textContent.trim().slice(0, 40)} recouvre ${name}`);
+      }
+    });
+  });
+  return { popups: popups.length, hits };
+}"""
+
+
+def watch_bubbles(view, seen):
+    """Relève les bulles visibles et celles qui recouvrent la cible ; `seen` cumule (bulles vues, recouvrements)."""
+    result = view.evaluate(BUBBLE_PROBE)
+    seen['popups'] = max(seen['popups'], result['popups'])
+    seen['hits'] += [hit for hit in result['hits'] if hit not in seen['hits']]
+
+
+def bar_state(page):
+    return {item['tool']: item for item in page.evaluate(BAR_PROBE)}
+
+
+def bar_is_fine(state):
+    """Masquée, ou visible SANS chevaucher le panneau et sans être rognée."""
+    return all(item['hidden'] or (not item['overlap'] and not item['covered']) for item in state.values())
+
+
+def bar_is_present(state):
+    return all(not item['hidden'] and not item['covered'] for item in state.values())
+
+
+def viewer_with_trace_and_builder(page, label, size, bubbles=None):
+    """Contexte au format voulu, trace ouverte, constructeur ouvert : renvoie (page, états relevés)."""
+    context = page.context.browser.new_context(viewport=size, locale='fr-FR', timezone_id='Europe/Paris')
+    context.route('**/*', intercept)
+    view = context.new_page()
+    try:
+        view.goto(BASE + '/')
+        view.wait_for_selector('#map.leaflet-container')
+        view.set_input_files('#fileInput', files=[{'name': 'trace-du-banc.gpx', 'mimeType': 'application/gpx+xml',
+                                                    'buffer': GPX.encode('utf-8')}])
+        view.wait_for_selector('[data-tool="export"]', state='visible', timeout=20000)
+        states = {'avant': bar_state(view)}
+        view.click('#routeBuilderOpen')
+        expect(view.locator('#routeBuilderPanel')).to_be_visible()
+        states['constructeur ouvert'] = bar_state(view)
+        view.screenshot(path=f'{OUT}/25-barre-actions-{label}-constructeur-ouvert.png', full_page=True)
+        box = view.locator('#map').bounding_box()
+        view.locator('#map').scroll_into_view_if_needed()
+        box = view.locator('#map').bounding_box()
+        cx, cy = box['x'] + box['width'] / 2, box['y'] + min(box['height'], 500) / 2
+        for dx, dy in ((0, 0), (70, 10), (35, -60)):
+            view.mouse.click(cx + dx, cy + dy)
+        expect(view.locator('#rbCount')).to_have_text(re.compile(r'^3 point'))
+        states['points posés'] = bar_state(view)
+        view.fill('#rbDistance', '20')
+        view.click('#rbFinish')
+        for _ in range(300):                                   # génération : bulles relevées jusqu'au résultat (90 s au plus)
+            if bubbles is not None:
+                watch_bubbles(view, bubbles)
+            if view.locator('#rbResult').is_visible():
+                break
+            view.wait_for_timeout(300)
+        view.wait_for_selector('#rbResult', state='visible', timeout=5000)
+        if bubbles is not None:
+            watch_bubbles(view, bubbles)
+        states['résultat'] = bar_state(view)
+        view.screenshot(path=f'{OUT}/26-barre-actions-{label}-resultat.png', full_page=True)
+        view.click('#rbClose')
+        expect(view.locator('#routeBuilderPanel')).to_be_hidden()
+        states['après fermeture'] = bar_state(view)
+        view.screenshot(path=f'{OUT}/27-barre-actions-{label}-apres-fermeture.png', full_page=True)
+        return states
+    finally:
+        view.context.close()
+
+
+def check_action_bar(page, label, size, bubbles=None):
+    states = viewer_with_trace_and_builder(page, label, size, bubbles)
+    assert bar_is_present(states['avant']), f"{label} : la barre devrait être présente avant le constructeur : {states['avant']}"
+    problems = [f"{etape} : {states[etape]}" for etape in ('constructeur ouvert', 'points posés', 'résultat')
+                if not bar_is_fine(states[etape])]
+    assert not problems, f"{label} : la barre Exporter / Éditer la trace gêne le constructeur : " + ' | '.join(problems)
+    after = states['après fermeture']
+    assert bar_is_present(after), f"{label} : barre absente ou rognée après fermeture : {after}"
+    if bubbles is not None:
+        assert bubbles['popups'] > 0, "aucune bulle observée : le contrôle serait vide"
+        assert not bubbles['hits'], f"{label} : des bulles recouvrent le panneau du constructeur : {bubbles['hits']}"
+
+
+@scenario("(h1) Constructeur, mobile 340 px : ni la barre Exporter / Éditer ni les bulles ne gênent le panneau")
+def action_bar_mobile(page):
+    check_action_bar(page, 'mobile', {'width': 340, 'height': 680}, bubbles={'popups': 0, 'hits': []})
+
+
+@scenario("(h2) Constructeur, bureau 1440 px : la barre Exporter / Éditer la trace ne gêne pas le panneau, revient après")
+def action_bar_desktop(page):
+    check_action_bar(page, 'bureau', {'width': 1440, 'height': 900})
+
+
 @scenario("(f) /admin Réglages : confirmation DANS LA PAGE avant d'effacer un secret lié (jamais confirm())")
 def confirm_secret_erase(page):
     dialogs = []
@@ -869,10 +1024,13 @@ def main():
         context.route('**/*', intercept)
         errors = []
         runs = [builder, admin_diagnostic, admin_audit, oidc_login, smtp_banner, confirm_secret_erase,
-                external_request_is_blocked]
+                external_request_is_blocked, action_bar_mobile, action_bar_desktop]
         if SETTINGS and REGISTRY:
             runs += [settings_tabs, settings_search, settings_origin, settings_basemaps, settings_rectangle, settings_save,
                      settings_registry, settings_hidden_error]
+        only = os.environ.get('BENCH_ONLY')                      # sous-chaîne du nom de la fonction : ne rejoue que ces scénarios
+        if only:
+            runs = [r for r in runs if only in r.__name__]
         for run in runs:
             page = context.new_page()                            # une page par scénario : un plantage ne contamine pas les autres
             page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)

@@ -150,6 +150,10 @@
     min-height: 40px;
 }
 
+.rb-active .viewer-summary > .button-row {
+    display: none;          /* constructeur de traces ouvert : Exporter / Éditer / Analyse reviennent à sa fermeture */
+}
+
 .viewer-summary > .button-row .btn.is-full {
     flex-basis: 100%;
     min-height: 36px;
@@ -597,6 +601,36 @@
 
 .alert-popup .btn-close:hover {
     color: var(--text);
+}
+
+/* Écran étroit, constructeur de traces ouvert : les bulles passent en haut de l'écran, empilées, pour ne pas recouvrir
+   le panneau (texte, champ Distance) qui occupe le bas de la fenêtre. Les autres vues gardent le coin bas droit. */
+@media (max-width: 576px) {
+    .rb-active #alertContainer {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        pointer-events: none;
+    }
+
+    .rb-active .alert-popup {
+        position: relative;
+        right: auto;
+        bottom: auto !important;       /* repositionAlerts() (core.js) écrit un bottom en ligne pour le coin bas droit */
+        min-width: 0;
+        max-width: none;
+        pointer-events: auto;
+        transform: translateY(-150%);
+    }
+
+    .rb-active .alert-popup.show {
+        transform: none;
+    }
 }
 
 .alert-popup.alert-success { border-color: var(--good); }
