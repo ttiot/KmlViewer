@@ -54,16 +54,20 @@
         <button type="button" class="btn btn-link" id="rbClose">Fermer</button>
     </div>
     <p class="hint" id="rbMessage" role="status" aria-live="polite"></p>
+    <p class="hint rb-error" id="rbAlert" role="alert"></p>
     <div id="rbResult" hidden>
         <p class="mono" id="rbSummary"></p>
+        <p class="hint" id="rbTarget"></p>
         <ul id="rbWarnings" class="mb-2"></ul>
         <div class="field"><label for="rbName">Nom</label><input id="rbName" class="form-control" maxlength="200"></div>
         <div class="button-row">
             <button type="button" class="btn btn-primary" id="rbSave">Enregistrer</button>
             <button type="button" class="btn btn-outline-secondary" id="rbAnother">Autre proposition</button>
             <button type="button" class="btn btn-outline-secondary" id="rbEdit">Modifier les points</button>
+            <button type="button" class="btn btn-outline-secondary" id="rbAddEnd">Ajouter un point à la fin</button>
         </div>
-        <p class="hint" id="rbSaved" role="status" aria-live="polite"></p>
+        <p class="hint" id="rbHelp">Appuie sur la trace pour ajouter un point à cet endroit, sur la carte pour en ajouter un à la fin ; glisse un point pour le déplacer.</p>
     </div>
+    <p class="hint" id="rbSaved" role="status" aria-live="polite"></p>
 </section>
 {% endif %}

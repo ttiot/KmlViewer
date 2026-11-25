@@ -59,7 +59,7 @@ function fileTab(file) {
 }
 
 // Ajoute un fichier parsé (réponse de l'API) à la carte et aux onglets.
-function addUploadedFile(filename, data, { activate = true } = {}) {
+function addUploadedFile(filename, data, { activate = true, fit = true } = {}) {
     const id = `file_${Viewer.fileCounter++}`;
     const file = {
         id, name: String(filename), layer: null, markers: [], tab: null, visible: true,
@@ -69,7 +69,7 @@ function addUploadedFile(filename, data, { activate = true } = {}) {
     };
     Viewer.files.set(id, file);
     try {
-        renderFile(file, { fit: true });
+        renderFile(file, { fit });
     } catch (error) {
         // Géométrie que Leaflet refuse : le fichier n'est pas ouvert, les suivants le seront
         if (file.layer) Viewer.map.removeLayer(file.layer);

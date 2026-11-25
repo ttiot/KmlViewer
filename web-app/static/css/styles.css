@@ -674,6 +674,17 @@
         overscroll-behavior: contain;
     }
 
+    /* Constructeur ouvert : l'en-tête s'allonge (résultat, boutons) ; tout le panneau défile, rien n'est recouvert (RB-2.7) */
+    body.rb-active .viewer-panel {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    body.rb-active .viewer-panel-body {
+        flex: 0 0 auto;
+        overflow: visible;
+    }
+
     .map-area {
         min-height: 0;
     }
@@ -845,3 +856,13 @@
 .rb-panel { display: grid; gap: .5rem; margin-top: .75rem; }
 .rb-warn { color: var(--warning, #b45309); }
 .rb-error { color: var(--danger, #b91c1c); }
+
+/* RB-2.7 : indication de survol de la trace, recalcul en cours */
+#map.rb-over-track,
+#map.rb-over-track .leaflet-interactive {
+    cursor: pointer;
+}
+
+#map.rb-recomputing .leaflet-overlay-pane path {
+    opacity: 0.45;
+}

@@ -1908,6 +1908,8 @@ def main():
         if SETTINGS and REGISTRY:
             runs += [settings_tabs, settings_search, settings_origin, settings_basemaps, settings_rectangle, settings_save,
                      settings_registry, settings_hidden_error, settings_reading, settings_rectangle_map]
+        import rb27                                              # RB-2.7 : CA-R41 à CA-R48 (tests_browser/rb27.py)
+        runs += rb27.RUNS
         only = os.environ.get('BENCH_ONLY')                      # sous-chaîne du nom de la fonction : ne rejoue que ces scénarios
         if only:
             runs = [r for r in runs if only in r.__name__]

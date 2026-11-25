@@ -382,9 +382,10 @@ const AdminSettings = (() => {
             names.forEach((name, i) => {              // ordre de création = ordre de Tab : SO, NO, NE, SE, centre
                 const icon = L.divIcon({ className: `rect-handle${i === 4 ? ' rect-handle-centre' : ''}`, iconSize: [28, 28] });
                 const marker = L.marker([0, 0], { draggable: true, icon, keyboard: true, zIndexOffset: i === 4 ? 0 : 100 }).addTo(map);
-                marker.on('dragstart', () => { marker.isDragging = true; startBox = current(key).slice(); startSpot = marker.getLatLng(); });
+                marker.on('dragstart', () => { marker.isDragging = true; startBox = usableBox(current(key)) ? current(key).slice() : null; startSpot = marker.getLatLng(); });
                 marker.on('drag', () => {
                     const at = marker.getLatLng();
+                    if (!Number.isFinite(at.lat) || !Number.isFinite(at.lng) || !usableBox(current(key)) || (i === 4 && !startBox)) return;
                     commit(i === 4 ? moveCentre(startBox, at.lng - startSpot.lng, at.lat - startSpot.lat) : moveCorner(current(key), i, at.lng, at.lat));
                 });
                 marker.on('dragend', () => { marker.isDragging = false; refresh(); });      // se recale sur les valeurs arrondies

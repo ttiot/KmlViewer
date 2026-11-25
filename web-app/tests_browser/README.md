@@ -47,12 +47,21 @@ Les deux images locales (`kmlviewer-bench-app:<hachage de requirements.txt>` et 
   (aucune boîte `confirm()`), annuler = aucune requête et secret intact, confirmer = un PATCH et secret effacé.
 - **(c1) à (c7) Page Réglages** (§5.6b, CA-72 à CA-78 ; CA-79 pour le secret absent de la page) :
   (c1) 8 sous-onglets, compteurs, ancre `#reglages/<section>` (rechargement, ancre inconnue), rôles ARIA, flèches du clavier, alerte sur `DEM_TIMEOUT=abc` ;
-  (c2) recherche (casse et accents ignorés), compteurs « k / n », onglets grisés, filtre « valeurs modifiées », saisie conservée sous un filtre, ni URL ni stockage ;
+  (c2) recherche (casse et accents ignorés), pastille de résultats, onglets grisés (contraste ≥ 4,5:1), filtre « valeurs modifiées », saisie conservée sous un filtre, ni URL ni stockage ;
   (c3) pastilles d'origine, aide repliée, « Rétablir… → valeur » avec confirmation dans la page, autres saisies conservées ;
   (c4) fonds de carte (cartes ordonnées, contrôle d'hôte `tiles=`, doublon, texte brut, Monter/Descendre puis ordre reçu par le visualiseur, fond par défaut, volet Avancé, 10 fonds, envoi forcé = 400) ;
   (c5) rectangle (4 champs, « ≈ 371 km × 302 km », aperçu qui suit la saisie, contrôles, volet Avancé, tuiles seulement des hôtes autorisés) ;
   (c6) enregistrement par onglet (avant/après, un seul PATCH avec la `version`, audits), 400 sous le champ (`aria-invalid`, focus), version périmée + « Recharger », rien ne se perd, `beforeunload` ;
   (c7) éditeur de liste, `requires_restart` (pastille, confirmation, bandeau), secret absent de la page (registre de test).
+  (m) lisibilité (CA-82) : 8 onglets sur une ligne, pastilles de nombre, contrastes calculés (thèmes clair et sombre), tailles, largeurs d'éditeurs, colonnes, 390 px ;
+  (n) rectangle édité sur la carte (CA-83) : poignées, souris, doigt réel (`hasTouch` + CDP), clavier, bornes, champs synchronisés, `PATCH` unique, aucune requête hors tuiles autorisées.
+- **(j) / (l) Invitations** : profil d'un compte SSO (cookie signé par l'application, IdP jamais joint), puis onglet Invitations de l'administration (CA-84 : « Émise par », statuts, compte créé, comptes supprimés, texte seul).
+- **(k) Constructeur** : points effacés du stockage local après l'enregistrement (réussi ou « déjà enregistrée »), gardés sinon (CA-R40).
+- **(p0) à (v2) RB-2.7** (`rb27.py`, CA-R41 à CA-R48) : déplacer, insérer par appui sur la trace (tolérances 10 / 16 px, doigt réel), ajouter, retirer, clavier,
+  échec et « Annuler » (retour exact), historique (onze gestes, plafond de 10 résultats), verrouillage pendant le calcul, points limites, trace enregistrée intacte.
+  Le résultat de départ est une génération réelle, gardée ; les régénérations sont répondues par un double (`RouteMock`) qui peut les retarder ou les faire échouer
+  (429, 503, 504, coupure) ; (v) et (k) utilisent le moteur et le serveur réels. Les générations réelles comptent dans la limite de 30 par heure (RB-S5) : un banc rejoué
+  sans cesse sur la même instance finit par recevoir « Trop de générations ».
 - **(g)** une requête vers un hôte externe est interceptée, enregistrée et bloquée.
 - Aucune erreur JavaScript dans la console (les erreurs de tuiles de fond de carte / réseau sont ignorées et listées dans `resultat.json`).
 
