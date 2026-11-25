@@ -694,11 +694,6 @@ def test_the_provider_base_class_cannot_be_used_without_its_three_methods():
         RoutingProvider()
 
 
-@pytest.mark.xfail(strict=True, reason="T-TR6-A (recette 8.5, RB-4.5) : « Autre proposition » (graine suivante) rend parfois EXACTEMENT la même trace : "
-                                       "le côté de chaque détour est tiré à pile ou face (2^tronçons combinaisons) ; mesuré sur le vrai moteur (Lille, 3 points, "
-                                       "15 km) : 8 traces distinctes pour 24 graines consécutives, et les graines 11→12 et 16→17 donnent la même. La recette "
-                                       "attend « une trace différente » ; la spec ne demande qu'une « nouvelle graine » : à trancher (éviter les doublons "
-                                       "côté serveur, ou assouplir la recette)")
 def test_another_proposal_never_returns_the_same_trace_as_the_previous_one():
     points = [(50.6465, 3.0450), (50.6395, 3.0640), (50.6270, 3.0560)]
     traces = [generate(FakeProvider(sinuosity=0.05), points, 'run', 15, seed, CFG).points for seed in range(40)]
