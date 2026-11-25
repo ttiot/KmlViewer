@@ -168,7 +168,7 @@ Prérequis : adresse d'`alice` validée (4.4).
 5. **Faire** : `routing.base_url` = `http://exemple.org:8989` (hors liste blanche).
    **Attendu** : 400, rien n'est écrit.
 6. **Faire** : `routing.coverage_bbox` = `[6, 48, 1, 51]`, puis une latitude de 95.
-   **Attendu** : 400 dans les deux cas (CA-R20b) ; la valeur par défaut `[1.35, 48.80, 6.45, 51.55]` reste en place.
+   **Attendu** : 400 dans les deux cas (CA-R20b) ; la valeur par défaut `[1.35, 48.83, 6.42, 51.55]` reste en place.
 7. **Faire** : `docker compose exec kml-viewer flask settings-reset auth.invite_ttl_hours`, puis recharger l'onglet.
    **Attendu** : nouvelle valeur visible sans redémarrage (CA-21d).
 8. **Faire** : `bob` n'ayant pas de second facteur, passer `auth.mfa_policy` à `all`.
@@ -181,7 +181,7 @@ Prérequis : adresse d'`alice` validée (4.4).
 Prérequis : étape 0 (moteur `healthy`) ; `ROUTING_BASE_URL` posée et application recréée.
 
 1. **Faire** (admin) : Administration › Fonctions bêta › « Traces planifiées ».
-   **Attendu** : diagnostic du moteur (JSON) avec `configured: true`, `available: true`, `checked_at` récent (sondage au démarrage puis toutes les 60 s), les 6 profils. `coverage_contained` vaut **`false`** avec le rectangle par défaut : il déborde légèrement, au sud et à l'est, du rectangle annoncé par le moteur (`48,83` et `6,42`) ; c'est un signalement sans effet sur le service (RB-1.3, voir §5).
+   **Attendu** : diagnostic du moteur (JSON) avec `configured: true`, `available: true`, `checked_at` récent (sondage au démarrage puis toutes les 60 s), les 6 profils. `coverage_contained` vaut **`true`** avec le rectangle par défaut `[1.35, 48.83, 6.42, 51.55]`, aligné sur l'emprise annoncée par le moteur (RB-1.3) ; `false` signale un rectangle réglé plus large que les données.
 2. **Faire** : état « Pour une liste de comptes », cocher `alice`, Enregistrer.
    **Attendu** : enregistré ; ligne d'audit.
 3. **Faire** : recharger le visualiseur en `alice`, puis en `bob`.
@@ -261,6 +261,5 @@ Prérequis : `alice` dans la liste de la bêta ; `alice` a importé **une activi
 | « Tester » le moteur (Clés API et e-mail) | écart signalé à coord : aucune sonde branchée (`routing_test`) | répond « ko » même moteur sain ; l'état réel se lit dans le diagnostic de « Fonctions bêta » (étape 7.1) |
 | Message 422 « Aucun itinéraire trouvé : essaie d'autres points. » | écart signalé à coord : le mot « itinéraire » est banni de l'UI (CA-R19) | à constater seulement si aucune boucle n'est possible |
 | Édition des points (RB-2.2) : pas de raccourcis Ctrl+Z / Ctrl+Y, pas d'« insérer avant », « Effacer » sans confirmation, retrait par clic droit seulement (pas d'équivalent tactile) | écart signalé à coord | « Annuler le dernier » rattrape un effacement involontaire |
-| `coverage_contained: false` avec le rectangle par défaut | choix de spec à confirmer (§13 de la spec routage) | signalement sans effet ; défaut proposé `[1.35, 48.83, 6.42, 51.55]` pour l'éviter |
 | Retour arrière manuel de `routing/update.sh` | procédure à la main (`docs/exploitation.md`) | — |
 | Appréciation visuelle des traces gravel | à faire par l'utilisateur | sur l'échantillon du spike ou sur les traces de l'étape 8.9 |
