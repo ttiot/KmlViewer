@@ -632,6 +632,33 @@ def test_the_policy_all_is_accepted_once_every_active_account_has_a_factor_and_r
     store.set_many(conn, {'auth.mfa_policy': 'admins'}, actor=CLI)               # le retour est toujours permis
 
 
+def test_the_policy_check_runs_inside_the_write_transaction_so_a_concurrent_factor_removal_is_seen(app, conn):
+    """E-2 : un compte perd son dernier facteur PENDANT que le réglage attend la transaction : le contrôle le voit, refus."""
+    from app.settings import SettingsError
+    store = app.config['SETTINGS_STORE']
+    alice = add(conn, 'alice')
+    activate(app, conn, alice['id'])
+    other = database.connect(app.config['DB_PATH'])
+    other.execute("BEGIN IMMEDIATE")                                                  # le retrait du facteur tient le verrou d'écriture
+    other.execute("UPDATE users SET totp_secret = NULL, totp_enabled_at = NULL WHERE id = ?", (alice['id'],))
+    outcome = []
+
+    def apply():
+        try:
+            store.set_many(database.connect(app.config['DB_PATH']), {'auth.mfa_policy': 'all'}, actor=CLI)
+            outcome.append('written')
+        except SettingsError:
+            outcome.append('refused')
+    worker = threading.Thread(target=apply)
+    worker.start()
+    time.sleep(0.5)                                                                   # le contrôle ne peut pas précéder le verrou
+    assert outcome == []
+    other.commit()
+    worker.join(30)
+    other.close()
+    assert outcome == ['refused'] and store.get('auth.mfa_policy') == 'admins'
+
+
 def test_the_api_answers_409_with_the_count(app, conn):
     add(conn, 'alice')
     admin = add(conn, 'root', admin=True)
@@ -755,3 +782,36 @@ def test_user_invite_account_refuses_a_disabled_account_with_an_audit_and_no_tok
         assert result.exit_code != 0 and 'désactivé' in result.output and '/auth/token#t=' not in result.output
     assert conn.execute("SELECT COUNT(*) FROM auth_tokens WHERE kind = 'bootstrap'").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'user.bootstrap_refused'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('threads', [10, 16])
+def test_a_simultaneous_burst_of_wrong_codes_runs_at_most_five_verifications(app, conn, monkeypatch, threads):
+    """MFA-1 : l'essai est réservé AVANT la vérification (hit atomique) : 10 ou 16 codes faux en parallèle, au plus 5 vérifiés."""
+    from app.ratelimit import Limiters
+    user, secret, codes = enrolled(app, conn)
+    app.extensions['limiters'] = Limiters(limits=Limits(password_per_identifier=20, password_per_ip=20), clock=lambda: 0.0)
+    clients = []
+    for _ in range(threads):
+        client = app.test_client()
+        assert login(client).status_code == 200
+        clients.append((client, csrf_of(client, '/auth/password/mfa')))
+    calls, lock, gate = [], threading.Lock(), threading.Barrier(threads, timeout=20)
+    original = second_factor.verify_totp
+
+    def counted(*args, **kwargs):
+        with lock:
+            calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(second_factor, 'verify_totp', counted)
+    statuses = [None] * threads
+
+    def job(i):
+        client, token = clients[i]
+        gate.wait()
+        statuses[i] = post(client, '/auth/password/mfa', {'code': '000001'}, token).status_code
+    workers = [threading.Thread(target=job, args=(i,)) for i in range(threads)]
+    [w.start() for w in workers]
+    [w.join(60) for w in workers]
+    assert len(calls) <= 5, f'{len(calls)} vérifications pour un plafond de 5'
+    assert statuses.count(401) <= 5 and statuses.count(429) >= threads - 5
+    assert app.extensions['limiters'].mfa_account.peek(user['id'])[0] is False

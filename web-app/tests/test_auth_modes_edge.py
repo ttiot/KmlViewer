@@ -452,10 +452,19 @@ def test_degenerate_trusted_hosts_do_not_pass_for_a_real_list(tmp_path, hosts):
     assert response.status_code == 400, f"TRUSTED_HOSTS={hosts!r} accepte n'importe quel hôte"
 
 
-def test_password_mode_warns_when_the_cookie_may_travel_in_clear(tmp_path, caplog):
+def test_password_mode_refuses_an_insecure_cookie_with_an_https_public_url(tmp_path):
+    """DEP-1 : PUBLIC_URL en https (obligatoire en production) + SESSION_COOKIE_SECURE=0 : le démarrage est refusé."""
+    with pytest.raises(RuntimeError, match='SESSION_COOKIE_SECURE'):
+        make(tmp_path, **PASSWORD_MODE, SESSION_COOKIE_SECURE=False)
+    assert make(tmp_path, **PASSWORD_MODE).config['SESSION_COOKIE_SECURE'] is True
+
+
+def test_password_mode_warns_when_the_cookie_may_travel_in_clear_on_local_http(tmp_path, caplog):
+    """Seule exception : http://localhost (développement) ; l'avertissement est conservé."""
     import logging
+    local = {**PASSWORD_MODE, 'PUBLIC_URL': 'http://localhost:5000', 'TRUSTED_HOSTS': ['localhost']}
     with caplog.at_level(logging.WARNING):
-        app = make(tmp_path, **PASSWORD_MODE, SESSION_COOKIE_SECURE=False)
+        app = make(tmp_path, **local, SESSION_COOKIE_SECURE=False)
     assert app.config['SESSION_COOKIE_SECURE'] is False and 'cookie' in caplog.text.lower()
 
 

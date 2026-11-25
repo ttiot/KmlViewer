@@ -48,8 +48,8 @@ def _code_request():
 
 
 def _account_limited(user_id: int):
-    """Limiteur par compte, lu AVANT toute vérification (sans rien compter) : 429 générique et identique pour tous."""
-    retry = mfa_limit.blocked(user_id)
+    """Limiteur par compte : essai RÉSERVÉ avant toute vérification (atomique, MFA-1) ; 429 générique et identique pour tous."""
+    retry = mfa_limit.reserve(user_id)
     if retry is None:
         return None
     response = jsonify(LIMITED)
@@ -58,10 +58,8 @@ def _account_limited(user_id: int):
     return response
 
 
-def _failure(pid, user_id=None):
-    """Un échec : compté sur l'état ET sur le compte ; au dernier essai l'état est détruit et le client repart de la connexion."""
-    if user_id is not None:
-        mfa_limit.failed(user_id)
+def _failure(pid):
+    """Un échec : l'essai du compte est déjà réservé ; compté sur l'état ; au dernier essai l'état est détruit."""
     remaining = pending_store().hit(pid)
     if remaining is None or remaining == 0:
         session.pop(PENDING_COOKIE_KEY, None)
@@ -114,7 +112,8 @@ def password_mfa():
     elif kind == 'recovery':
         ok = second_factor.consume_recovery(db, state.user_id, code)
     if not ok:
-        return _failure(pid, state.user_id)
+        return _failure(pid)
+    mfa_limit.release(state.user_id)
     return _open_session(db, pid, recovery=(kind == 'recovery'))
 
 
@@ -155,7 +154,8 @@ def password_enroll():
     normalized = second_factor.normalize_totp(code)
     step = second_factor.matching_step(secret, normalized) if secret and normalized else None
     if step is None:
-        return _failure(pid, state.user_id)
+        return _failure(pid)
+    mfa_limit.release(state.user_id)
     store = current_app.extensions['secrets']
 
     def write(db, user):
@@ -247,7 +247,8 @@ def password_mfa_webauthn_verify():
         webauthn_factor.verify_authentication(db, current_app.config, pending_store(), f"login:{pid}", user,
                                               data.get('credential'))
     except webauthn_factor.WebAuthnError:
-        return _failure(pid, state.user_id)
+        return _failure(pid)
+    mfa_limit.release(state.user_id)
     return _open_session(db, pid)
 
 
@@ -289,7 +290,8 @@ def password_enroll_webauthn_verify():
             current_app.config, pending_store(), f"enroll:{pid}", data.get('credential'))
         name = webauthn_factor.clean_name(data.get('name'), 'Clé de sécurité')
     except webauthn_factor.WebAuthnError:
-        return _failure(pid, state.user_id)
+        return _failure(pid)
+    mfa_limit.release(state.user_id)
 
     def write(conn, account):
         bound = conn.execute(

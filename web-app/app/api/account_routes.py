@@ -20,15 +20,15 @@ def _check_second_factor(user, data) -> None:
     db = get_db()
     if not factors.has_second_factor(db, user['id']):
         return
-    if mfa_limit.blocked(user['id']) is not None:
+    if mfa_limit.reserve(user['id']) is not None:
         raise ApiError(mfa_limit.MESSAGE, 429)
     code = data.get('code')
     kind = second_factor.kind_of(code)
     ok = (second_factor.verify_totp(db, current_app.extensions['secrets'], user['id'], code) if kind == 'totp'
           else second_factor.consume_recovery(db, user['id'], code) if kind == 'recovery' else False)
     if not ok:
-        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403)
+    mfa_limit.release(user['id'])
 
 
 @bp.route('/me/password', methods=['POST'])

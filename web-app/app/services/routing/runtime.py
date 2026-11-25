@@ -166,7 +166,7 @@ def init_routing(app) -> RoutingRuntime:
     if scheduler is not None:
         scheduler.register(Task('routing_health', runtime.run_health,
                                 interval=lambda cfg: effective(cfg, 'routing.health_interval_s'),
-                                enabled=lambda cfg: runtime.configured(), shared=False, long=True))
+                                enabled=lambda cfg: runtime.configured(), shared=False, long=False))   # E-5 : COURTE (CA-51)
     app.extensions['routing_test'] = runtime.neutral_test            # onglet « Clés API » de l'admin (EF-5.6)
     app.extensions.setdefault('feature_diagnostics', {})['route_builder'] = runtime.diagnostic
     return runtime

@@ -1,4 +1,4 @@
-"""Connexion par mot de passe en deux étapes, état mfa_pending, mot de passe oublié (T10 : CA-7, CA-9, CA-14, CA-15, CA-16, CA-45, CA-46)."""
+"""Connexion par mot de passe en deux étapes, état mfa_pending, limiteur, mot de passe oublié (T10 ; étiquettes CA relues, T10-n2)."""
 
 import re
 import threading
@@ -183,7 +183,7 @@ def test_a_new_login_replaces_the_pending_state_of_the_cookie(app, conn):
         assert s['pending_id'] != first
 
 
-# --- T10-1 : l'état intermédiaire est lié à l'état du compte --------------------------------------------------------------------
+# --- CA-14 (côté état intermédiaire, T10-1) : l'état est lié à l'état du compte --------------------------------------------------------------------
 
 def pending_cookie(app, conn, name='root'):
     add(conn, name, admin=True)
@@ -270,7 +270,7 @@ def test_policy_all_sends_a_plain_user_to_enrollment_and_policy_admins_does_not(
         assert 'user_id' not in s
 
 
-# --- CA-14 / CA-46 : limiteur avant hachage ------------------------------------------------------------------------------------
+# --- Limiteur avant hachage (r9, EF-1.5 ; CA-46) ------------------------------------------------------------------------------------
 
 class CountingGate:
     def __init__(self):
@@ -438,7 +438,7 @@ def test_forgot_is_rate_limited_and_the_limit_answer_is_generic(mail_app):
     assert forgot(client, 'autre').status_code == 200
 
 
-# --- CA-16 : la page de connexion ne révèle rien -------------------------------------------------------------------------------
+# --- La page de connexion ne révèle rien (EF-1.9 : lien « oublié » seulement si disponible) -------------------------------------------------------------------------------
 
 def test_login_page_exposes_forgot_link_only_when_available(app, mail_app):
     assert 'password/forgot' not in app.test_client().get('/auth/password/login', **KW).get_data(as_text=True)

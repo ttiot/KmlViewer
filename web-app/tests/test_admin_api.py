@@ -329,6 +329,18 @@ def test_a_destination_outside_the_allow_list_is_refused_and_delete_returns_to_t
     assert call(client, 'GET', '/api/admin/settings/diagnostic').status_code == 200
 
 
+def test_the_admin_is_told_when_the_default_basemap_is_unavailable(app, conn, client):
+    """T16-n3 : fond par défaut retiré de la liste (valeur forcée en base) : alerte explicite, ailleurs aucune alerte."""
+    from tests.conftest import force_setting
+    store = app.config['SETTINGS_STORE']
+    assert call(client, 'GET', '/api/admin/settings').get_json()['alerts'] == []
+    assert call(client, 'GET', '/api/admin/settings/diagnostic').get_json()['alerts'] == []
+    force_setting(conn, store, 'map.default_basemap', 'fantome')
+    for path in ('/api/admin/settings', '/api/admin/settings/diagnostic'):
+        alerts = call(client, 'GET', path).get_json()['alerts']
+        assert [a['code'] for a in alerts] == ['default_basemap_unavailable'] and 'fantome' in alerts[0]['message']
+
+
 # --- Secrets (P-T14-7) ----------------------------------------------------------------------------------------------------------
 
 def test_a_secret_needs_a_configured_allowed_destination_and_is_never_returned(app, conn, client, smtp):
@@ -465,3 +477,29 @@ def test_the_static_scripts_never_use_innerhtml_confirm_or_the_browser_storage_f
         js = (root / name).read_text(encoding='utf-8')
         assert 'innerHTML' not in js and 'eval(' not in js and 'window.confirm' not in js and 'localStorage' not in js, name
         assert 'sessionStorage' not in js and 'document.write' not in js, name
+
+
+def _audit_actions(conn, action):
+    return [(r['target_id'], json.loads(r['details'] or '{}')) for r in
+            conn.execute("SELECT target_id, details FROM audit_log WHERE action = ? ORDER BY id", (action,))]
+
+
+def test_activation_deactivation_and_deletion_of_an_account_are_audited_without_secret(app, conn, client):
+    """E-4 : lignes d'audit (acteur, cible, avant/après) dans la même transaction que l'écriture."""
+    users = {r['username']: r['id'] for r in conn.execute("SELECT id, username FROM users")}
+    conn.execute("INSERT INTO users (sub, username, display_name, is_admin, is_active, auth_method) "
+                 "VALUES ('pwd:cible', 'cible', 'Cible', 0, 1, 'password')")
+    conn.commit()
+    target = conn.execute("SELECT id FROM users WHERE username = 'cible'").fetchone()['id']
+    assert call(client, 'PATCH', f'/api/admin/users/{target}', {'is_active': False}).status_code == 200
+    assert call(client, 'PATCH', f'/api/admin/users/{target}', {'is_active': False}).status_code == 200        # sans changement : pas de ligne
+    assert call(client, 'PATCH', f'/api/admin/users/{target}', {'is_active': True}).status_code == 200
+    assert _audit_actions(conn, 'user.deactivated') == [(str(target), {'username': 'cible', 'is_active': {'from': 1, 'to': 0}})]
+    assert _audit_actions(conn, 'user.activated') == [(str(target), {'username': 'cible', 'is_active': {'from': 0, 'to': 1}})]
+    assert call(client, 'DELETE', f'/api/admin/users/{target}').status_code == 200
+    deleted = _audit_actions(conn, 'user.deleted')
+    assert deleted == [(str(target), {'username': 'cible', 'auth_method': 'password', 'is_admin': False, 'is_active': True})]
+    row = conn.execute("SELECT actor_type, actor_id FROM audit_log WHERE action = 'user.deleted'").fetchone()
+    assert row['actor_type'] == 'user' and users and row['actor_id'] is not None
+    dump = json.dumps([dict(r) for r in conn.execute("SELECT details FROM audit_log")])
+    assert 'password_hash' not in dump and 'totp' not in dump

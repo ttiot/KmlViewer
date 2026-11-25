@@ -135,6 +135,12 @@ def update_user(user_id):
         if refused is None and updates:
             assignments = ', '.join(f"{field} = ?" for field in updates)
             db.execute(f"UPDATE users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
+            if 'is_active' in updates and updates['is_active'] != target['is_active']:
+                # E-4 : activation / désactivation tracées dans la même transaction (avant/après, aucun secret)
+                audit.record(db, 'user.activated' if updates['is_active'] else 'user.deactivated', actor=Actor.from_user(g.user),
+                             target_type='user', target_id=user_id, ip=request.remote_addr,
+                             details={'username': target['username'],
+                                      'is_active': {'from': target['is_active'], 'to': updates['is_active']}})
             if updates.get('is_active') == 0:
                 # Émetteur désactivé : ses invitations en attente sont révoquées, crédit non rendu (EF-3.7)
                 tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))
@@ -162,6 +168,10 @@ def delete_user(user_id):
         ensure_admin_remains(db, user_id, 'le supprimer')
         # Avant la suppression : la clé étrangère de l'émetteur passerait à NULL et ses invitations ne seraient plus retrouvables
         tokens.revoke_pending_for_creator(db, user_id, actor=Actor.from_user(g.user))
+        audit.record(db, 'user.deleted', actor=Actor.from_user(g.user), target_type='user', target_id=user_id,
+                     ip=request.remote_addr, details={'username': target['username'], 'auth_method': target['auth_method'],
+                                                      'is_admin': bool(target['is_admin']),
+                                                      'is_active': bool(target['is_active'])})
         db.execute("DELETE FROM users WHERE id = ?", (user_id,))  # cascade : activités, tronçons, efforts
     current_app.extensions['pending'].destroy_for_user(user_id)
     shutil.rmtree(Path(current_app.config['DATA_DIR']) / 'files' / str(int(user_id)), ignore_errors=True)

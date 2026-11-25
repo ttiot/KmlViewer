@@ -713,3 +713,93 @@ def test_the_configured_coverage_blocks_points_before_any_call_and_follows_chang
     calls = len(world.provider.calls)
     assert world.route(points=[[50.63, 3.05], [50.66, 3.30]], distance_km=None).status_code == 400
     assert len(world.provider.calls) == calls
+
+
+# ===== I. « Autre proposition » (RB-4.5) et messages d'erreur distincts (décisions de recette) =================================
+
+def another(world, previous, client=None, **fields):
+    meta = previous.get_json()['route_meta']
+    return world.route(client, seed=meta['next_seed'], previous_result_id=meta['result_id'], **fields)
+
+
+def geometry(response):
+    return json.dumps(response.get_json()['points'], sort_keys=True)
+
+
+def test_a_chain_of_other_proposals_never_repeats_the_previous_one_and_mostly_gives_new_ones(world):
+    world.set(**{'routing.rate_limit_per_user': 100})
+    current = world.route(seed=3)
+    assert current.status_code == 200
+    seen, previous_geometry = [geometry(current)], geometry(current)
+    for _ in range(11):
+        current = another(world, current)
+        assert current.status_code == 200
+        assert geometry(current) != previous_geometry, "« Autre proposition » a rendu la trace précédente"
+        previous_geometry = geometry(current)
+        seen.append(previous_geometry)
+        world.runtime.results.max_per_user = 50
+    assert len(set(seen)) >= 8, f"seulement {len(set(seen))} traces distinctes sur 12 propositions"
+
+
+def test_when_no_variant_exists_the_answer_says_so_with_a_stable_code_and_the_same_trace(tmp_path):
+    w = build_world(tmp_path, FakeProvider(sinuosity=0.0))
+    base = w.route(distance_km=None).get_json()['route_meta']['distance_m'] / 1000           # sans cible : la boucle de base, aucune variante
+    first = w.route(distance_km=round(base, 1), seed=5)
+    assert first.status_code == 200 and first.get_json()['route_meta']['detours'] == 0
+    second = another(w, first, distance_km=round(base, 1))
+    codes = [x['code'] for x in second.get_json()['route_meta']['warnings']]
+    assert second.status_code == 200 and 'no_alternative' in codes and geometry(second) == geometry(first)
+    w.conn.close()
+
+
+@pytest.mark.parametrize('previous', [None, 5, 1.5, True, [], {}, '', 'x', 'a' * 100, '../../etc/passwd', "' OR 1=1 --", '\x00' * 32, '\ud800' * 30])
+def test_a_hostile_previous_result_id_is_ignored_and_never_an_error(world, previous):
+    body = {'points': POINTS, 'activity': 'run', 'distance_km': 25, 'seed': 4, 'previous_result_id': previous}
+    r = world.post(world.a, 'route', body, raw=json.dumps(body))
+    assert r.status_code == 200, (previous, r.status_code, r.get_data()[:100])
+    plain = world.route(seed=4)
+    assert geometry(r) == geometry(plain)
+
+
+def test_the_previous_result_of_another_user_has_no_influence_and_no_oracle(world):
+    mine = world.route(client=world.b, seed=6)
+    bob_id = mine.get_json()['route_meta']['result_id']
+    with_foreign = world.route(client=world.a, seed=6, previous_result_id=bob_id)
+    without = world.route(client=world.a, seed=6)
+    assert geometry(with_foreign) == geometry(without)                                       # la série de Bob n'écarte rien chez Alice
+    assert [w['code'] for w in with_foreign.get_json()['route_meta']['warnings']] == [w['code'] for w in without.get_json()['route_meta']['warnings']]
+
+
+def test_the_server_side_series_is_never_sent_back_to_the_browser_and_is_bounded(world):
+    world.set(**{'routing.rate_limit_per_user': 100})
+    world.runtime.results.max_per_user = 50
+    current = world.route(seed=1)
+    for _ in range(25):
+        current = another(world, current)
+    meta = current.get_json()['route_meta']
+    assert 'seen' not in meta
+    stored = world.runtime.results.get(world.alice['id'], meta['result_id']).meta
+    assert len(stored['seen']) <= 20 and all(isinstance(x, str) and len(x) <= 40 for x in stored['seen'])
+
+
+def test_a_point_outside_the_coverage_is_a_400_with_its_number_and_never_the_unreachable_wording(world):
+    r = world.route(points=[[50.63, 3.05], [52.37, 4.90], [50.64, 3.15]])
+    assert r.status_code == 400 and 'point 2' in r.get_json()['error'] and 'zone couverte' in r.get_json()['error']
+    assert 'voie praticable' not in r.get_json()['error'] and world.provider.calls == []
+
+
+def test_a_point_in_the_coverage_that_the_engine_cannot_snap_is_a_422_with_its_number_and_the_other_wording(tmp_path):
+    class Elsewhere(FakeProvider):
+        def route(self, waypoints, profile, deadline):
+            self._enter('route', deadline, waypoints, profile)
+            return RouteResult(points=[(50.0, 5.0), (50.01, 5.01), (50.0, 5.0)], distance_m=2500.0)
+    w = build_world(tmp_path, Elsewhere(sinuosity=0.05))
+    r = w.route(points=[[50.63, 3.05], [50.63, 3.05], [50.66, 3.10]])
+    text = r.get_json()['error']
+    assert r.status_code == 422 and 'voie praticable' in text and 'zone couverte' not in text and re.search(r'point \d', text)
+    assert '50.6' not in text and 'engine.test' not in text
+    unroutable = build_world(tmp_path / 'u', FakeProvider(sinuosity=0.05, unroutable=lambda p: abs(p[0] - 50.66) < 1e-6))
+    r2 = unroutable.route(points=[[50.63, 3.05], [50.66, 3.10], [50.64, 3.15]])
+    assert r2.status_code == 422 and 'point 2' in r2.get_json()['error'] and 'zone couverte' not in r2.get_json()['error']
+    w.conn.close()
+    unroutable.conn.close()

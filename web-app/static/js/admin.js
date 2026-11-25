@@ -212,6 +212,7 @@
         const data = await act(api('/api/admin/settings'));
         if (!data) return;
         $('settingsVersion').textContent = `Version des réglages : ${data.version}`;
+        $('settingsAlerts').replaceChildren(...(data.alerts || []).map((alert) => el('div', { class: 'alert alert-warning', role: 'alert' }, alert.message)));
         const sections = new Map();
         data.settings.filter((s) => !s.secret).forEach((s) => { if (!sections.has(s.section)) sections.set(s.section, []); sections.get(s.section).push(s); });
         $('settingsBox').replaceChildren(...[...sections].map(([name, items]) =>

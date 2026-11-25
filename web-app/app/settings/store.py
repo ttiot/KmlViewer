@@ -148,25 +148,32 @@ class SettingsStore:
             self._check_destination(setting, clean[key])
         self._check_smtp(clean)
         self._check_map(clean)
-        self._check_mfa_policy(conn, clean, actor, ip)
         now = _now()
-        smtp_before = None
         with write_transaction(conn):
-            if any(k in SMTP_DESTINATION_KEYS for k in clean):
-                smtp_before = self._smtp_pair_in(conn)
-            for key, value in clean.items():
-                setting = self._registry[key]
-                old = self._effective_in(conn, setting)       # lu en base SOUS la transaction (T3-1), pas dans le cache
-                self._clear_secrets_if_destination_changed(conn, setting, old, value, actor, ip)
-                conn.execute(
-                    "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, "
-                    "updated_by = excluded.updated_by", (key, json.dumps(value), now, _updated_by(actor)))
-                audit.record_setting_change(conn, key, old, value, secret=setting.secret, actor=actor, ip=ip)
-            if smtp_before is not None:
-                self._clear_smtp_secret_if_changed(conn, smtp_before, actor, ip)
-            self._bump(conn)
+            refusal = self._check_mfa_policy(conn, clean, actor, ip)    # E-2 : DANS la transaction d'écriture (BEGIN IMMEDIATE)
+            if refusal is None:
+                self._write_locked(conn, clean, now, actor, ip)
+        if refusal is not None:
+            raise refusal
         self._after_write(conn)
+
+    def _write_locked(self, conn, clean, now, actor, ip):
+        """Écriture du lot, déjà SOUS la transaction de l'appelant."""
+        smtp_before = None
+        if any(k in SMTP_DESTINATION_KEYS for k in clean):
+            smtp_before = self._smtp_pair_in(conn)
+        for key, value in clean.items():
+            setting = self._registry[key]
+            old = self._effective_in(conn, setting)       # lu en base SOUS la transaction (T3-1), pas dans le cache
+            self._clear_secrets_if_destination_changed(conn, setting, old, value, actor, ip)
+            conn.execute(
+                "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by", (key, json.dumps(value), now, _updated_by(actor)))
+            audit.record_setting_change(conn, key, old, value, secret=setting.secret, actor=actor, ip=ip)
+        if smtp_before is not None:
+            self._clear_smtp_secret_if_changed(conn, smtp_before, actor, ip)
+        self._bump(conn)
 
     def reset(self, conn, key: Optional[str] = None, *, actor: audit.Actor,
               ip: Optional[str] = None) -> int:
@@ -199,24 +206,24 @@ class SettingsStore:
         self._after_write(conn)
         return len(keys)
 
-    def _check_mfa_policy(self, conn, clean: Mapping, actor, ip) -> None:
+    def _check_mfa_policy(self, conn, clean: Mapping, actor, ip):
         """
-        EF-2.2, CA-13b : `auth.mfa_policy = all` est REFUSÉ tant qu'un compte `password` ACTIF n'a aucun facteur actif (les
-        codes de secours n'en sont pas un) : ces comptes ne pourraient plus se connecter sans passer par l'enrôlement forcé.
-        Refus audité ; comme il précède toute écriture, un lot qui le contient est rejeté EN ENTIER.
+        EF-2.2, CA-13b, E-2 : `auth.mfa_policy = all` est REFUSÉ tant qu'un compte `password` ACTIF n'a aucun facteur actif (les
+        codes de secours n'en sont pas un). Appelé SOUS la transaction d'écriture : aucun compte ne peut perdre son dernier
+        facteur entre le contrôle et l'écriture. Le refus est audité (dans cette transaction, qui est validée) et RETOURNÉ :
+        l'appelant le lève après la validation. Un lot qui le contient est rejeté EN ENTIER.
         """
         if clean.get('auth.mfa_policy') != 'all':
-            return
+            return None
         from app.auth import factors
         missing = [r['id'] for r in conn.execute("SELECT id FROM users WHERE auth_method = 'password' AND is_active = 1")
                    if not factors.has_second_factor(conn, r['id'])]
         if not missing:
-            return
-        with write_transaction(conn):
-            audit.record(conn, 'setting.refused', actor=actor, target_type='setting', target_id='auth.mfa_policy', ip=ip,
-                         details={'reason': 'comptes sans second facteur', 'accounts': len(missing)})
-        raise SettingsError('auth.mfa_policy', f"{len(missing)} compte(s) à mot de passe actif(s) n'ont aucun second facteur : "
-                                               "ils doivent d'abord en enrôler un (les codes de secours n'en sont pas un).")
+            return None
+        audit.record(conn, 'setting.refused', actor=actor, target_type='setting', target_id='auth.mfa_policy', ip=ip,
+                     details={'reason': 'comptes sans second facteur', 'accounts': len(missing)})
+        return SettingsError('auth.mfa_policy', f"{len(missing)} compte(s) à mot de passe actif(s) n'ont aucun second facteur : "
+                                                "ils doivent d'abord en enrôler un (les codes de secours n'en sont pas un).")
 
     def _check_destination(self, setting: Setting, value) -> None:
         """Une destination hors OUTBOUND_ALLOWED_HOSTS est refusée à l'écriture (400, rien n'est écrit)."""

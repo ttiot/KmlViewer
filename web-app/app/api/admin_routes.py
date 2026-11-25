@@ -167,13 +167,19 @@ def _setting_view(store, setting, conn_overrides) -> dict:
     return view
 
 
+def _setting_alerts() -> list:
+    from app.api.map_routes import default_basemap_alert
+    alert = default_basemap_alert(current_app.config)
+    return [alert] if alert else []
+
+
 @bp.route('/admin/settings')
 @admin_required
 def admin_settings():
     store = current_app.config['SETTINGS_STORE']
     store.refresh(get_db(), force=True)
     env = {name: bool(os.environ.get(name)) for name in (s.env for s in REGISTRY.values() if s.env)}
-    return jsonify({'success': True, 'version': store.version,
+    return jsonify({'success': True, 'version': store.version, 'alerts': _setting_alerts(),
                     'settings': [_setting_view(store, s, env) for s in REGISTRY.values()]})
 
 
@@ -207,7 +213,7 @@ def admin_setting_one(key):
 @admin_required
 def admin_settings_diagnostic():
     store = current_app.config['SETTINGS_STORE']
-    return jsonify({'success': True, 'diagnostic': store.diagnostic()})
+    return jsonify({'success': True, 'diagnostic': store.diagnostic(), 'alerts': _setting_alerts()})
 
 
 @bp.route('/admin/settings/<path:key>', methods=['DELETE'])

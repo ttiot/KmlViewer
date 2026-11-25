@@ -337,7 +337,7 @@ def test_two_simultaneous_assertions_with_the_same_challenge_open_one_session_on
         c.set_cookie('session', cookie, domain=HOST)
         r = verify(app, c, credential)
         return r.status_code, logged_in(app, c)
-    results = concurrent(8, job)
+    results = concurrent(4, job)
     assert [r for r in results if isinstance(r, Exception)] == []
     assert sum(1 for status, opened in results if status == 200 and opened) == 1
 

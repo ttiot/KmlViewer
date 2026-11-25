@@ -169,6 +169,9 @@ def check_startup_config(app) -> None:
         config['PASSWORD_ACCOUNTS'] = True
     # Sûr par défaut : le cookie de session ne part qu'en HTTPS, sauf dérogation explicite
     config['SESSION_COOKIE_SECURE'] = True if secure is None else bool(secure)
+    if not config['SESSION_COOKIE_SECURE'] and mode == 'password' and config['PUBLIC_URL'].startswith('https://'):
+        raise RuntimeError("SESSION_COOKIE_SECURE=0 est refusé : PUBLIC_URL est en https, le cookie de session doit être Secure. "
+                           "Retire SESSION_COOKIE_SECURE (Secure par défaut) ou utilise http://localhost en développement.")
     if not config['SESSION_COOKIE_SECURE']:
         logger.warning("Authentification activée avec SESSION_COOKIE_SECURE=0 : le cookie de session peut partir "
                        "en clair. À réserver au développement local.")

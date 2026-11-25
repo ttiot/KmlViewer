@@ -578,3 +578,27 @@ def test_the_import_route_wakes_the_scheduler_only_when_something_was_created(ap
     app.extensions['scheduler'].wake = woken.append
     client.post('/api/activities', data={'files': [(__import__('io').BytesIO(b'pas un gpx'), 'x.gpx')]}, content_type='multipart/form-data')
     assert woken == []
+
+
+def test_the_registered_routing_health_probe_runs_while_a_long_task_is_blocked(app, cfg, monkeypatch):
+    """E-5 : `routing_health` est une tâche COURTE (CA-51) : le sondage s'exécute pendant qu'une passe longue (DEM) tourne."""
+    from app.services.routing import runtime as routing_runtime
+    release, started, probed = threading.Event(), threading.Event(), []
+
+    def slow(db, c):
+        started.set()
+        release.wait(30)
+    monkeypatch.setattr(routing_runtime.RoutingRuntime, 'configured', lambda self: True)
+    monkeypatch.setattr(routing_runtime.RoutingRuntime, 'run_health', lambda self, db=None, cfg=None: probed.append(1))
+    executor = ThreadExecutor()
+    scheduler = Scheduler(cfg, [Task('dem', slow, interval=lambda c: 0, long=True, shared=True)], lock=Lock(), clock=Clock(),
+                          executor=executor)
+    app.extensions['scheduler'] = scheduler
+    routing_runtime.init_routing(app)
+    assert scheduler.tasks['routing_health'].long is False
+    scheduler.tick(1.0)
+    assert started.wait(10) and scheduler.status()['tasks']['dem']['running'] is True
+    scheduler.tick(2.0)
+    assert probed
+    release.set()
+    executor.stop()

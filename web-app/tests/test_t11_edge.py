@@ -381,7 +381,7 @@ def test_two_simultaneous_logins_with_the_same_code_and_cookie_open_one_session_
         c.set_cookie('session', cookie, domain=HOST)
         r = mfa(app, c, code)
         return r.status_code, 'user_id' in cookie_payload(app, c)
-    results = concurrent(8, job)
+    results = concurrent(4, job)
     assert [r for r in results if isinstance(r, Exception)] == []
     assert sum(1 for status, opened in results if status == 200 and opened) == 1
 

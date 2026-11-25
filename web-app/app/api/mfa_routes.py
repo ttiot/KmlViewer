@@ -62,11 +62,11 @@ def _check_password(user, data) -> None:
 
 
 def _check_totp(user, data) -> None:
-    if mfa_limit.blocked(user['id']) is not None:
+    if mfa_limit.reserve(user['id']) is not None:
         raise ApiError(mfa_limit.MESSAGE, 429)
     if not second_factor.verify_totp(get_db(), current_app.extensions['secrets'], user['id'], data.get('code')):
-        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403)
+    mfa_limit.release(user['id'])
 
 
 def _state(user) -> dict:
@@ -104,13 +104,13 @@ def mfa_totp_confirm():
     data = json_body()
     pending = current_app.extensions['pending']
     secret = pending.get_enrollment(_owner(user))
-    if mfa_limit.blocked(user['id']) is not None:
+    if mfa_limit.reserve(user['id']) is not None:
         raise ApiError(mfa_limit.MESSAGE, 429)
     code = second_factor.normalize_totp(data.get('code'))
     step = second_factor.matching_step(secret, code) if secret and code else None
     if step is None:
-        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403 if secret else 409)
+    mfa_limit.release(user['id'])
     db = get_db()
     store = current_app.extensions['secrets']
     with write_transaction(db):
@@ -193,7 +193,7 @@ def mfa_webauthn_options():
 def mfa_webauthn_verify():
     user = _password_user()
     data = json_body(large=False)
-    if mfa_limit.blocked(user['id']) is not None:
+    if mfa_limit.reserve(user['id']) is not None:
         raise ApiError(mfa_limit.MESSAGE, 429)
     pending = current_app.extensions['pending']
     try:
@@ -201,8 +201,8 @@ def mfa_webauthn_verify():
             current_app.config, pending, f"profile:{user['id']}:{user['session_token']}", data.get('credential'))
         name = webauthn_factor.clean_name(data.get('name'), 'Clé de sécurité')
     except webauthn_factor.WebAuthnError as exc:
-        mfa_limit.failed(user['id'])
         raise ApiError(str(exc), 403) from None
+    mfa_limit.release(user['id'])
     db = get_db()
     with write_transaction(db):
         first = not factors.has_second_factor(db, user['id'])
@@ -248,7 +248,7 @@ def mfa_webauthn_remove(key_id):
 
 def _check_totp_or_recovery(user, data) -> None:
     """Second facteur exigé pour une suppression : code TOTP ou de secours (le compte peut n'avoir que des clés)."""
-    if mfa_limit.blocked(user['id']) is not None:
+    if mfa_limit.reserve(user['id']) is not None:
         raise ApiError(mfa_limit.MESSAGE, 429)
     code = data.get('code')
     kind = second_factor.kind_of(code)
@@ -256,5 +256,5 @@ def _check_totp_or_recovery(user, data) -> None:
     ok = (second_factor.verify_totp(db, current_app.extensions['secrets'], user['id'], code) if kind == 'totp'
           else second_factor.consume_recovery(db, user['id'], code) if kind == 'recovery' else False)
     if not ok:
-        mfa_limit.failed(user['id'])
         raise ApiError('Code invalide ou déjà utilisé.', 403)
+    mfa_limit.release(user['id'])
