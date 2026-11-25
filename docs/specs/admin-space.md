@@ -194,6 +194,17 @@ Règle : aucun module métier (`services/*`) ne lit `os.environ` ni la table des
   - émetteur **admin** : 409 explicite (il a déjà accès à la liste des comptes) ;
   - émetteur **non admin** : aucun contrôle visible, invitation créée et envoyée normalement (201) ; l'unicité est imposée à la **validation** de l'adresse (EF-4.6), où elle échoue sans rien révéler à l'émetteur (défaut, §13).
 - **EF-3.11** Compte créé **actif** immédiatement, adresse **en attente** (EF-4.3) ; `users.invited_by` trace l'émetteur.
+- **EF-3.12 Section « Invitations » du profil** (défaut trouvé par l'utilisateur, 2026-11-25 : la section était réservée aux comptes `password` dans le gabarit, ce qui contredit EF-3.2 et §9) :
+  - **visible pour tout compte, SSO ou `password`**, dès que les invitations sont disponibles. Elles le sont en mode `password`, et en mode `oidc` avec `SECRETS_KEY` et `PUBLIC_URL` (EF-0.4) ;
+  - elle montre toujours :
+    - les crédits restants (« illimité » pour un admin) ;
+    - la liste des invitations émises par le compte, avec leur statut et la révocation de celles en attente (EF-3.7) ;
+  - le **formulaire de création** n'apparaît que si `can_invite` est vrai (EF-3.2 : admin, ou compte actif à adresse validée avec au moins un crédit). L'adresse d'un compte SSO, fournie par l'IdP (`email`), compte comme validée ;
+  - si `can_invite` est faux, une explication remplace le formulaire, et elle en donne le motif :
+    - « aucun crédit d'invitation : demande-en à un administrateur » ;
+    - ou « valide d'abord ton adresse e-mail » ;
+  - la section est **absente** quand les invitations ne sont pas disponibles : mode `local`, ou mode `oidc` sans `SECRETS_KEY` ou sans `PUBLIC_URL`. `/api/invitations` répond alors 404 (EF-0.4, CA-61) ;
+  - le serveur reste l'autorité : `POST /api/invitations` applique EF-3.2 et EF-3.5 quel que soit l'affichage (CA-81).
 
 ### 5.4 E-mail et validation d'adresse (ADR-0005)
 
@@ -546,7 +557,7 @@ Cette règle vaut pour les deux specs (`activities.kind` de la spec routage comp
 ## 9. UI
 
 - Administration : onglets **Utilisateurs · Invitations · Fonctions bêta · Réglages · Clés API et e-mail · Journal** (Clés API et E-mail réunis : accepté, E-21) ; bandeaux : SMTP absent, collision d'identité, destination hors liste blanche (bandeaux « SMTP absent » et « destination hors liste » **à faire**, décision de coord, 2026-11-25, à relire par l'utilisateur, E-20/E-21, CA-64).
-- Profil : invitations, mot de passe, adresse, second facteur.
+- Profil : invitations (pour **tout** compte, SSO ou `password`, quand elles sont disponibles : EF-3.12), mot de passe, adresse, second facteur (ces trois derniers pour les comptes `password`).
 - Connexion : `password` ⇒ formulaire seul ; `oidc` ⇒ SSO + formulaire toujours visible (masqué seulement si EF-0.4) : **une seule page** qui porte le bouton SSO et le formulaire ; `/auth/login` ne redirige plus d'office vers l'IdP quand les comptes à mot de passe sont disponibles (à faire, décision de coord, 2026-11-25, à relire par l'utilisateur, E-21, CA-63).
 - Réglages : **sous-onglets par section, recherche, éditeurs structurés et enregistrement par onglet : §5.6b** (refonte du 2026-11-25, CA-67 à CA-80) ; source, surcharge, retour au défaut ; avertissement « modifier la destination efface le secret associé » sous forme de **confirmation avant l'enregistrement** quand un secret lié est configuré (à faire, décision de coord, 2026-11-25, à relire par l'utilisateur, E-21, CA-65) ; fonds de carte : hôtes autorisés affichés, fond hors liste signalé.
 - Polissage **accepté pour l'instant** (E-21) : marqueur de surcharge d'env, hôtes de tuiles autorisés affichés, libellés d'acteur du journal (« Compte `cli` » / « Ligne de commande » / « Système »), lien du bandeau de collision vers les comptes, diagnostic du moteur mis en forme.
@@ -648,6 +659,7 @@ Cette règle vaut pour les deux specs (`activities.kind` de la spec routage comp
 | CA-78 (EF-6.12, EF-6.15, registre de test, UI) | Réglage `list` (`max_items` 3) ⇒ pastilles ; ajout par Entrée ; doublon ⇒ erreur ; « Ajouter » désactivé à 3 éléments ; la croix retire un élément ; l'enregistrement envoie la liste. Réglage `requires_restart` ⇒ pastille « Redémarrage nécessaire », mention dans la confirmation et bandeau après l'enregistrement tant que `restart_pending` est vrai. |
 | CA-79 (EF-6.16) | Test statique étendu au code de la page Réglages : aucun `innerHTML` alimenté par une donnée, aucun script ni style en ligne, aucun `confirm()`, `alert()` ou `prompt()`. CSP inchangée. Un fond dont l'attribution contient un texte de balise est refusé par le serveur (400). Registre de test avec un réglage `secret` ⇒ absent de la page. Le test `CONTROL_FOR_TYPE` vérifie que chaque type a un éditeur et qu'aucun ne passe par du JSON hors du volet « Avancé ». |
 | CA-80 (EF-6.17) | `web-app/tests_browser/README.md` donne **une** commande ; l'image y est référencée par version **et** digest `sha256` ; aucune référence `latest`. `web-app/tests_browser/requirements.txt` est épinglé avec empreintes, et sa version de `playwright` est celle de l'image. `python -m pytest --collect-only` lancé dans `web-app/` comme dans la CI ⇒ aucun test de `tests_browser/` collecté ; le workflow CI ne mentionne ni `tests_browser` ni Playwright. La commande jouée sur un poste ⇒ CA-72 à CA-78 passent ; un test qui provoque une requête vers un hôte externe la voit interceptée, enregistrée et bloquée (aucune connexion sortante). |
+| CA-81 (EF-3.12, EF-3.2, EF-0.4) | Mode `oidc` avec `SECRETS_KEY` et `PUBLIC_URL`. Compte SSO actif avec 2 crédits ⇒ `/profile` montre la section « Invitations », 2 crédits et le formulaire ; création ⇒ 201, crédits à 1, invitation listée et révocable. Compte SSO à 0 crédit ⇒ section visible avec la liste, sans formulaire, avec le motif « aucun crédit » ; `POST /api/invitations` forcé ⇒ 409, aucun jeton créé. Admin SSO ⇒ formulaire, crédits « illimité ». Compte `password` à adresse seulement en attente ⇒ section sans formulaire, motif « valide d'abord ton adresse » ; `POST` forcé ⇒ 403. Compte `password` à adresse validée avec crédits ⇒ formulaire. Mode `oidc` sans `PUBLIC_URL` (ou sans `SECRETS_KEY`), et mode `local` ⇒ section absente du HTML pour tous les comptes, `GET /api/invitations` ⇒ 404. Mode `password` ⇒ même comportement que le premier cas pour un compte `password`. |
 
 **CA-72 à CA-78** se vérifient avec le banc de test navigateur local (EF-6.17), joué par `test` avant chaque lot qui touche au front. La recette manuelle reste en complément.
 
