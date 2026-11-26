@@ -209,7 +209,9 @@ def plan_zone(vertices: list, candidates: Optional[list], limits: Limits, margin
 
 def preview(conn, cfg, vertices: list, margin_km: int) -> dict:
     """Aperçu pour la confirmation (ZD-4.4) : régions ajoutées et retirées, octets à télécharger, dalles nouvelles."""
-    plan = plan_zone(vertices, load_catalog(conn), Limits.from_config(cfg), margin_km)
+    limits = Limits.from_config(cfg)
+    plan = plan_zone(vertices, load_catalog(conn), limits, margin_km)
+    managed = limits.max_tiles > 0                          # MNT non géré par la tâche : aucune dalle annoncée
     state = read(conn)
     before = set(state['active_regions'] or [])
     added = [r for r in plan.regions if r.id not in before]
@@ -217,7 +219,8 @@ def preview(conn, cfg, vertices: list, margin_km: int) -> dict:
     return {'regions': plan.region_ids, 'added': [r.id for r in added], 'removed': sorted(before - set(plan.region_ids)),
             # « octets hors cache » : l'application ignore le cache de l'hôte, elle donne les octets des régions AJOUTÉES
             'download_bytes': sum(r.size for r in added), 'total_bytes': plan.total_bytes,
-            'new_tiles': len([t for t in plan.tiles if tuple(t) not in tiles_before]), 'tiles': len(plan.tiles),
+            'new_tiles': len([t for t in plan.tiles if tuple(t) not in tiles_before]) if managed else 0,
+            'tiles': len(plan.tiles) if managed else 0,
             'extract_bbox': plan.extract_bbox, 'settle_s': cfg['ROUTING_ZONE_SETTLE_S']}
 
 
@@ -228,7 +231,7 @@ def _recalc(conn, requested: list, now: datetime) -> str:
     state = read(conn)
     status = 'idle' if _same_zone(requested, state['active_polygon']) else 'pending'
     _set(conn, status=status, reason=None if status == 'idle' else state['reason'] or 'zone', status_at=_iso(now),
-         claim_id=None, claimed_at=None, claim_payload=None)
+         claim_id=None, claimed_at=None, claim_payload=None, last_failure_code=None)       # plus de `failed` : code périmé effacé
     return status
 
 
@@ -246,7 +249,8 @@ def register_request(conn, cfg, requested: list, now: datetime, reason: str = 'z
         if state['status'] in ('building', 'starting'):
             return
         if _same_zone(requested, state['active_polygon']):
-            _set(conn, status='idle', reason=None, status_at=_iso(now), claim_id=None, claimed_at=None, claim_payload=None)
+            _set(conn, status='idle', reason=None, status_at=_iso(now), claim_id=None, claimed_at=None, claim_payload=None,
+                 last_failure_code=None)
         else:
             _set(conn, status='pending', reason=reason, status_at=_iso(now), claim_id=None, claimed_at=None, claim_payload=None,
                  last_failure_code=None if state['status'] == 'failed' else state['last_failure_code'])

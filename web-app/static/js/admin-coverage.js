@@ -193,7 +193,7 @@ const AdminCoverage = (() => {
         if (p.removed && p.removed.length) parts.push(`retirées : ${p.removed.join(', ')}`);
         if (!parts.length) parts.push('mêmes régions');
         parts.push(`${gio(p.download_bytes)} à télécharger (${gio(p.total_bytes)} au total)`);
-        parts.push(`${plural(p.new_tiles || 0, 'dalle')} d'altitude nouvelle${(p.new_tiles || 0) > 1 ? 's' : ''}`);
+        if (p.new_tiles) parts.push(`${plural(p.new_tiles, 'dalle')} d'altitude nouvelle${p.new_tiles > 1 ? 's' : ''}`);
         if (p.settle_s) parts.push(`prise en compte dans ${plural(Math.ceil(p.settle_s / 60), 'min')}`);
         return `Aperçu : ${parts.join(' · ')}.`;
     }

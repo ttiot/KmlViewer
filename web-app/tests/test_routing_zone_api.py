@@ -807,3 +807,81 @@ def test_the_catalog_row_and_the_state_are_never_exposed_by_the_public_options(w
     text = json.dumps(options(world))
     assert 'geofabrik' not in text and 'regions' not in text and 'sha256' not in text
     assert catalog_row(world.conn) is not None
+
+
+# ===================================================== H. code d'échec périmé, MNT non géré (revue TZ2-c) =======================
+
+def failure_of(world):
+    return view(world).get_json()['coverage']['failure_code']
+
+
+def test_the_failure_code_is_cleared_by_revert_and_the_active_zone_is_registered_again(world):
+    failed_world(world, 'download')
+    assert failure_of(world) == 'download' and state(world)['last_failure_code'] == 'download'
+    request_before = state(world)['request_id']
+    assert post(world, 'revert').status_code == 200
+    assert failure_of(world) is None and state(world)['last_failure_code'] is None and state(world)['status'] == 'idle'
+    assert state(world)['request_id'] == request_before + 1 and vertices(state(world)['request_polygon']) == vertices(DEFAULT_ZONE)
+    assert vertices(settings_view(world)['value']) == vertices(DEFAULT_ZONE) and coverage.alerts(world.conn, world.app.config) == []
+
+
+@pytest.mark.parametrize('how', ['retry', 'revert', 'new-zone', 'active-zone-again'])
+def test_every_exit_from_failed_clears_the_failure_code(world, how):
+    failed_world(world, 'budget')
+    assert state(world)['last_failure_code'] == 'budget'
+    if how in ('retry', 'revert'):
+        assert post(world, how).status_code == 200
+    elif how == 'new-zone':
+        assert patch(world, [[3.0, 50.4], [3.5, 50.4], [3.5, 50.9], [3.0, 50.9]]).status_code == 200
+    else:
+        assert patch(world, DEFAULT_ZONE).status_code == 200
+    assert state(world)['status'] != 'failed' and state(world)['last_failure_code'] is None and failure_of(world) is None
+    assert coverage.alerts(world.conn, world.app.config) == []
+
+
+def test_a_failed_task_overtaken_by_a_new_zone_then_failing_again_shows_only_its_own_code(world):
+    failed_world(world, 'download')
+    patch(world, [[3.0, 50.4], [3.5, 50.4], [3.5, 50.9], [3.0, 50.9]])
+    assert failure_of(world) is None
+    payload = coverage.claim(world.conn, world.app.config, [[3.0, 50.4], [3.5, 50.4], [3.5, 50.9], [3.0, 50.9]], 10,
+                             now_utc() + timedelta(seconds=700), False)
+    coverage.failed(world.conn, payload['request_id'], 'cap', [[3.0, 50.4], [3.5, 50.4], [3.5, 50.9], [3.0, 50.9]], now_utc() + timedelta(seconds=720))
+    assert failure_of(world) == 'cap'
+
+
+UNMANAGED = ['', 'https://api.opentopodata.org/v1/copernicus30', 'http://opentopodata.example:5000/v1/copernicus30']
+
+
+@pytest.mark.parametrize('dem_url', UNMANAGED)
+def test_without_the_local_dem_service_the_preview_announces_no_tile(tmp_path, dem_url):
+    w = zone_world(tmp_path, DEM_URL=dem_url)
+    data = preview(w, NORMANDIE_ZONE).get_json()['preview']
+    assert data['new_tiles'] == 0 and data['tiles'] == 0 and data['added'] == ['basse-normandie']                # le reste de l'aperçu est inchangé
+    w.conn.close()
+
+
+def test_with_the_local_dem_service_the_preview_announces_the_tiles(world):
+    data = preview(world, NORMANDIE_ZONE).get_json()['preview']
+    assert data['tiles'] == len(expected_tiles(geometry.extract_bbox(NORMANDIE_ZONE, 10))) > 24 and data['new_tiles'] == data['tiles']
+
+
+@pytest.mark.parametrize('dem_url', UNMANAGED)
+def test_without_the_local_dem_service_the_view_counts_no_tile_against_the_cap(tmp_path, dem_url):
+    w = zone_world(tmp_path, DEM_URL=dem_url)
+    usage = view(w).get_json()['coverage']['usage']
+    assert usage['tiles'] is None and usage['regions'] == 17 and usage['bytes'] == pytest.approx(3.28e9, rel=0.01)
+    w.conn.close()
+
+
+def test_with_the_local_dem_service_the_view_counts_the_active_zone_tiles(world):
+    assert view(world).get_json()['coverage']['usage']['tiles'] == 24
+
+
+@pytest.mark.parametrize('dem_url', [LOCAL_DEM] + UNMANAGED)
+def test_the_claim_always_carries_the_dem_tiles_of_the_extract_bbox_managed_or_not(tmp_path, dem_url):
+    """ZD-7 : les dalles sont calculées dans tous les cas (sortie de `claim`, diagnostic) ; seule leur gestion dépend du MNT local."""
+    w = zone_world(tmp_path, active=LILLE_ZONE, DEM_URL=dem_url)
+    patch(w, DEFAULT_ZONE)
+    payload = coverage.claim(w.conn, w.app.config, DEFAULT_ZONE, 10, now_utc() + timedelta(seconds=301), False)
+    assert sorted(map(tuple, payload['dem_tiles'])) == sorted(map(tuple, expected_tiles(payload['extract_bbox']))) and len(payload['dem_tiles']) == 24
+    w.conn.close()

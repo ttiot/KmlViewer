@@ -46,7 +46,7 @@ def _usage(conn, state) -> dict:
     if candidates and state['active_regions']:
         sizes = {c.id: c.size for c in candidates}
         usage['bytes'] = sum(sizes.get(r, 0) for r in state['active_regions'])
-    if state['active_extract_bbox']:
+    if state['active_extract_bbox'] and limits.max_tiles:            # MNT non géré par la tâche : aucune dalle annoncée
         usage['tiles'] = len(geometry.dem_tiles(state['active_extract_bbox']))
     return usage
 
