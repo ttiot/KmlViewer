@@ -204,6 +204,10 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 ### Tâche unique côté hôte
 
 - **ZD-9** `routing/update.sh` est lancé par une minuterie systemd toutes les minutes, sous le verrou existant (verrou pris ⇒ sortie 0). À chaque passage :
+  0. **étape en suspens** (revue TZ2a-n9) : si un passage précédent a laissé un `switching` ou un `done` sans réponse définitive, l'hôte le rejoue d'abord, **avant `report`** et avant toute prise, selon la conduite de ZD-10 :
+     - l'étape en suspens est notée dans le volume de routage (`pending-step.json` : numéro de demande, étape, graphe, date des données, dalles nouvelles), écrite avant l'appel et effacée sur une réponse définitive ;
+     - **avant `report`** : un `report` du graphe neuf pendant `starting` réaligne la zone et recalcule le statut ; un `done` rejoué après lui répondrait 3, et les activités `no_coverage` ne seraient pas remises en file ;
+     - le rejeu ne compte pas comme une tâche du budget ;
   1. **rapport** (`report`) du graphe en service et de son `zone.json`, plus les compteurs du budget du jour ;
   2. **catalogue**, si sa date dépasse 7 jours ou s'il est absent :
      - téléchargement de l'index (`ROUTING_CATALOG_URL`) et des tailles des candidates, avec des requêtes `HEAD` qui suivent les redirections ; la taille est ajoutée à chaque candidate (champ `size`, format de ZD-10) ;
@@ -233,16 +237,32 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
   7. **graphe** : dossier neuf, `zone.json` (polygone, emprise, marge, régions, date, demande), import ;
   8. **dalles** : `dem-tiles` sur l'emprise d'extraction (au format `lat_min,lon_min,lat_max,lon_max` qu'il attend), sans retélécharger les dalles présentes ; liste des dalles nouvelles retenue pour ZD-8 ; purge de ZD-8. Étape sautée sans profil `dem` ;
   9. **bascule** :
+     - **ordre obligatoire** (revue TZ2a-n10) : `switching ID` réussi (code 0) **une seule fois**, puis bascule, puis `done ID`. L'hôte n'appelle jamais `done` sans un `switching` à 0 pour la même demande. L'application accepte encore un `done` sur une demande `building` : l'hôte ne s'appuie pas sur cette tolérance ;
+     - rejouer `switching` après un code 2 (ZD-10) ne fait pas un second `switching` : sur une demande déjà `starting`, l'application répond 0 sans rien changer (revue TZ2a-n6) ;
      - `switching` : code 3 ⇒ suppression du graphe neuf, des fichiers recadrés et du fusionné, extraits et dalles gardés en cache ;
      - puis bascule, redémarrage (et `opentopodata` si nécessaire) ;
      - santé non atteinte ⇒ retour arrière, `failed --code health` ;
   10. **`done`** avec la liste des dalles nouvelles ; nettoyage (`ROUTING_KEEP_GRAPHS`, cache ZD-11, fichiers fusionnés sauf le dernier).
   - Une erreur aux étapes 2 à 8 donne `failed` avec son code (`catalog`, `cap`, `budget`, `download`, `merge`, `extract`, `import`, `incomplete`, `dem`, `disk`, `timeout`, `other`). Graphe et dalles en service intacts.
+  - Un code de sortie de `flask routing-zone` est traité selon la conduite de ZD-10. En particulier, un code 2 sur `switching` ou `done` ne donne **jamais** `failed`, ni suppression du graphe, ni retour arrière.
 
 ### Dialogue avec l'application (`flask routing-zone`)
 
 - **ZD-10** Sous-commandes, appelées par l'hôte seulement (`docker compose exec -T kml-viewer …`).
   - **Sortie** : une ligne JSON sur la sortie standard ; journaux sur la sortie d'erreur, sans coordonnée. Codes : 0 succès, 2 argument ou contenu invalide, 3 demande dépassée ou inconnue, 4 désactivé.
+  - **Conduite de l'hôte selon le code** (revues TZ2a-n9 et TZ2a-n10). Une erreur passagère de l'application (base verrouillée au-delà de 30 s, exception hors contrat) sort aussi en code 2 (revue TZ2a-n4). Sur `switching` et `done`, qui ne portent aucun contenu à corriger, un 2 est donc **transitoire** :
+
+    | Sous-commande | 0 | 2 | 3 | 4 | autre code (1, 125 à 137 de `docker compose exec`…) |
+    |---|---|---|---|---|---|
+    | `switching ID` | `starting` ⇒ bascule | **transitoire** : graphe neuf, recadrés et fusionné gardés ; aucun `failed` ; fin du passage ; `switching` rejoué au passage suivant (ZD-9 étape 0), puis bascule | demande dépassée ⇒ suppressions de ZD-9.9 | désactivé ⇒ graphe neuf supprimé, fin du passage | comme 2 (décision de coord, voir plus bas) |
+    | `done ID` | tâche close | **transitoire** : graphe en service gardé ; ni `failed` ni retour arrière ; fin du passage ; `done` rejoué au passage suivant, avant `report` (ZD-9 étape 0) | dépassée : rien à défaire, `report` réaligne | fin du passage, rien à défaire | comme 2 (décision de coord) |
+    | `catalog -`, `claim`, `report`, `failed` | succès | sens actuel (ZD-9) | sens actuel | fin du passage | **`failed ID --code other`** si l'hôte tient une demande prise dont le `switching` n'a pas encore répondu 0 ; sinon (aucun numéro tenu, ou `failed` lui-même) fin du passage, journalisée |
+
+    - Rejeu borné par la **prise** : une étape en suspens dont la prise date de plus de 2 h est abandonnée et `pending-step.json` effacé. Un `switching` abandonné laisse l'application reprendre la demande (prise expirée, ZD-10 `claim`), et le graphe neuf non basculé est supprimé. Un `done` abandonné laisse le graphe en service, et `report` réaligne la zone active.
+    - Dans la séquence de ZD-9, `catalog -`, `claim` et `report` ne sont jamais appelés pendant qu'une demande est tenue sans `switching` à 0 : un 2 sur `switching` termine le passage, et la prise ne se fait qu'après `report`. La branche `failed --code other` de la dernière ligne est donc une **garde** contre un changement d'ordre, sans cas atteignable aujourd'hui.
+    - `failed` n'est jamais appelé en réponse à son propre échec : un `failed` sans réponse 0 ou 3 est journalisé, et la prise expire au bout de 2 h.
+    - **Décision de coord (2026-11-26)** : un code hors 0/2/3/4 sur `switching` ou `done` est traité comme un 2 (transitoire, rejeu), car une panne du conteneur de l'application ne doit pas faire perdre le graphe, neuf ou en service. En dernier recours, la prise expire au bout de 2 h.
+    - La garde `failed --code other` reste écrite (décision de coord).
   - **Contenus volumineux** (catalogue, `zone.json`) : passés par l'**entrée standard** (`catalog -`, `report --zone -`) (revue Z2-M1). Taille lue et bornée **avant** toute analyse : catalogue ≤ **16 Mio** (index complet : 3,5 Mo), `zone.json` ≤ **64 Kio**. Au-delà : code 2, rien n'est lu. **Aucun montage n'est ajouté** au service `kml-viewer`, qui reste en `read_only` sans le volume de routage.
   - **Format d'entrée de `catalog -`** (choix de dev, TZ2-a) : le JSON de l'**index Geofabrik** (`index-v1.json`), tel quel, enrichi par l'hôte :
 
@@ -326,7 +346,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 | CA-ZD6 [CI] (ZD-10 `report`, ZD-12, ZD-13) | Active A ; `report` de B ⇒ active B, une entrée d'audit ; même `report` 10 fois ⇒ aucune entrée de plus. Zone rapportée invalide 10 fois ⇒ une alerte, un `WARNING` par contenu. `--historic` ⇒ acceptation sur la zone demandée. `/info` hors de l'emprise active ⇒ alerte « graphe et zone active divergent ». |
 | CA-ZD7 [CI] (ZD-8) | Dalles présentes avant la tâche (100, hors zone) + `DEM_MAX_TILES` = 60 ⇒ aucune supprimée ni comptée. Dalles de la tâche au-delà du plafond ⇒ seules celles hors de la zone active, plus anciennes d'abord. |
 | CA-ZD8 [CI] (ZD-12) | Libellés de chaque statut et motif, budget et plafonds affichés, boutons selon le statut ; non admin ⇒ 403 ; « Revenir à la zone active » ⇒ réglage = zone active, `idle`, audit admin. |
-| CA-ZD9 [hôte] (ZD-9) | Avec une commande `flask` simulée : sortie de `claim` contenant `$(touch /tmp/x)`, `;`, un retour à la ligne, une région inconnue de la copie locale ou des plafonds dépassés ⇒ aucun fichier créé, aucune construction, `failed` appelé. Redirection vers un hôte hors liste ⇒ aucun téléchargement, `failed --code download`. Total reçu au-delà de `ROUTING_MAX_SOURCE_BYTES` (tailles du catalogue sous-estimées) ⇒ arrêt, `cap`. Fichier fusionné au-delà de `ROUTING_MAX_IMPORT_BYTES` ⇒ pas d'import, `cap`. 7e tâche du jour ⇒ `budget`. Cache à la date *D* ⇒ aucun téléchargement ; un extrait nouveau publié à *D* ⇒ lui seul téléchargé ; publié à une autre date ⇒ tous retéléchargés. Fusionné de 2,4 Go + 1 octet (défaut) ⇒ `cap`, pas d'import. Recadrage fait extrait par extrait, avant la fusion (aucun `osmium extract` sur le fichier fusionné). Verrou tenu ⇒ sortie 0 sans `claim`. |
+| CA-ZD9 [hôte] (ZD-9, ZD-10 conduite de l'hôte) | Avec une commande `flask` simulée : sortie de `claim` contenant `$(touch /tmp/x)`, `;`, un retour à la ligne, une région inconnue de la copie locale ou des plafonds dépassés ⇒ aucun fichier créé, aucune construction, `failed` appelé. Redirection vers un hôte hors liste ⇒ aucun téléchargement, `failed --code download`. Total reçu au-delà de `ROUTING_MAX_SOURCE_BYTES` (tailles du catalogue sous-estimées) ⇒ arrêt, `cap`. Fichier fusionné au-delà de `ROUTING_MAX_IMPORT_BYTES` ⇒ pas d'import, `cap`. 7e tâche du jour ⇒ `budget`. Cache à la date *D* ⇒ aucun téléchargement ; un extrait nouveau publié à *D* ⇒ lui seul téléchargé ; publié à une autre date ⇒ tous retéléchargés. Fusionné de 2,4 Go + 1 octet (défaut) ⇒ `cap`, pas d'import. Recadrage fait extrait par extrait, avant la fusion (aucun `osmium extract` sur le fichier fusionné). Verrou tenu ⇒ sortie 0 sans `claim`. `switching` simulé en code 2 ⇒ graphe neuf gardé, aucun `failed`, `pending-step.json` présent ; passage suivant ⇒ `switching` rejoué avant `report`, puis bascule et `done`. `done` simulé en code 2 ⇒ graphe en service gardé, ni `failed` ni retour arrière ; passage suivant ⇒ `done` rejoué **avant** `report`. Journal des appels : jamais de `done` sans `switching` à 0 pour le même numéro, jamais deux `switching` à 0 pour une même demande hors rejeu. Étape en suspens dont la prise a plus de 2 h ⇒ abandonnée. Code 1 ou 137 sur `catalog -`, `report` ou `claim` ⇒ fin du passage, aucune construction, aucun `failed` (pas de numéro tenu). |
 | CA-ZD10 [recette dune] | (a) Zone réduite à la métropole lilloise ⇒ graphe reconstruit, `/info` dans l'emprise, Lille routé, Liège 400 ; durée, pic de RAM, **interruption** relevés. (b) Zone par défaut plus Normandie, polygone `[[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55], [1.35, 49.75], [-0.5, 49.4], [-0.5, 49.05], [1.35, 49.05]]` ⇒ `basse-normandie` ajoutée (≈ 3,4 Go, §3), seul extrait téléchargé si la date Geofabrik n'a pas changé, Caen routé, 8 dalles ajoutées, activité `no_coverage` à Caen corrigée ensuite ; taille recadrée, pic de RAM et disque relevés (V-Z2). (c) Import tué ⇒ couverture précédente, `failed`. (d) Retour à la zone par défaut ⇒ cache réutilisé. (e) Mensuelle ⇒ même cycle, 503 annoncé, zone active conservée. (f) Instance existante passée à `=1` ⇒ demande `activation` construite au premier passage. |
 
 ## 9. Décisions
@@ -371,6 +391,8 @@ Les valeurs de ZD-4 et de ZD-11 en découlent, avec ≈ 30 % de marge. L'exemple
 | Z2-m3 | `ROUTING_MAX_IMPORT_BYTES` lié à la RAM ; l'hôte fait foi ; 2,4 Go avec `-Xmx8g`, recalé sur V-Z2 (ZD-4, §9) |
 | Z2-m4 | CLI sans fil, réveil par marqueur en base (ZD-10) |
 | Z2-m5 | Audit et alertes par changement, dédoublonnés (ZD-10, ZD-12, ZD-13) |
+| TZ2a-n9 (review TZ2-a ; contrat de l'hôte = TZ2-c, et non TZ2-b comme écrit dans REVIEW.md) | Code 2 transitoire sur `switching` et `done` : rejeu, jamais `failed` ni suppression du graphe ; étape en suspens rejouée avant `report` ; code inattendu ailleurs ⇒ `failed --code other` (ZD-9 étape 0, ZD-10 « Conduite de l'hôte », CA-ZD9) |
+| TZ2a-n10 (review TZ2-a ; TZ2-c) | Ordre obligatoire : `switching` à 0 une fois, puis `done` ; la tolérance de l'application n'est pas utilisée (ZD-9.9) |
 | Nits | 2 000 km : renvoi à EF-6.20 seulement (inventaire n° 23) ; `sources-AAAAMMJJ.osm.pbf` (n° 9) |
 
 ## 11. Découpage
