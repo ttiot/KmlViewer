@@ -98,6 +98,17 @@ def login_as(app, sub, admin=False, **claims):
 
 
 @pytest.fixture(autouse=True)
+def _frozen_totp_clock(monkeypatch):
+    """Serveur et tests lisent le même instant TOTP, milieu d'un pas de 30 s : plus de frontière de pas entre un code émis et sa
+    vérification ou son rejeu. Les tests qui pilotent leur propre horloge (FakeTime) la posent par-dessus."""
+    from app.auth import second_factor
+    from tests.pw_harness import TOTP_CLOCK
+    TOTP_CLOCK.now = TOTP_CLOCK.mid_step()
+    monkeypatch.setattr(second_factor, 'time', TOTP_CLOCK)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_outbound_refusal_log():
     """`outbound._refusals` (dédoublonnage des refus audités) est global au processus : sans remise à zéro, un test dépend de l'ordre."""
     from app import outbound

@@ -62,9 +62,30 @@ def new_secret():
     return pyotp.random_base32(32)
 
 
+class TotpClock:
+    """Horloge TOTP des tests, figée au milieu d'un pas de 30 s (posée par la fixture autouse `_frozen_totp_clock` de conftest).
+
+    Le serveur (`second_factor.time`) et les tests lisent le même instant : une frontière de pas ne peut plus passer entre
+    l'émission d'un code et sa vérification (ou son rejeu), ce qui rendait ces tests aléatoires (~1 fois sur 15 s de décalage).
+    """
+
+    def __init__(self):
+        self.now = self.mid_step()
+
+    @staticmethod
+    def mid_step():
+        return time.time() // 30 * 30 + 15
+
+    def time(self):
+        return self.now
+
+
+TOTP_CLOCK = TotpClock()
+
+
 def code_at(secret, moment=None, offset=0):
-    """Code TOTP valide à `moment` décalé de `offset` pas de 30 s."""
-    moment = time.time() if moment is None else moment
+    """Code TOTP valide à `moment` (par défaut l'horloge TOTP figée des tests) décalé de `offset` pas de 30 s."""
+    moment = TOTP_CLOCK.now if moment is None else moment
     return pyotp.TOTP(secret).at(int(moment // 30 + offset) * 30)
 
 
@@ -177,7 +198,7 @@ class FakeTime:
     """Remplace le module `time` d'un module de l'application (seulement `time()`) : horloge murale pilotée."""
 
     def __init__(self, now=None):
-        self.now = time.time() if now is None else now
+        self.now = TOTP_CLOCK.now if now is None else now
 
     def time(self):
         return self.now

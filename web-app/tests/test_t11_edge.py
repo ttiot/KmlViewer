@@ -21,7 +21,7 @@ import pytest
 from app.audit import Actor
 from app.auth import factors, passwords, second_factor, tokens
 from tests.fake_smtp import FakeSMTP
-from tests.pw_harness import (GOOD, HOST, KW, OTHER, FakeTime, add, call, code_at, concurrent, connect, cookie_payload, form_post, login,
+from tests.pw_harness import (GOOD, TOTP_CLOCK, HOST, KW, OTHER, FakeTime, add, call, code_at, concurrent, connect, cookie_payload, form_post, login,
                               make_app, mfa, new_ip, new_secret, raw_cookie, refresh, session_client)
 
 CLI = Actor.cli()
@@ -71,7 +71,7 @@ def test_the_window_is_exactly_plus_or_minus_one_step_at_every_boundary():
 def test_the_same_code_cannot_be_used_twice_and_an_earlier_step_cannot_follow_a_later_one(app, conn, store):
     secret = new_secret()
     user = add(app, conn, 'bob', secret=secret)
-    now = time.time()
+    now = TOTP_CLOCK.now
     current, previous = code_at(secret, now), code_at(secret, now, -1)
     assert second_factor.verify_totp(conn, store, user['id'], current, now=now) is True
     assert second_factor.verify_totp(conn, store, user['id'], current, now=now) is False       # rejeu
@@ -83,7 +83,7 @@ def test_the_same_code_cannot_be_used_twice_and_an_earlier_step_cannot_follow_a_
 def test_a_future_code_blocks_the_current_one_by_design_but_only_until_the_step_catches_up(app, conn, store):
     secret = new_secret()
     user = add(app, conn, 'bob', secret=secret)
-    now = time.time()
+    now = TOTP_CLOCK.now
     assert second_factor.verify_totp(conn, store, user['id'], code_at(secret, now, 1), now=now) is True
     assert second_factor.verify_totp(conn, store, user['id'], code_at(secret, now, 0), now=now) is False
     assert second_factor.verify_totp(conn, store, user['id'], code_at(secret, now + 30, 1), now=now + 30) is True
@@ -93,7 +93,7 @@ def test_a_future_code_blocks_the_current_one_by_design_but_only_until_the_step_
 def test_concurrent_submissions_of_the_same_code_let_exactly_one_through(app, conn, store, round_):
     secret = new_secret()
     user = add(app, conn, 'bob', secret=secret)
-    now = time.time()
+    now = TOTP_CLOCK.now
     code = code_at(secret, now)
 
     def job(i):
@@ -121,7 +121,7 @@ def test_the_secret_is_encrypted_at_rest_and_never_in_clear_in_the_database_file
 def test_an_unreadable_secret_is_a_refusal_never_an_error_or_a_success(app, conn, store, tmp_path):
     secret = new_secret()
     user = add(app, conn, 'bob', secret=secret)
-    now = time.time()
+    now = TOTP_CLOCK.now
     code = code_at(secret, now)
     conn.execute("UPDATE users SET totp_secret = ? WHERE id = ?", (b'garbage', user['id']))
     assert second_factor.verify_totp(conn, store, user['id'], code, now=now) is False

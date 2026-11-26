@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from app import create_app, db as database
 from app.audit import Actor
 from tests.conftest import force_setting
+from tests.pw_harness import TOTP_CLOCK
 from app.auth import factors, passwords, second_factor, tokens
 from app.auth.pending import PendingStore
 from app.config import TestingConfig
@@ -82,7 +83,7 @@ def enroll(app, conn, client, user_id, *, grant=False):
 
 
 def code_for(secret, offset=0):
-    return pyotp.TOTP(secret).at(time.time() + 30 * offset)
+    return pyotp.TOTP(secret).at(TOTP_CLOCK.now + 30 * offset)       # même instant figé que le serveur (conftest)
 
 
 def activate(app, conn, user_id, *, grant=False):
@@ -123,7 +124,7 @@ def test_a_code_is_accepted_once_and_older_or_equal_steps_are_refused(app, conn)
     user = add(conn, 'alice')
     secret, _ = activate(app, conn, user['id'])
     store = app.extensions['secrets']
-    now = time.time()
+    now = TOTP_CLOCK.now
     first = code_for(secret, 1)                                           # pas courant + 1 : accepté
     assert second_factor.verify_totp(conn, store, user['id'], first, now=now)
     assert not second_factor.verify_totp(conn, store, user['id'], first, now=now)        # rejeu

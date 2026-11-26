@@ -10,6 +10,7 @@ from app.audit import Actor
 from app.auth import emails, passwords, second_factor, users
 from app.config import TestingConfig
 from tests.fake_smtp import FakeSMTP
+from tests.pw_harness import TOTP_CLOCK
 
 KEY = Fernet.generate_key().decode()
 HOST = 'traces.example.com'
@@ -81,7 +82,7 @@ def with_totp(app, conn, user):
 
 def code(secret, offset=1):
     import pyotp
-    return pyotp.TOTP(secret).at(time.time() + 30 * offset)
+    return pyotp.TOTP(secret).at(TOTP_CLOCK.now + 30 * offset)       # horloge figée de conftest, la même que celle du serveur
 
 
 # --- Mot de passe (EF-1.7) -------------------------------------------------------------------------------------------------
