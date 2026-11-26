@@ -38,7 +38,11 @@ SEA_ZONE = [[-3.0, 50.0], [0.0, 50.0], [0.0, 50.5], [-3.0, 50.5]]
 MSG_NO_CATALOG = "Zone : catalogue des données pas encore chargé, réessaie dans quelques minutes."
 
 
+LOCAL_DEM = 'http://opentopodata:5000/v1/copernicus30'            # le plafond des dalles n'existe qu'avec le MNT local (ZD-1, ZD-4.3)
+
+
 def zone_world(tmp_path, *, build=True, catalog=frozen_document, active=DEFAULT_ZONE, bbox=(48.0, 0.0, 53.0, 8.0), **config):
+    config.setdefault('DEM_URL', LOCAL_DEM)
     app = zone_app(tmp_path, build=build, **config)
     conn = connect(app)
     app.config['SETTINGS_STORE'].set_many(conn, {'routing.base_url': ENGINE}, actor=CLI)
@@ -251,6 +255,41 @@ def test_too_many_tiles_is_a_numbered_400_against_the_default_of_60(tmp_path):
     w = zone_world(tmp_path, catalog=catalog_of_three, active=None)
     error = refused(w, zone_value)
     assert 'Zone trop grande' in error and re.search(rf'\b{tiles}\b', error) and re.search(r'\b60\b', error)
+    w.conn.close()
+
+
+@pytest.mark.parametrize('dem_url, refused_for_tiles', [(LOCAL_DEM, True), ('', False), ('https://api.opentopodata.org/v1/copernicus30', False),
+                                                        ('http://opentopodata.example:5000/v1/copernicus30', False),
+                                                        ('http://opentopodata.example.com:5000/x', False), ('http://localhost:5000/x', False)])
+def test_the_tiles_cap_only_exists_with_the_local_dem_service(tmp_path, dem_url, refused_for_tiles):
+    """CA-ZD3 : `DEM_MAX_TILES` = 10 et zone de 24 dalles."""
+    w = zone_world(tmp_path, active=LILLE_ZONE, DEM_URL=dem_url, DEM_MAX_TILES=10)
+    assert len(expected_tiles(geometry.extract_bbox(DEFAULT_ZONE, 10))) == 24
+    response = patch(w, DEFAULT_ZONE)
+    if refused_for_tiles:
+        error = response.get_json()['error']
+        assert response.status_code == 400 and re.search(r'\b24\b', error) and re.search(r'\b10\b', error) and 'dalles' in error
+    else:
+        assert response.status_code == 200, response.get_json()
+    w.conn.close()
+
+
+def set_dem_url_in_database(w, url):
+    """Réglage `DEM_URL` posé dans l'onglet Altitude (en base), sans passer par la liste blanche de destinations."""
+    w.conn.execute("INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('DEM_URL', ?, '2026-11-26T00:00:00Z', 'admin') "
+                   "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(url),))
+    w.conn.commit()
+    w.app.config['SETTINGS_STORE'].refresh(w.conn, force=True)
+
+
+@pytest.mark.parametrize('env_url, database_url, capped', [('', LOCAL_DEM, False), (LOCAL_DEM, 'https://api.opentopodata.org/v1/copernicus30', True),
+                                                            (LOCAL_DEM, '', True), ('', '', False)])
+def test_the_application_and_the_host_follow_the_same_variable_the_environment_not_the_altitude_tab(tmp_path, env_url, database_url, capped):
+    """TZ2c-m5 : « MNT géré par la tâche » se lit dans l'environnement seul des deux côtés (l'hôte ne lit pas la base)."""
+    w = zone_world(tmp_path, active=LILLE_ZONE, DEM_URL=env_url, DEM_MAX_TILES=10)
+    set_dem_url_in_database(w, database_url)
+    response = patch(w, DEFAULT_ZONE)                                                                # 24 dalles
+    assert (response.status_code == 400) is capped, response.get_json()
     w.conn.close()
 
 

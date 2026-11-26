@@ -88,13 +88,11 @@ def _wire_zone_build(app, store) -> None:
 
     if not coverage.enabled(app.config):
         return
-    limits = coverage.Limits.from_config(app.config)
-
     def margin() -> int:
         return int(store.get('routing.zone_margin_km'))
 
     def gate(conn, vertices):
-        coverage.plan_zone(vertices, coverage.load_catalog(conn), limits, margin())
+        coverage.plan_zone(vertices, coverage.load_catalog(conn), coverage.Limits.from_config(app.config), margin())
 
     def changed(conn, vertices):
         coverage.register_request(conn, app.config, vertices, datetime.now(timezone.utc).replace(tzinfo=None))

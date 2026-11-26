@@ -233,6 +233,21 @@ def test_the_stuck_task_button_only_works_after_two_hours_then_recomputes_the_st
         coverage.release_stuck(env.conn, LILLE_ZONE, claimed + timedelta(hours=5), Actor.cli())
 
 
+def test_a_task_starting_for_two_hours_after_the_switching_is_released_and_not_before(env):
+    """Revue TZ2c-M1 : `starting` expire 2 h après le `switching` (jamais pour toujours) ; « Tâche bloquée ? » vaut aussi pour lui."""
+    payload = claim_lille(env)
+    switched = after(SETTLE + 60)
+    coverage.switching(env.conn, payload['request_id'], LILLE_ZONE, switched)
+    assert status(env) == 'starting'
+    with pytest.raises(coverage.CoverageError):
+        coverage.release_stuck(env.conn, LILLE_ZONE, switched + timedelta(hours=2) - timedelta(seconds=1), Actor.cli())
+    assert status(env) == 'starting'
+    mark = audit_mark(env.conn)
+    assert coverage.release_stuck(env.conn, LILLE_ZONE, switched + timedelta(hours=2), Actor.cli()) in ('pending', 'idle')
+    assert status(env) in ('pending', 'idle') and len(routing_audit(env.conn, mark)) == 1
+    assert state_row(env.conn)['claim_id'] is None
+
+
 def test_a_request_over_the_caps_fails_with_the_code_cap_at_the_claim_and_raises_the_alert(tmp_path):
     app = zone_app(tmp_path, ROUTING_MAX_REGIONS=3)
     conn = connect(app)

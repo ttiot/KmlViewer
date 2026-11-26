@@ -1453,3 +1453,20 @@ input[type="range"] {
     display: block !important;          /* Bootstrap impose display: none !important sur [hidden] */
     visibility: hidden;
 }
+
+/* Panneau « Couverture en service » (ZD-12) */
+.coverage-panel {
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.coverage-status.is-bad { color: var(--danger, #b02a37); font-weight: 600; }
+.coverage-status.is-ok { color: var(--text); }
+.coverage-map { height: 180px; margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; }
+.coverage-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 0; font-size: 0.875rem; }
+.coverage-facts dt { color: var(--text-2); font-weight: 400; }
+.coverage-facts dd { margin: 0; overflow-wrap: anywhere; }
+.setting-permanent-help { margin-top: 6px; }

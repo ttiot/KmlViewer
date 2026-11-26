@@ -8,6 +8,8 @@
 const AdminSettings = (() => {
     const { api, el, notify } = App;
     const $ = (id) => document.getElementById(id);
+    const NO_COVERAGE = { node: () => document.createComment(''), refresh: () => Promise.resolve(), reflow() {}, start() {}, stop() {}, enabled: () => false };
+    const Coverage = typeof AdminCoverage === 'undefined' ? NO_COVERAGE : AdminCoverage;      // panneau absent (page sans le script) : rien à montrer
 
     // Contrôle de saisie de CHAQUE type du registre ; aucun ne passe par une zone JSON hors du volet « Avancé » (EF-6.12)
     const CONTROL_FOR_TYPE = { bool: 'switch', enum: 'select', int: 'number', float: 'number', str: 'text', url: 'text', email: 'text',
@@ -604,7 +606,15 @@ const AdminSettings = (() => {
     }
 
     // Ligne : un en-tête (libellé, « ? », pastille, aide, description) et un éditeur (champ, rétablissement, erreurs) (EF-6.18)
+    const COVERAGE_SECTION = 'Traces planifiées', ZONE_KEY = 'routing.coverage_polygon';
     const WIDE = ['basemaps', 'polygon'];
+    // Aide toujours visible (sans « ? »), sous le champ (EF-6.22, CA-88) : ce que la valeur change, et quand.
+    // `zoneOnly` : seulement avec ROUTING_ZONE_BUILD=1 (EF-6.23, CA-89 : masquée à 0).
+    const PERMANENT_HELP = {
+        'routing.zone_margin_km': { text: "S'applique à la prochaine construction de la couverture." },
+        DEM_URL: { text: "La gestion des dalles par la tâche de couverture suit la variable d'environnement DEM_URL, pas une valeur enregistrée ici.", zoneOnly: true },
+    };
+    const permanentHelp = (key) => { const h = PERMANENT_HELP[key]; return h && (!h.zoneOnly || Coverage.enabled()) ? h.text : null; };
     function row(setting) {
         const badges = [];
         if (setting.source === 'env') badges.push(el('span', { class: 'badge-soft is-warn' }, 'Environnement'));      // aucune pastille « Défaut » (EF-6.11)
@@ -627,7 +637,8 @@ const AdminSettings = (() => {
             hintText ? el('p', { class: 'setting-hint' }, hintText) : null,
             description),
         el('div', { class: 'setting-editor' }, el('div', { class: 'setting-control' }, editorFor(setting)), resetControl(setting),
-            setting.type === 'basemaps' ? null : errorLine(setting.key)));
+            setting.type === 'basemaps' ? null : errorLine(setting.key),
+            permanentHelp(setting.key) ? el('p', { class: 'setting-hint setting-permanent-help', id: `perm-${setting.key}` }, permanentHelp(setting.key)) : null));
     }
 
     // -- onglets, compteurs, recherche ------------------------------------------------------------------------------------
@@ -686,8 +697,10 @@ const AdminSettings = (() => {
         selectTab(next);
         $(`stab-${slug(next)}`).focus();
     }
+    function syncPolling() { if (S.tab === COVERAGE_SECTION && Coverage.enabled()) Coverage.start(); else Coverage.stop(); }   // sondage : onglet visible seulement
     function selectTab(section) {
         S.tab = section;
+        syncPolling();
         S.confirm = null;
         const wanted = `#reglages/${slug(section)}`;
         if (window.location.hash !== wanted) window.history.replaceState(null, '', wanted);      // la section seulement, jamais une valeur
@@ -702,6 +715,7 @@ const AdminSettings = (() => {
         const all = sectionSettings(S.tab);
         const shown = all.filter((s) => matches(s) || S.errors[s.key]);      // une ligne en erreur reste visible hors recherche/filtre (L3-1)
         const nodes = [];
+        if (S.tab === COVERAGE_SECTION) nodes.push(Coverage.node());       // panneau « Couverture en service » (ZD-12), vide si ROUTING_ZONE_BUILD=0
         const restart = all.filter((s) => s.restart_pending);
         if (restart.length) nodes.push(el('div', { class: 'alert alert-warning', role: 'status' }, 'Valeur enregistrée, prise en compte au prochain redémarrage.'));
         if (!shown.length) {
@@ -712,6 +726,7 @@ const AdminSettings = (() => {
         }
         nodes.push(...shown.map(row));
         panel.replaceChildren(...nodes);
+        if (S.tab === COVERAGE_SECTION) Coverage.reflow();          // la carte du panneau reprend sa taille une fois dans la page
         updateChrome();
     }
 
@@ -757,15 +772,20 @@ const AdminSettings = (() => {
         const field = index !== undefined && index !== null ? target.querySelector(`[data-index="${index}"] input`) : target.querySelector('input, select');
         if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
     }
-    function openConfirm() {
+    async function openConfirm() {
         const first = validateTab(S.tab);
         if (first) {
             renderPanel();
             focusError(first, S.errors[first] && S.errors[first].index);
             return;
         }
-        S.confirm = { message: null };
+        S.confirm = { message: null, preview: null };
         renderConfirm();
+        if (isDirty(ZONE_KEY) && Coverage.enabled()) {                 // aperçu ZD-4.4 : régions, octets, dalles ; un refus serveur s'affiche tel quel
+            const token = S.confirm;
+            try { token.preview = await Coverage.preview(current(ZONE_KEY)); } catch (error) { token.message = error.message; }
+            if (S.confirm === token) renderConfirm();
+        }
     }
     function renderConfirm() {
         const box = $('settingsConfirm');
@@ -783,6 +803,7 @@ const AdminSettings = (() => {
         });
         box.hidden = false;
         box.replaceChildren(...[el('p', { class: 'mb-1' }, `Enregistrer ${items.length} réglage(s) de « ${S.tab} » ?`), el('ul', { class: 'mb-2' }, items),
+            S.confirm.preview ? el('p', { class: 'hint', id: 'settingsConfirmPreview' }, S.confirm.preview) : null,
             S.confirm.message ? el('p', { class: 'setting-error', role: 'alert' }, S.confirm.message) : null,
             S.confirm.conflict ? el('button', { type: 'button', class: 'btn btn-sm btn-warning me-1', onclick: reloadKeepingEdits }, 'Recharger')
                 : el('button', { type: 'button', class: 'btn btn-sm btn-danger me-1', id: 'settingsConfirmYes', onclick: save }, 'Confirmer'),
@@ -861,8 +882,13 @@ const AdminSettings = (() => {
         const wanted = S.sections.find((s) => slug(s) === sub);
         S.tab = wanted || (S.sections.includes(S.tab) ? S.tab : S.sections[0]);
         renderAll();
+        const zoneBefore = Coverage.enabled();
+        Coverage.refresh().then(() => {
+            if (Coverage.enabled() !== zoneBefore) renderPanel();            // l'aide de DEM_URL dépend de ROUTING_ZONE_BUILD (EF-6.23)
+            syncPolling();
+        });
     }
-    function leave() { S.stale = true; }
+    function leave() { S.stale = true; Coverage.stop(); }
 
     function setup() {
         $('settingsSearch').addEventListener('input', (event) => { S.search = event.target.value; renderAll(); });

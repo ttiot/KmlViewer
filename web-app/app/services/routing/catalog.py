@@ -183,6 +183,11 @@ def prepare(text: str, digest: str) -> list:
                                   for poly in getattr(geometry, 'geoms', [geometry])])
         if not projected.is_valid:
             projected = make_valid(projected)
+        if projected.geom_type not in ('Polygon', 'MultiPolygon'):      # make_valid peut réduire un contour à une ligne
+            polys = [g for g in getattr(projected, 'geoms', []) if g.geom_type in ('Polygon', 'MultiPolygon')]
+            if not polys:
+                continue
+            projected = MultiPolygon([q for g in polys for q in getattr(g, 'geoms', [g])])
         regions.append(Region(item['id'], item['url'], item['size'], projected))
     _PREPARED.clear()                                    # un seul catalogue vivant
     _PREPARED[digest] = regions

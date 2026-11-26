@@ -52,6 +52,16 @@ class PlanRefused(ValueError):
         self.code = code
 
 
+def dem_managed(url) -> bool:
+    """Le MNT est géré par la tâche seulement si l'hôte de DEM_URL est le service `opentopodata` du compose.
+    Même règle que `Config.dem_enabled` de routing/zone_update.py (script de l'hôte en stdlib seule : non importable ici)."""
+    from urllib.parse import urlsplit
+    try:
+        return (urlsplit(url or '').hostname or '') == 'opentopodata'
+    except ValueError:
+        return False
+
+
 @dataclass(frozen=True)
 class Limits:
     max_uncovered_pct: int
@@ -62,8 +72,11 @@ class Limits:
 
     @classmethod
     def from_config(cls, cfg) -> 'Limits':
+        """`max_tiles` vaut 0 (aucun plafond) tant que DEM_URL ne désigne pas le service opentopodata LOCAL : la tâche ne gère
+        alors aucune dalle (API publique, autre service) ; refuser pour des dalles jamais téléchargées n'aurait aucun sens."""
+        local = dem_managed(cfg.get('DEM_URL'))          # variable d'environnement SEULE, comme l'hôte (pas le réglage en base)
         return cls(cfg['ROUTING_MAX_UNCOVERED_PCT'], cfg['ROUTING_MAX_REGIONS'], cfg['ROUTING_MAX_SOURCE_BYTES'],
-                   cfg['DEM_MAX_TILES'], cfg['ROUTING_ZONE_SETTLE_S'])
+                   cfg['DEM_MAX_TILES'] if local else 0, cfg['ROUTING_ZONE_SETTLE_S'])
 
 
 @dataclass(frozen=True)
@@ -189,7 +202,7 @@ def plan_zone(vertices: list, candidates: Optional[list], limits: Limits, margin
     if resolution.total_bytes > limits.max_source_bytes:
         raise PlanRefused(f"Zone trop grande : {_go(resolution.total_bytes)} d'extraits ({len(ids)} régions : {_names(ids)}) "
                           f"pour {_gio(limits.max_source_bytes)} au plus.")
-    if len(tiles) > limits.max_tiles:
+    if limits.max_tiles and len(tiles) > limits.max_tiles:
         raise PlanRefused(f"Zone trop grande : {len(tiles)} dalles d'altitude pour {limits.max_tiles} au plus.")
     return Plan(vertices, bbox, resolution.regions, tiles, resolution.uncovered_pct)
 
@@ -276,6 +289,17 @@ def load_catalog_document(conn, raw: bytes, cfg, now: datetime) -> dict:
     return {'regions': len(regions)}
 
 
+def expired(state, now: datetime, delay) -> bool:
+    """`building` depuis la prise, ou `starting` depuis la bascule (`status_at`), au-delà de `delay` : l'hôte ne reviendra pas."""
+    if state['status'] == 'building':
+        since = _parse(state['claimed_at'])
+    elif state['status'] == 'starting':
+        since = _parse(state['status_at'])
+    else:
+        return False
+    return bool(since) and now - since >= delay
+
+
 def claim(conn, cfg, requested: list, margin_km: int, now: datetime, monthly: bool = False) -> dict:
     """
     `claim [--monthly]` : prend la demande selon ZD-9.3 ⇒ `building`, sortie `{request_id, reason, polygon, extract_bbox, regions,
@@ -284,8 +308,7 @@ def claim(conn, cfg, requested: list, margin_km: int, now: datetime, monthly: bo
     limits = Limits.from_config(cfg)
     with write_transaction(conn):
         state = read(conn)
-        claimed_at = _parse(state['claimed_at'])
-        if state['status'] == 'building' and claimed_at and now - claimed_at >= CLAIM_EXPIRY:
+        if expired(state, now, CLAIM_EXPIRY):
             _audit(conn, 'routing.claim_expired', request_id=state['claim_id'])
             _set(conn, status='pending', claim_id=None, claimed_at=None, claim_payload=None, status_at=_iso(now))
             state = read(conn)
@@ -533,11 +556,10 @@ def retry(conn, requested: list, now: datetime, actor: audit.Actor) -> str:
 
 
 def release_stuck(conn, requested: list, now: datetime, actor: audit.Actor) -> str:
-    """« Tâche bloquée ? » : `building` depuis plus de 2 h ⇒ prise abandonnée, `pending` ou `idle` (recalcul)."""
+    """« Tâche bloquée ? » : `building` (ou `starting`) depuis plus de 2 h ⇒ prise abandonnée, `pending` ou `idle` (recalcul)."""
     with write_transaction(conn):
         state = read(conn)
-        claimed_at = _parse(state['claimed_at'])
-        if state['status'] != 'building' or not claimed_at or now - claimed_at < STUCK_AFTER:
+        if not expired(state, now, STUCK_AFTER):
             raise CoverageError("aucune tâche bloquée")
         status = _recalc(conn, requested, now)
         audit.record(conn, 'routing.release', actor=actor, target_type='routing', target_id='coverage')

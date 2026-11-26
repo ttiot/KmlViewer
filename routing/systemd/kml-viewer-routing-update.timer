@@ -1,0 +1,13 @@
+# Minuterie de la tâche unique de couverture : un passage une minute après la fin du précédent (ZD-9). Un passage sans demande
+# en attente ne fait que `report` (une commande Docker et une commande de l'application, ≈ 2 s).
+[Unit]
+Description=Passage chaque minute de la couverture du routage (kmlViewer)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+Unit=kml-viewer-routing-update.service
+
+[Install]
+WantedBy=timers.target

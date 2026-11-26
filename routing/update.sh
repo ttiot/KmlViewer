@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Mise à jour du graphe de routage (ADR-0007, TR7) : téléchargement -> fusion -> import -> bascule.
+# Avec ROUTING_ZONE_BUILD=1 : tâche unique pilotée par la zone (zone_update.py, minuterie chaque minute), voir plus bas.
 # À lancer depuis l'hôte, chaque mois (cron / timer systemd, par exemple posé par Ansible) :
 #   /chemin/du/projet/routing/update.sh
 # Relançable sans risque : verrou, graphe neuf dans un dossier horodaté, bascule atomique d'un lien
@@ -37,6 +38,25 @@ cfg() {  # cfg CLE DEFAUT : environnement > .env > défaut
   if [ -n "${!1+x}" ]; then v="${!1}"; else v="$(dotenv "$1")"; fi
   printf '%s' "${v:-$2}"
 }
+
+# --- ROUTING_ZONE_BUILD=1 : tâche unique pilotée par la zone (routing-zone-donnees ZD-9) --------------------------------------
+# Lancée chaque minute par la minuterie systemd (routing/systemd/). Verrou pris ⇒ sortie 0. ROUTING_EXTRACT_URLS et DEM_BBOX
+# sont IGNORÉES dans ce mode (ZD-1) : tout le reste de ce script (extraits fixes) ne sert qu'avec ROUTING_ZONE_BUILD=0.
+case "$(cfg ROUTING_ZONE_BUILD 0 | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    LOCK="$(cfg ROUTING_LOCK "$PWD/.routing-update.lock")"
+    [[ "$LOCK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "ROUTING_LOCK doit être un chemin absolu sans caractère spécial"
+    command -v python3 >/dev/null || die "python3 est requis sur l'hôte (ROUTING_ZONE_BUILD=1)"
+    exec 9>"$LOCK"
+    flock -n 9 || exit 0                                   # une tâche est déjà en cours : rien à faire, sans bruit
+    exec python3 -I routing/zone_update.py                  # cwd = racine du projet (cd plus haut)
+    ;;
+esac
+# Mode historique (=0) : la minuterie n'a rien à y faire (elle lancerait une reconstruction complète chaque minute)
+if [ "${ROUTING_FROM_TIMER:-}" = 1 ]; then
+  echo "routing-update: ROUTING_ZONE_BUILD=0, la minuterie est inutile : rien à faire" >&2
+  exit 0
+fi
 
 DEFAULT_URLS="https://download.geofabrik.de/europe/france/nord-pas-de-calais-latest.osm.pbf https://download.geofabrik.de/europe/france/picardie-latest.osm.pbf https://download.geofabrik.de/europe/belgium-latest.osm.pbf"
 URLS="$(cfg ROUTING_EXTRACT_URLS "$DEFAULT_URLS")"
@@ -97,7 +117,7 @@ tool routing-init || fail "initialisation du volume"
 for i in "${!urls[@]}"; do
   url="${urls[$i]}"; name="${names[$i]}"
   log "téléchargement $name"
-  tool -e URL="$url" -e NAME="$name" -e MAXB="$MAX_BYTES" routing-fetch '
+  tool -e URL="$url" -e NAME="$name" -e MAXB="$MAX_BYTES" routing-fetch-legacy '
     cd /data/in
     dl() { curl -fsSL --proto =https --proto-redir =https --retry 3 --connect-timeout 20 "$@"; }
     dl --max-filesize "$MAXB" -o "$NAME.part" "$URL"
@@ -114,7 +134,7 @@ done
 merged="hdf-be-$STAMP.osm.pbf"
 log "fusion -> $merged"
 inputs=(); for n in "${names[@]}"; do inputs+=("/data/in/$n"); done
-tool routing-merge merge "${inputs[@]}" -o "/data/in/$merged" --overwrite \
+tool routing-merge-legacy merge "${inputs[@]}" -o "/data/in/$merged" --overwrite \
   || { vol -e MERGED="$merged" 'rm -f -- "/data/in/$MERGED"' || true; fail "fusion osmium"; }
 
 # 3. Import dans un dossier neuf

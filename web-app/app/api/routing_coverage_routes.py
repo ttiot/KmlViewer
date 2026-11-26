@@ -53,8 +53,7 @@ def _usage(conn, state) -> dict:
 
 def _view(conn) -> dict:
     state = coverage.read(conn)
-    claimed = coverage.parse_time(state['claimed_at'])
-    stuck = bool(state['status'] == 'building' and claimed and _now() - claimed >= coverage.STUCK_AFTER)
+    stuck = coverage.expired(state, _now(), coverage.STUCK_AFTER)
     return {
         'status': state['status'], 'reason': state['reason'], 'status_at': state['status_at'],
         'requested_at': state['requested_at'], 'claimed_at': state['claimed_at'], 'stuck': stuck,

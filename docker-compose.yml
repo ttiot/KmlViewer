@@ -46,8 +46,10 @@ services:
 
   # Tâche ponctuelle : télécharge les dalles Copernicus GLO-30 couvrant DEM_BBOX
   # (~45 Mo par dalle de 1°x1°). Relançable sans risque : seules les dalles manquantes sont prises.
+  # Avec ROUTING_ZONE_BUILD=1, lancée par routing/update.sh (DEM_BBOX dérivée de l'emprise d'extraction, DEM_BBOX du .env ignorée) :
+  # profil d'outillage en plus de « dem ». Avec =0 : `docker compose --profile dem run --rm dem-tiles` à la main (DEM_BBOX).
   dem-tiles:
-    profiles: ["dem"]
+    profiles: ["dem", "routing-tools"]
     build: ./web-app
     image: kml-viewer:local
     command: ["python", "-m", "app.services.dem_tiles"]
@@ -73,9 +75,8 @@ services:
       context: https://github.com/ajnisbet/opentopodata.git#2f365f8d9018aea7b3d70a762bc8c29515c9dd1b
       dockerfile: docker/Dockerfile
     image: opentopodata:1.10.2
-    depends_on:
-      dem-tiles:
-        condition: service_completed_successfully
+    # Ne dépend plus de dem-tiles (ZD-1, inventaire n° 13) : les dalles sont téléchargées par la tâche de l'hôte, qui relance
+    # ce service quand des dalles sont ajoutées (routing/zone_update.py)
     volumes:
       # nocopy : ce conteneur (root) ne doit pas initialiser le volume, sinon le
       # téléchargeur non-root ne pourrait plus y écrire
@@ -111,9 +112,9 @@ services:
       context: ./routing
     image: kml-viewer-graphhopper:11.0
     environment:
-      # Mesures dune (HdF + Belgique, 6 profils) : 1,2 Go de RAM conteneur après charge avec Xmx 1g,
-      # 3,2 Go avec Xmx 3g. 1536m laisse de la marge ; la limite couvre le tas et la mémoire native.
-      JAVA_OPTS: "-Xmx${ROUTING_XMX:-1536m} -XX:+ExitOnOutOfMemoryError"
+      # Valeurs dimensionnées pour dune (V-Z2, zone par défaut : graphe de 662 Mo, 3,28 Gio de pic après charge) : -Xmx3g dans
+      # 5 Gio. Autre machine : règle de dimensionnement de routing-zone-donnees ZD-4 (à régler dans .env).
+      JAVA_OPTS: "-Xmx${ROUTING_XMX:-3g} -XX:+ExitOnOutOfMemoryError"
     volumes:
       # écriture requise : GraphHopper pose un verrou (gh.lock) dans le dossier du graphe ; le reste
       # du système de fichiers du conteneur est en lecture seule
@@ -121,7 +122,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    mem_limit: ${ROUTING_MEM_LIMIT:-2g}
+    mem_limit: ${ROUTING_MEM_LIMIT:-5g}
     pids_limit: 512
     cap_drop:
       - ALL
@@ -165,13 +166,34 @@ services:
       - no-new-privileges:true
     restart: "no"
 
+  # État de confiance de la tâche hôte (budget, étape en suspens, catalogue, dalles) ET cache des extraits, recadrés, fusionné :
+  # volume SÉPARÉ, jamais monté par le moteur, qui ne voit que routing-data (graphs/) (ZD-9.0). Crée /state au premier passage (volume neuf : propriétaire root).
+  routing-state-init:
+    profiles: ["routing-tools"]
+    image: kml-viewer-graphhopper:11.0
+    user: "0"
+    # chmod AVANT chown (après, root n'est plus propriétaire et chmod exige CAP_FOWNER) ; la garde rend l'opération idempotente
+    entrypoint: ["sh", "-c", "[ \"$(stat -c %u:%a /state)\" = 10002:700 ] || { chmod 700 /state && chown 10002:10002 /state; }"]
+    volumes:
+      - routing-state:/state
+    network_mode: none
+    read_only: true
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   # Téléchargement des extraits Geofabrik : seule tâche avec accès réseau (réseau par défaut).
   routing-fetch:
     profiles: ["routing-tools"]
     image: kml-viewer-graphhopper:11.0
     entrypoint: ["bash", "-euo", "pipefail", "-c"]
     volumes:
-      - routing-data:/data
+      - routing-state:/state
     read_only: true
     tmpfs:
       - /tmp
@@ -190,6 +212,7 @@ services:
     entrypoint: ["bash", "-euo", "pipefail", "-c"]
     volumes:
       - routing-data:/data
+      - routing-state:/state
     network_mode: none
     read_only: true
     tmpfs:
@@ -202,8 +225,44 @@ services:
       - no-new-privileges:true
     restart: "no"
 
-  # Fusion des extraits (osmium) : pas d'outil de fusion dans l'image de l'appli ni du moteur.
+  # Recadrage de chaque extrait puis fusion des recadrés (osmium) : pas d'outil de fusion dans l'image de l'appli ni du moteur.
   routing-merge:
+    profiles: ["routing-tools"]
+    image: iboates/osmium@sha256:ce46c6bc52b42899ae53a46b1a9e05c0f5fce964bf4974ed5c07a90f4d2b7679
+    user: "10002:10002"
+    volumes:
+      - routing-state:/state
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: ${ROUTING_OSMIUM_MEM_LIMIT:-4g}
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  # Mode historique (ROUTING_ZONE_BUILD=0, routing/update.sh) : mêmes tâches, montées sur routing-data (/data/in) comme avant.
+  routing-fetch-legacy:
+    profiles: ["routing-tools"]
+    image: kml-viewer-graphhopper:11.0
+    entrypoint: ["bash", "-euo", "pipefail", "-c"]
+    volumes:
+      - routing-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  routing-merge-legacy:
     profiles: ["routing-tools"]
     image: iboates/osmium@sha256:ce46c6bc52b42899ae53a46b1a9e05c0f5fce964bf4974ed5c07a90f4d2b7679
     user: "10002:10002"
@@ -213,7 +272,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    mem_limit: 1g
+    mem_limit: ${ROUTING_OSMIUM_MEM_LIMIT:-4g}
     pids_limit: 64
     cap_drop:
       - ALL
@@ -227,17 +286,19 @@ services:
     image: kml-viewer-graphhopper:11.0
     command: ["import"]
     environment:
-      # Mesuré à dune : import HdF + Belgique en 154 s avec Xmx 6g (tas utilisé 3,6 Go en fin d'import)
-      JAVA_OPTS: "-Xmx${ROUTING_IMPORT_XMX:-6g} -XX:+ExitOnOutOfMemoryError"
+      # Dimensionné pour dune (V-Z2 : zone par défaut, fichier recadré de 1,956 Go, tas 4,4 Go, pic 5,2 Gio, 287 s) :
+      # -Xmx8g dans 10 Gio, pour un fichier de ROUTING_MAX_IMPORT_BYTES (2,4 Go) au plus. Autre machine : règle de ZD-4.
+      JAVA_OPTS: "-Xmx${ROUTING_IMPORT_XMX:-8g} -XX:+ExitOnOutOfMemoryError"
       GH_PBF: ${ROUTING_IMPORT_PBF:-/data/in/hdf-be.osm.pbf}
       GH_GRAPH: ${ROUTING_IMPORT_GRAPH:-/data/graphs/import}
     volumes:
       - routing-data:/data
+      - routing-state:/state:ro
     network_mode: none
     read_only: true
     tmpfs:
       - /tmp
-    mem_limit: ${ROUTING_IMPORT_MEM_LIMIT:-8g}
+    mem_limit: ${ROUTING_IMPORT_MEM_LIMIT:-10g}
     pids_limit: 512
     cap_drop:
       - ALL
@@ -249,6 +310,7 @@ volumes:
   kml-viewer-data:
   dem-data:
   routing-data:
+  routing-state:
 
 networks:
   default:

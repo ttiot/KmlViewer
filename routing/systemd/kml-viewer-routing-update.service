@@ -1,0 +1,32 @@
+# Tâche unique de la couverture pilotée par la zone (routing-zone-donnees ZD-9). Modèle à installer par l'exploitant (ou Ansible) :
+#   - remplacer @PROJECT_DIR@ par le chemin absolu du projet (là où se trouvent docker-compose.yml et .env) ;
+#   - remplacer @RUN_USER@ par un compte du groupe `docker` (il n'a besoin d'aucun autre droit) ;
+#   - installer dans /etc/systemd/system/, puis : systemctl daemon-reload && systemctl enable --now kml-viewer-routing-update.timer
+# À n'activer qu'avec ROUTING_ZONE_BUILD=1 (sinon update.sh sort aussitôt, sans rien faire, grâce à ROUTING_FROM_TIMER).
+[Unit]
+Description=Couverture du routage pilotée par la zone (kmlViewer)
+Documentation=file://@PROJECT_DIR@/docs/specs/routing-zone-donnees.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=@RUN_USER@
+WorkingDirectory=@PROJECT_DIR@
+Environment=ROUTING_FROM_TIMER=1
+ExecStart=@PROJECT_DIR@/routing/update.sh
+# Les conteneurs lancés par `docker compose run` ne sont pas dans le cgroup de l'unité : après un arrêt ou un dépassement du délai,
+# les supprimer (un import tué ne doit pas continuer en parallèle d'un passage suivant). Bornes : 2 h par étape, 3 h par passage.
+ExecStopPost=-/bin/sh -c 'ids=$(docker ps -aq --filter name=kml-routing-); [ -z "$ids" ] || docker rm -f $ids'
+# Une tâche complète dure ≈ 35 min sur dune (V-Z2) ; la minuterie ne relance pas une unité encore active, et le verrou de
+# update.sh (flock) protège de toute façon d'un second passage.
+TimeoutStartSec=3h
+# Un passage tué laisse l'état dans le volume (étape en suspens) : le suivant le reprend ; ne rien nettoyer ici
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
