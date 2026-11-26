@@ -263,7 +263,8 @@ Le profil compose `dem` fournit tout le nécessaire, en local (les traces ne sor
 DEM_URL=http://opentopodata:5000/v1/copernicus30
 DEM_BBOX=41,-6,52,10        # lat_min,lon_min,lat_max,lon_max : France métropolitaine, ~9 Go
 
-docker compose --profile dem up -d
+docker compose --profile dem run --rm dem-tiles     # télécharge les dalles de DEM_BBOX
+docker compose --profile dem up -d                  # démarre opentopodata
 ```
 
 - `dem-tiles` : tâche ponctuelle qui télécharge les dalles Copernicus GLO-30 de l'emprise
@@ -271,7 +272,21 @@ docker compose --profile dem up -d
   risque : les dalles présentes ne sont pas retéléchargées, et aucun accès Internet n'est
   requis une fois qu'elles sont là. Pour étendre la zone, élargir `DEM_BBOX` et relancer.
 - `opentopodata` : API d'altitude, construite depuis le dépôt du projet (pas d'image publiée),
-  épinglée sur un commit. Aucun port publié : seul `kml-viewer` peut l'appeler.
+  épinglée sur un commit. Aucun port publié : seul `kml-viewer` peut l'appeler. **Il n'attend plus
+  la fin de `dem-tiles`** (plus de `depends_on`) : lancer `dem-tiles` d'abord, comme ci-dessus ; si des
+  dalles arrivent après son démarrage, le recréer (`docker compose --profile dem up -d --force-recreate opentopodata`).
+  Le service est recréé de cette façon par la tâche de l'hôte quand elle ajoute des dalles (ci-dessous) ;
+  qu'il relise les dalles sans redémarrage n'est pas vérifié.
+
+**Avec `ROUTING_ZONE_BUILD=1`** (couverture du constructeur de traces pilotée par la zone,
+[exploitation](exploitation.md#couverture-pilotée-par-la-zone-routing_zone_build1)), les dalles ne dépendent plus de
+`DEM_BBOX` : **`DEM_BBOX` est ignorée**. La tâche de l'hôte télécharge les dalles de l'emprise d'extraction de la zone
+(zone par défaut : 24 dalles, 835 Mo) et n'a lieu que si **`DEM_URL` n'est pas vide**. Conséquences pour les activités
+importées : le MNT couvre la zone **plus** les dalles déjà présentes, qui ne sont **jamais** supprimées (une ancienne
+`DEM_BBOX` plus large reste donc utile). Seules les dalles téléchargées par la tâche sont purgées, au-delà de `DEM_MAX_TILES`
+(60), et hors de la zone active. `dem-tiles` est alors lancé par la tâche (profil `routing-tools`) ; la lancer à la main reste
+possible (`DEM_BBOX` n'est lue que dans ce cas). Les activités sans correction faute de dalles (`no_coverage`) sont remises
+en file quand une bascule ajoute des dalles.
 
 Un point tous les 20 m est interrogé, le reste est interpolé. Un import depuis l'interface
 n'attend pas le MNT : l'activité est enregistrée avec l'altitude GPS, puis corrigée par la

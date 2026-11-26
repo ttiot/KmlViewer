@@ -228,7 +228,7 @@ opérateur** (l'administrateur du serveur). Détail, exemples et procédures : [
   en mode `password`, `flask user-invite --admin <adresse>` puis le lien, le mot de passe et l'enrôlement TOTP
   ([pas à pas](#amorçage-du-premier-administrateur)).
 - **Moteur de routage** : service `graphhopper` du compose (profil `routing`, activé par `COMPOSE_PROFILES=routing` après le
-  premier `routing/update.sh`), graphe mis à jour chaque mois par `routing/update.sh` (timer ou cron posé par Ansible) : [Service de routage](#service-de-routage-graphhopper).
+  premier graphe), graphe construit et mis à jour par `routing/update.sh` (minuterie systemd avec `ROUTING_ZONE_BUILD=1`, cron mensuel sinon) : [Service de routage](#service-de-routage-graphhopper).
 
 ### Modes d'authentification (`AUTH_MODE`)
 
@@ -383,8 +383,12 @@ la date, l'auteur et la destination liée.
 | `WEBAUTHN_RP_ID` | Identifiant de partie de confiance WebAuthn : domaine parent de l'hôte de `PUBLIC_URL`, au moins deux libellés, ni suffixe public ni adresse IP ([détail](#second-facteur-totp-et-codes-de-secours)) | hôte de `PUBLIC_URL` |
 | `ROUTING_ALLOW_CLEARTEXT_KEY` | `1` autorise l'envoi d'une clé API du moteur (`routing.api_key`) en **clair** (URL `http://`). Sans lui, une clé configurée pour une destination `http` fait déclarer le moteur indisponible (avertissement dans les journaux). Le moteur du compose n'a **pas besoin de clé** : ne pas saisir de `routing.api_key` et laisser à `0` | `0` |
 | `ROUTING_BASE_URL` | URL du moteur de routage (`http://graphhopper:8989` avec le service du compose). Valeur initiale du réglage `routing.base_url` ; autorisée d'office pour le service `routing` quand elle vient de l'environnement. Voir [Service de routage](#service-de-routage-graphhopper) | vide |
-| `ROUTING_XMX`, `ROUTING_MEM_LIMIT`, `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT` | Mémoire du moteur (tas Java, limite du conteneur) et de l'import mensuel ; lues par `docker-compose.yml` et `routing/update.sh`, pas par l'appli | `1536m`, `2g`, `6g`, `8g` |
-| `ROUTING_EXTRACT_URLS`, `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS`, `ROUTING_HEALTH_TIMEOUT`, `ROUTING_MAX_DOWNLOAD_BYTES`, `ROUTING_LOCK` | Lues par `routing/update.sh` seulement (voir [Service de routage](#service-de-routage-graphhopper)) | voir le script |
+| `ROUTING_XMX`, `ROUTING_MEM_LIMIT`, `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT`, `ROUTING_OSMIUM_MEM_LIMIT` | Mémoire du moteur (tas Java, limite du conteneur), de l'import du graphe et du recadrage / fusion (osmium) ; lues par `docker-compose.yml` (et `routing/update.sh`), pas par l'appli. **Dimensionnées pour « dune »** (64 Go) : autre machine, règle de [dimensionnement](docs/exploitation.md#dimensionnement) | `3g`, `5g`, `8g`, `10g`, `4g` (osmium : **non mesuré**) |
+| `ROUTING_ZONE_BUILD` | `1` : le polygone `routing.coverage_polygon` pilote les données du moteur (extraits OSM, graphe, dalles MNT) par une tâche de fond de l'hôte ; `0` : mode historique (`ROUTING_EXTRACT_URLS`, `DEM_BBOX`). Lue par l'appli **et** par l'hôte. Voir [Couverture pilotée par la zone](#couverture-pilotée-par-la-zone-routing_zone_build1) | `0` |
+| `ROUTING_MAX_REGIONS`, `ROUTING_MAX_SOURCE_BYTES`, `DEM_MAX_TILES`, `ROUTING_MAX_UNCOVERED_PCT`, `ROUTING_ZONE_SETTLE_S`, `ROUTING_CATALOG_ROOT`, `ROUTING_CATALOG_EXCLUDE` | Plafonds et règles de la zone (`ROUTING_ZONE_BUILD=1`), lus par l'appli (l'hôte relit les quatre premiers et les deux derniers) | `20`, `4 Gio`, `60`, `10` (%), `300` (s), `europe`, agrégats et outre-mer exclus |
+| `ROUTING_CATALOG_URL`, `ROUTING_MAX_IMPORT_BYTES`, `ROUTING_MAX_BUILDS_PER_DAY`, `ROUTING_MAX_DOWNLOAD_BYTES_PER_DAY`, `ROUTING_CACHE_MAX_BYTES`, `ROUTING_MONTHLY_DAYS`, `ROUTING_STEP_TIMEOUT` | Lues par l'hôte seulement (`ROUTING_ZONE_BUILD=1`) | index Geofabrik, `2,4 Go`, `6`, `12 Gio`, `8 Gio`, `30` (jours), `7200` (s) |
+| `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS`, `ROUTING_HEALTH_TIMEOUT`, `ROUTING_LOCK` | Lues par `routing/update.sh` dans les deux modes (voir [Service de routage](#service-de-routage-graphhopper)) | voir le script |
+| `ROUTING_EXTRACT_URLS`, `ROUTING_MAX_DOWNLOAD_BYTES` | Mode historique seulement (`ROUTING_ZONE_BUILD=0`) ; **ignorées** avec `=1` | voir le script |
 | `DATA_DIR`, `DB_PATH`, `INBOX_DIR` | Dossier de données (`/data` dans l'image), base SQLite (`DATA_DIR/kmlviewer.sqlite3`), dossier surveillé (`/inbox` avec le compose) | — |
 | `LOG_LEVEL` | Niveau de logs | `INFO` |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_SCOPES`, `OIDC_ADMIN_ROLE` | Client OIDC ; `OIDC_ADMIN_ROLE` : le droit admin suit ce rôle à chaque connexion | — |
@@ -503,6 +507,7 @@ facultative qui donne sa valeur initiale.
 | `map.basemaps`, `map.default_basemap`, `map.center_lat`, `map.center_lon`, `map.zoom` | — | 5 fonds embarqués, `osm`, 46,603354 / 1,888334, zoom 6 | ≤ 10 fonds ; lat −85 – 85, lon −180 – 180, zoom 1 – 22 |
 | `routing.*` (traces planifiées : délais, budgets, appels, points, distance, tolérances, recouvrement, stratégie de détours `s1` / `s2` / `hybrid` (défaut `hybrid`), essais de graine 0 – 2, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | voir [Constructeur de traces](#constructeur-de-traces-bêta) | bornées dans le registre |
 | `routing.coverage_polygon` (zone couverte : sommets `[lon, lat]`) | — | 4 sommets du rectangle `[1.35, 48.83, 6.42, 51.55]` | 3 à 50 sommets, lon −180 – 180, lat −85,0511 – 85,0511, contour sans croisement, emprise ≤ 2 000 km de côté ; `[]` refusé |
+| `routing.zone_margin_km` (marge autour de la zone pour l'extraction des données, `ROUTING_ZONE_BUILD=1`) | — | 10 | 0 – 50 km ; changer la marge seule ne lance pas de reconstruction, elle s'applique à la prochaine tâche |
 
 Les seuils du limiteur s'appliquent à chaud, sans remettre les compteurs à zéro. Ne sont **pas**
 administrables (environnement ou code seulement) : tout ce qui figure dans « Variables d'amorçage et de
@@ -617,33 +622,74 @@ Le moteur de routage du [constructeur de traces](#constructeur-de-traces-bêta) 
   sur le réseau interne `kml-viewer-routing` (sans accès sortant).
 - **Variables** (dans `.env`) : `ROUTING_BASE_URL=http://graphhopper:8989` pour l'application (autorisée d'office pour le
   service `routing` quand elle vient de l'environnement ; posée dans l'administration, elle doit figurer dans
-  `OUTBOUND_ALLOWED_HOSTS` : `routing=graphhopper:8989`), puis `ROUTING_XMX` (tas du service, défaut `1536m`),
-  `ROUTING_MEM_LIMIT` (défaut `2g`), `ROUTING_IMPORT_XMX` (défaut `6g`), `ROUTING_IMPORT_MEM_LIMIT` (défaut `8g`).
-- **Données** : le graphe n'est **jamais** produit au démarrage. Sans graphe, le conteneur `graphhopper` redémarre en
-  boucle : ne pas démarrer le profil `routing` avant le premier graphe, **lancer d'abord `routing/update.sh`**, qui crée le
-  volume `routing-data`, télécharge les extraits Geofabrik
+  `OUTBOUND_ALLOWED_HOSTS` : `routing=graphhopper:8989`), puis `ROUTING_XMX` (tas du service, défaut `3g`),
+  `ROUTING_MEM_LIMIT` (défaut `5g`), `ROUTING_IMPORT_XMX` (défaut `8g`), `ROUTING_IMPORT_MEM_LIMIT` (défaut `10g`),
+  `ROUTING_OSMIUM_MEM_LIMIT` (défaut `4g`, non mesuré). Ces défauts sont **dimensionnés pour la machine « dune »** (64 Go) et
+  pour la zone par défaut ; autre machine : [règle de dimensionnement](docs/exploitation.md#dimensionnement).
+- **Deux modes de construction**, selon `ROUTING_ZONE_BUILD` :
+  - **`1` (couverture pilotée par la zone)** : le polygone `routing.coverage_polygon` décide des extraits Geofabrik, du graphe,
+    des dalles MNT et des points acceptés. Une minuterie systemd lance `routing/update.sh` chaque minute ; voir
+    [Couverture pilotée par la zone](#couverture-pilotée-par-la-zone-routing_zone_build1).
+  - **`0` (défaut, mode historique)** : trois extraits fixes (`ROUTING_EXTRACT_URLS`), dalles MNT de `DEM_BBOX`, mise à jour
+    par `routing/update.sh` en cron mensuel, comme décrit ci-dessous.
+- **Données (mode historique)** : le graphe n'est **jamais** produit au démarrage. Sans graphe, le conteneur `graphhopper`
+  redémarre en boucle : ne pas démarrer le profil `routing` avant le premier graphe, **lancer d'abord `routing/update.sh`**,
+  qui crée les volumes `routing-data` et `routing-state`, télécharge les extraits Geofabrik
   (Nord-Pas-de-Calais, Picardie, Belgique ; sommes MD5 vérifiées), les fusionne (osmium), importe dans un dossier
   horodaté, bascule le lien `current` de façon atomique, recrée le moteur et attend sa santé. En cas d'échec de santé,
   l'ancien graphe est rétabli. Relançable sans risque (verrou : une seule exécution à la fois).
-- **Mise à jour mensuelle** : `routing/update.sh` depuis l'hôte, dans le dossier du projet, chaque mois (timer systemd ou cron
-  posé par Ansible). Il a besoin de Docker, de `flock` et d'un accès à `download.geofabrik.de` (liste `ROUTING_ALLOWED_HOSTS`).
-  Réglages : `ROUTING_EXTRACT_URLS`, `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS` (2 à 20, défaut 2, courant compris),
-  `ROUTING_HEALTH_TIMEOUT` (5 à 3600 s, défaut 300), `ROUTING_MAX_DOWNLOAD_BYTES`, `ROUTING_LOCK` ; lus dans l'environnement
-  du processus, puis dans `.env`, puis valeur par défaut, et validés avant usage.
-- **Dimensionnement** (mesures sur la machine cible « dune », Xeon E5-1650 v3, 12 cœurs, 64 Go, Hauts-de-France + Belgique,
-  6 profils ; [ADR-0007](docs/adr/0007-moteur-routage.md)) : import **154 s** (`-Xmx6g`, pic conteneur 6,2 Go), fusion 41 s,
-  graphe **320 Mo**, service prêt en **3 s**, RAM du conteneur après charge **1,2 Go** avec `-Xmx1g` (3,24 Go avec `-Xmx3g`),
-  latence d'un appel `route` à 5 points p95 **≤ 378 ms**. Rejeu avec l'image du projet (jar de release) : **`-Xmx1536m` dans
-  2 Go validé** (1,43 Gio après 256 appels dont 8 en parallèle, aucun OOM) ; disque **2,4 Go** avec un graphe, **pic ~4 Go**
-  pendant une mise à jour : **prévoir 5 Go libres**. Prévoir ~8 Go de mémoire disponible pendant l'import mensuel.
+- **Mise à jour mensuelle (mode historique)** : `routing/update.sh` depuis l'hôte, dans le dossier du projet, chaque mois
+  (timer systemd ou cron posé par Ansible). Il a besoin de Docker, de `flock` et d'un accès à `download.geofabrik.de`
+  (liste `ROUTING_ALLOWED_HOSTS`). Réglages : `ROUTING_EXTRACT_URLS`, `ROUTING_ALLOWED_HOSTS`, `ROUTING_KEEP_GRAPHS`
+  (2 à 20, défaut 2, courant compris), `ROUTING_HEALTH_TIMEOUT` (5 à 3600 s, défaut 300), `ROUTING_MAX_DOWNLOAD_BYTES`,
+  `ROUTING_LOCK` ; lus dans l'environnement du processus, puis dans `.env`, puis valeur par défaut, et validés avant usage.
+  Avec `ROUTING_ZONE_BUILD=1`, la mise à jour mensuelle fait partie de la tâche unique (motif « mensuel », même cycle,
+  `ROUTING_MONTHLY_DAYS` = 30 jours) : pas de cron.
+- **Dimensionnement** : deux jeux de mesures sur « dune » (Xeon E5-1650 v3, 12 cœurs, 64 Go ;
+  [ADR-0007](docs/adr/0007-moteur-routage.md), [routing-zone-donnees](docs/specs/routing-zone-donnees.md) §9).
+  - **Zone par défaut** (17 régions, fichier recadré de **1,956 Go**, V-Z2) : import **287 s** (tas au plus 4,4 Go, pic du
+    conteneur **5,2 Gio** avec `-Xmx12g`), graphe **662 Mo**, service à **3,28 Gio de pic** après charge avec `-Xmx3g`
+    (81 % de 4 Gio, d'où la limite à 5 Gio), 24 dalles MNT = 835 Mo, disque ≈ 9,4 Go en service, **≈ 25 Go à
+    prévoir** : volume `routing-state` (état et cache des extraits) ≈ 19 Go, `routing-data` (graphes) ≈ 3 Go, `dem-data` ≈ 3 Go.
+  - **Mode historique** (Hauts-de-France + Belgique, 3 extraits, 1,08 Go) : import 154 s, graphe 320 Mo, service prêt en 3 s,
+    latence d'un appel `route` à 5 points p95 **≤ 378 ms**, 2,4 Go de disque (pic ~4 Go).
+  Pendant une tâche, import (10 Gio), service (5 Gio) et application tournent ensemble : ≈ 17 Gio de RAM.
   Les journaux du moteur ne contiennent aucune coordonnée mais ne sont pas bornés par le compose : à limiter côté Docker
   ([docs/exploitation.md](docs/exploitation.md#journal-du-moteur)).
 - **Profil gravel** : il évite surtout le bitume sans viser le gravier (peu de surfaces taguées dans OSM) ; le jugement
   terrain revient à l'utilisateur.
 
 Activer le service avec Ansible : `COMPOSE_PROFILES=routing` (testé) plutôt que l'option `profiles` du module
-`docker_compose_v2` (non confirmée), et seulement **après** le premier `update.sh`. Retour arrière manuel, suppression d'un
+`docker_compose_v2` (non confirmée), et seulement **après** le premier graphe. Retour arrière manuel, suppression d'un
 graphe rejeté, cron : [docs/exploitation.md](docs/exploitation.md#service-de-routage).
+
+### Couverture pilotée par la zone (`ROUTING_ZONE_BUILD=1`)
+
+Avec `ROUTING_ZONE_BUILD=1`, le polygone `routing.coverage_polygon` est la **source unique** de la couverture : enregistrer
+une nouvelle zone (onglet Réglages) lance une tâche de fond qui choisit les régions Geofabrik, télécharge leurs extraits
+(avec cache), les recadre sur la zone élargie de `routing.zone_margin_km` (10 km par défaut), les fusionne, importe le graphe
+GraphHopper, télécharge les dalles MNT manquantes, puis bascule. **L'application ne touche ni Docker ni le réseau de
+téléchargement** : la tâche est celle de l'**hôte** (`routing/update.sh` lancé chaque minute par la minuterie systemd
+`kml-viewer-routing-update.timer`, `routing/systemd/`), qui dialogue avec l'application par `flask routing-zone`.
+
+- **Zone demandée et zone active** : tant que la tâche n'est pas finie, la zone demandée (le réglage) diffère de la zone
+  **active** (celle que couvrent le graphe et les dalles en service). **Les points ne sont acceptés que dans la zone active.**
+  Le statut est affiché par le panneau **« Couverture en service »** (Administration › Réglages › Traces planifiées : statut en
+  clair, zones demandée et active sur une mini-carte, régions, dalles, plafonds, budget du jour ; boutons **Réessayer**,
+  **Revenir à la zone active**, **Tâche bloquée ?**, avec confirmation dans la page) et par `GET /api/admin/routing/coverage`
+  (admin seulement). Le panneau et l'API n'existent qu'avec `ROUTING_ZONE_BUILD=1` (404 sinon). Enregistrer une zone affiche d'abord un
+  aperçu (régions, octets à télécharger, dalles nouvelles).
+- **Plafonds d'une zone** (refus 400 chiffré à l'enregistrement) : 20 régions, 4 Gio d'extraits, 60 dalles, au plus 10 % de la
+  zone hors de toute région OSM (mer comprise) ; fichier recadré de 2,4 Go au plus à l'import (contrôlé par l'hôte). Budget :
+  6 tâches et 12 Gio téléchargés par jour UTC ; une saisie n'est prise qu'après 300 s de stabilité.
+- **Dalles MNT** : dérivées de l'emprise d'extraction, téléchargées seulement si la **variable d'environnement** `DEM_URL` est non vide (pas le réglage de l'administration) ; `DEM_BBOX` et
+  `ROUTING_EXTRACT_URLS` sont **ignorées**. Les dalles déjà présentes ne sont jamais supprimées.
+- **Redémarrage** : à la bascule, le moteur redémarre brièvement ; l'appli répond alors 503 « Service en cours de
+  redémarrage : réessaie dans une minute. » et `options` annonce `state: "starting"`.
+- **Calcul exact** : l'appartenance des régions au polygone est calculée par `shapely`, qui embarque **GEOS 3.14.1 sous
+  licence LGPL-2.1** ([licence](#-licence)).
+
+Installation de la minuterie, variables, dimensionnement, retour arrière : [docs/exploitation.md](docs/exploitation.md#couverture-pilotée-par-la-zone-routing_zone_build1).
 
 ### Constructeur de traces (bêta)
 
@@ -730,7 +776,7 @@ personnalisé en 4 sommets. La zone filtre les demandes côté application, elle
 **Altitude** : le moteur n'est **pas** interrogé pour l'altitude (aucun fournisseur d'altitude dans `routing/config.yml`) ; la
 trace générée n'a donc **ni profil d'altitude ni D+ avant l'enregistrement**. À l'enregistrement, la correction d'altitude par
 MNT est confiée à la tâche de fond (réveillée aussitôt) : elle ne s'applique que si `DEM_URL` est configurée et si les dalles
-couvrent la zone (`DEM_BBOX` à élargir aux Hauts-de-France et à la Belgique) ; sinon la trace reste sans altitude.
+couvrent la zone (`DEM_BBOX` à élargir aux Hauts-de-France et à la Belgique en mode historique ; avec `ROUTING_ZONE_BUILD=1`, les dalles suivent la zone) ; sinon la trace reste sans altitude.
 
 ### Non livré
 
@@ -779,3 +825,9 @@ sont **toutes livrées**, WebAuthn et constructeur de traces compris. Restent, p
 ## 📄 Licence
 
 Ce projet est libre d'utilisation.
+
+**Composant tiers sous LGPL** : l'image de l'application embarque `shapely` 2.2.0 (BSD-3-Clause), dont la roue contient la
+bibliothèque **GEOS 3.14.1**, publiée sous **GNU LGPL 2.1** ([code source](https://github.com/libgeos/geos), site
+[libgeos.org](https://libgeos.org/)). GEOS est utilisée telle que distribuée avec la roue, sans modification, pour le calcul
+géométrique de la zone couverte (`ROUTING_ZONE_BUILD=1`) ; la roue est installée par `pip` seulement (`--only-binary shapely`),
+jamais compilée dans l'image.
