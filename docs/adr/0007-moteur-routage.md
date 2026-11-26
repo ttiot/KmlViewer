@@ -1,6 +1,6 @@
 # ADR-0007 — Moteur de routage : GraphHopper auto-hébergé
 
-Statut : **Accepté** (auto-hébergement : arbitrage Q-R2 ; GraphHopper : 2e vague ; emprise Hauts-de-France + Belgique : 4e vague ; levée de la réserve du spike : décision D1 de l'utilisateur ; **condition « mesures sur la machine cible » levée** et méthode de build tranchée : décision journalisée par coord, relayée le 2026-11-24, d'après les mesures d'ops sur « dune »). Périmètre belge « pays entier » : recommandation de cet ADR.
+Statut : **Accepté** (auto-hébergement : arbitrage Q-R2 ; GraphHopper : 2e vague ; emprise Hauts-de-France + Belgique : 4e vague ; levée de la réserve du spike : décision D1 de l'utilisateur ; **condition « mesures sur la machine cible » levée** et méthode de build tranchée : décision journalisée par coord, relayée le 2026-11-24, d'après les mesures d'ops sur « dune »). Périmètre belge « pays entier » : recommandation de cet ADR. **Amendé par l'[ADR-0013](0013-zone-pilote-donnees-moteur.md)** (effet à la livraison du lot Z2) : les extraits et l'emprise du graphe suivent le polygone de zone ; la RAM de l'import et du service est doublée pour dune (`-Xmx12g` dans 14 Gio, `-Xmx3g` dans 4 Gio).
 Spec : [gpx-route-builder](../specs/gpx-route-builder.md)
 
 ## Contexte
@@ -129,7 +129,7 @@ Points à vérifier à la recette de TR7 (non mesurés tels quels) :
 
 ## Limites connues relevées au spike
 - **Profil gravel** (avis d'ops sur l'échantillon) : il **évite surtout le bitume** — part de bitume Durbuy 62 → 29 %, Spa 85 → 60 %, Ypres 72 → 39 % — au prix de **+3 à +21 %** de distance ; la part de surface non revêtue **taguée** dans OSM reste faible (≤ 18 %), le modèle ne peut donc pas viser activement les chemins de gravier ; dans les Ardennes, il se rapproche du profil `mtb`. Limite acceptée pour la bêta ; **le jugement terrain revient à l'utilisateur** (appréciation de l'échantillon `spike/detours/out/echantillon/`).
-- **Rectangle de `/info`** (`[-8.32, 48.83, 6.42, 54.60]` au spike) bien plus large que la zone couverte (bords des extraits, ferries) : inutilisable comme couverture. La spec utilise un rectangle configuré (`routing.coverage_bbox`, RB-1.3), par défaut `[1.35, 48.83, 6.42, 51.55]` : son sud et son est reprennent ceux de `/info` sur les données réelles, pour que le diagnostic « rectangle contenu » soit vrai ; `/info` ne sert qu'au diagnostic.
+- **Rectangle de `/info`** (`[-8.32, 48.83, 6.42, 54.60]` au spike) bien plus large que la zone couverte (bords des extraits, ferries) : inutilisable comme couverture. La spec utilise un rectangle configuré (`routing.coverage_bbox`, RB-1.3 ; depuis le lot Z1 du 2026-11-26, polygone `routing.coverage_polygon` dont le défaut est ce rectangle en 4 sommets), par défaut `[1.35, 48.83, 6.42, 51.55]` : son sud et son est reprennent ceux de `/info` sur les données réelles, pour que le diagnostic « rectangle contenu » soit vrai ; `/info` ne sert qu'au diagnostic.
 
 ## Conséquences
 - Charge **ops** nouvelle : service Java (2 Go), chaîne mensuelle téléchargement → fusion → import (6 Go de tas pendant ~3 min) → bascule, avec retour arrière (`routing/update.sh`) ; image du moteur construite et mise à jour par le projet (jar de release épinglé, JRE épinglé).

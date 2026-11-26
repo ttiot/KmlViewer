@@ -167,8 +167,10 @@ Prérequis : adresse d'`alice` validée (4.4).
    **Attendu** : mot de passe SMTP effacé, ligne d'audit (CA-34). Remettre l'hôte de test.
 5. **Faire** : `routing.base_url` = `http://exemple.org:8989` (hors liste blanche).
    **Attendu** : 400, rien n'est écrit.
-6. **Faire** : `routing.coverage_bbox` = `[6, 48, 1, 51]`, puis une latitude de 95.
-   **Attendu** : 400 dans les deux cas (CA-R20b) ; la valeur par défaut `[1.35, 48.83, 6.42, 51.55]` reste en place.
+6. **Faire** : dans « Zone couverte (polygone) », le volet « Avancé » : `[]`, puis `[[1, 50], [2, 50]]`, puis un sommet à la latitude 86, « Appliquer » puis « Enregistrer » à chaque fois.
+   **Attendu** : erreur sous le champ avec le message de EF-6.20, confirmation bloquée, **aucune requête** (contrôles de la page, §5.6b) ; la zone par défaut (4 sommets, emprise ≈ 371 km × 302 km) reste en place. Aucune ligne `routing.coverage_bbox` dans l'onglet (lot Z1).
+   **Faire** ensuite, hors de la page : les trois mêmes valeurs par l'API (`PATCH` des réglages avec la session admin, par `curl`).
+   **Attendu** : 400 dans les trois cas, même message, version inchangée (CA-85, CA-R20b).
 7. **Faire** : `docker compose exec kml-viewer flask settings-reset auth.invite_ttl_hours`, puis recharger l'onglet.
    **Attendu** : nouvelle valeur visible sans redémarrage (CA-21d).
 8. **Faire** : `bob` n'ayant pas de second facteur, passer `auth.mfa_policy` à `all`.
@@ -198,7 +200,7 @@ Prérequis : `alice` dans la liste de la bêta ; `alice` a importé **une activi
 **Placement et limites**
 1. **Faire** (Alice) : noter le tableau de bord (nombre d'activités, distance de la période, records).
 2. **Faire** : visualiseur › « Créer une trace ».
-   **Attendu** : panneau « Créer une trace » ; rectangle de couverture en pointillés bleus ; activité par défaut selon le profil, sinon Course à pied.
+   **Attendu** : panneau « Créer une trace » ; zone couverte en pointillés bleus (au défaut : le rectangle Hauts-de-France + Belgique) ; activité par défaut selon le profil, sinon Course à pied.
 3. **Faire** : cliquer à Londres ou à Amsterdam.
    **Attendu** : « Hors de la zone couverte. », aucun point posé (RB-1.3).
 4. **Faire** : 1 point à Lille sans distance.
@@ -217,8 +219,8 @@ Prérequis : `alice` dans la liste de la bêta ; `alice` a importé **une activi
    **Attendu** : trace générée ; hors tolérance ⇒ avertissement d'écart **suivi de** « Ajoute un point de passage pour une boucle plus proche de la distance voulue. » (RB-4.14). Le cas est fréquent en relief et sur le littoral (ADR-0010) : ce n'est pas un défaut.
 10. **Faire** : 3 points espacés de 3 km, distance **5 km**.
     **Attendu** : avertissement « Distance minimale passant par tes points : X km. » ; aucun point retiré ni déplacé (RB-4.3).
-11. **Faire** : un point dans le rectangle mais hors des données (ex. Maastricht, Pays-Bas, ou Charleville-Mézières).
-    **Attendu** : 422 « Le point N est trop loin d'une voie praticable : rapproche-le d'un chemin. », ou « Aucune trace possible avec ces points : essaie d'autres points. » selon la réponse du moteur (RB-1.3, CA-R20) ; jamais de trace. Un point **hors du rectangle** donne au contraire 400 « Le point N est hors de la zone couverte. » sans appel au moteur.
+11. **Faire** : un point dans la zone mais hors des données (ex. Maastricht, Pays-Bas, ou Charleville-Mézières).
+    **Attendu** : 422 « Le point N est trop loin d'une voie praticable : rapproche-le d'un chemin. », ou « Aucune trace possible avec ces points : essaie d'autres points. » selon la réponse du moteur (RB-1.3, CA-R20) ; jamais de trace. Un point **hors de la zone** donne au contraire 400 « Le point N est hors de la zone couverte. » sans appel au moteur.
 12. **Faire** : lancer une génération longue (15 points, 100 km), cliquer « Annuler » puis relancer aussitôt.
     **Attendu** : « Calcul abandonné (le serveur termine dans son budget de temps). » ; la relance immédiate peut répondre « Une génération est encore en cours, réessaie dans quelques secondes. » (P-TR5-6).
 
