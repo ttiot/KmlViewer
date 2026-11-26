@@ -275,6 +275,12 @@ Décisions de **coord** du 2026-11-25 (délégation de l'utilisateur ; **à reli
 
 Plus aucun écart sans décision.
 
+Composant tiers sous licence copyleft dans l'image publiée (lot Z2, nit de review SHP-n1, 2026-11-26) :
+
+| Composant | Licence et conditions | Statut | Specs touchées |
+|---|---|---|---|
+| **GEOS 3.14.1**, embarqué par `shapely==2.2.0` (BSD-3-Clause) dans `shapely.libs/`, donc dans l'image publiée sur GHCR à partir de TZ2-a | **LGPL-2.1**, liaison dynamique, bibliothèque remplaçable ; texte de licence présent dans l'image (`dist-info/licenses/LICENSE_GEOS` de la roue) ; source : dépôt `libgeos/geos`, étiquette `3.14.1` | **compatible** ; mention du composant, de sa licence et du lien vers son source à ajouter au README (doc, TZ2-d) | ADR-0013 point 3, routing-zone-donnees §11 |
+
 ### 5.1 À arbitrer avant la prod
 
 | # | Exigence | Écart constaté (code) | Proposition de spec |

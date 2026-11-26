@@ -9,7 +9,7 @@ TR5 en profondeur (rôle test) : /api/route-builder/options | route | save, rés
  E. places (par utilisateur, instance), limiteur horaire, budget, erreurs du moteur, aucune fuite
  F. résultats : propriété, éviction, expiration, mémoire
  G. enregistrement : dédoublonnage composé, nom, kind=planned hors statistiques, MNT
- H. diagnostic, tâche de santé, registre routing.coverage_bbox
+ H. diagnostic, tâche de santé, registre routing.coverage_polygon (seul réglage de zone depuis le lot Z1)
 """
 
 import io
@@ -27,6 +27,7 @@ import pytest
 from app import features
 from app.audit import Actor
 from app.services.routing.base import (InvalidResponse, NoRouteFound, RouteResult, RoutingTimeout, RoutingUnavailable)
+from app.services.routing import zone
 from app.services.routing.results import ResultStore
 from app.settings import REGISTRY
 from tests.pw_harness import KW, add, call, concurrent, connect, make_app, new_secret, session_client
@@ -36,7 +37,8 @@ CLI = Actor.cli()
 ENGINE = 'http://engine.test:8989'
 POINTS = [[50.63, 3.05], [50.66, 3.10], [50.64, 3.15]]
 BASE = '/api/route-builder'
-DEFAULT_COVERAGE = REGISTRY['routing.coverage_bbox'].default          # la valeur par défaut du registre (voir le test de conformité à la spec)
+DEFAULT_POLYGON = REGISTRY['routing.coverage_polygon'].default        # la valeur par défaut du registre (voir le test de conformité à la spec)
+DEFAULT_COVERAGE = zone.envelope_lonlat(DEFAULT_POLYGON)              # son emprise : [1.35, 48.83, 6.42, 51.55]
 
 
 class World:
@@ -150,7 +152,7 @@ def test_options_describe_the_form_and_follow_the_registry(world):
     assert body['available'] is True and body['state'] == 'ok'
     assert [a['key'] for a in body['activities']] == ['run', 'trail', 'hike', 'road_bike', 'gravel', 'mtb']
     assert body['min_km'] == 1 and body['max_km'] == 300 and body['step_km'] == 0.5 and body['max_waypoints'] == 50 and body['tolerance_pct'] == 15
-    assert body['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55] and body['default_activity'] == 'run'
+    assert body['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55] and body['coverage_polygon'] == DEFAULT_POLYGON and body['default_activity'] == 'run'
     world.set(**{'routing.max_distance_km': 120, 'routing.max_waypoints': 7})
     again = call(world.a, 'get', f'{BASE}/options').get_json()
     assert again['max_km'] == 120 and again['max_waypoints'] == 7
@@ -161,7 +163,7 @@ def test_a_cold_cache_is_starting_options_stay_visible_and_route_is_503_without_
     w = build_world(tmp_path, state='cold')
     options = call(w.a, 'get', f'{BASE}/options')
     assert options.status_code == 200 and options.get_json()['available'] is False and options.get_json()['state'] == 'starting'
-    assert options.get_json()['coverage_bbox']
+    assert options.get_json()['coverage_bbox'] and options.get_json()['coverage_polygon']
     r = w.route()
     assert r.status_code == 503 and w.provider.calls == []
     w.runtime.run_health()
@@ -649,7 +651,7 @@ def test_the_admin_diagnostic_reports_the_engine_state_and_the_coverage_containm
     assert diagnostic['configured'] is True and diagnostic['available'] is True and diagnostic['checked_at']
     assert diagnostic['info_bbox'] == [48.0, 0.0, 53.0, 8.0] and diagnostic['coverage_contained'] is True
     assert diagnostic['profiles'] == list(provider.profiles)
-    w.set(**{'routing.coverage_bbox': [-5.0, 40.0, 5.0, 50.0]})
+    w.set(**{'routing.coverage_polygon': [[-5.0, 40.0], [5.0, 40.0], [0.0, 50.0]]})
     view = next(f for f in call(w.adm, 'get', '/api/admin/features').get_json()['features'] if f['key'] == 'route_builder')
     assert view['diagnostic']['coverage_contained'] is False
     provider.available = False
@@ -660,55 +662,70 @@ def test_the_admin_diagnostic_reports_the_engine_state_and_the_coverage_containm
     w.conn.close()
 
 
-@pytest.mark.parametrize('value', [DEFAULT_COVERAGE, [0, 0, 1, 1], [1, 48, 2, 49], [0, -10, 5, 0], [-5, 0, 5, 10]])
-def test_valid_coverage_rectangles_are_accepted_and_stored_as_floats(world, value):
-    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': value})
+@pytest.mark.parametrize('value', [DEFAULT_POLYGON, [[0, 0], [1, 0], [0, 1]], [[1, 48], [2, 48], [2, 49], [1, 49]], [[0, -10], [5, -10], [5, 0], [0, 0]],
+                                   [[-5, 0], [5, 0], [5, 10], [-5, 10]]])
+def test_valid_coverage_polygons_are_accepted_and_stored_as_floats(world, value):
+    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_polygon': value})
     assert r.status_code == 200, r.get_data()
-    stored = call(world.a, 'get', f'{BASE}/options').get_json()['coverage_bbox']
-    assert stored == [float(v) for v in value] and all(isinstance(v, float) for v in stored)
+    body = call(world.a, 'get', f'{BASE}/options').get_json()
+    assert body['coverage_polygon'] == [[float(a), float(b)] for a, b in value] and all(isinstance(n, float) for v in body['coverage_polygon'] for n in v)
+    assert body['coverage_bbox'] == zone.envelope_lonlat(value)
 
 
-@pytest.mark.parametrize('value', [[], [1], [1, 2, 3], [1, 2, 3, 4, 5], 'x', None, 5, {'a': 1}, [1, 2, 3, None], [1, 2, 3, 'a'], [True, 1, 2, 3], [float('nan'), 0, 1, 1],
-                                   [0, 0, float('inf'), 1], [5, 0, 1, 1], [1, 5, 2, 1], [1, 1, 1, 2], [1, 1, 2, 1], [-181, 0, 0, 1], [0, 0, 181, 1],
-                                   [0, -91, 1, 0], [0, 0, 1, 91], [-170, -80, 170, 80], [0, 0, 30, 1], [0, 0, 1, 30], [[1], 2, 3, 4], ['1', '2', '3', '4']])
-def test_invalid_coverage_rectangles_are_refused_at_write_and_nothing_changes(world, value):
-    before = call(world.a, 'get', f'{BASE}/options').get_json()['coverage_bbox']
-    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': value}, raw=json.dumps({'routing.coverage_bbox': value}))
+@pytest.mark.parametrize('value', [[], [[1, 2]], [[1, 2], [3, 4]], 'x', None, 5, {'a': 1}, [[1, 2, 3]] * 3, [[1, None]] * 3, [['1', '2']] * 3,
+                                   [[True, 1], [2, 2], [3, 1]], [[float('nan'), 0], [1, 1], [1, 0]], [[0, 0], [float('inf'), 1], [1, 0]],
+                                   [[-181, 0], [0, 1], [1, 0]], [[0, 0], [181, 1], [1, 0]], [[0, -86], [1, 0], [1, 1]], [[0, 0], [1, 86], [1, 1]],
+                                   [[-170, -80], [170, -80], [0, 80]], [[0, 0], [30, 0], [0, 1]], [[0, 0], [1, 30], [1, 0]], [[0, 0], [1, 1], [1, 0], [0, 1]]])
+def test_invalid_coverage_polygons_are_refused_at_write_and_nothing_changes(world, value):
+    before = call(world.a, 'get', f'{BASE}/options').get_json()
+    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_polygon': value}, raw=json.dumps({'routing.coverage_polygon': value}))
     assert r.status_code == 400, (value, r.status_code)
-    assert call(world.a, 'get', f'{BASE}/options').get_json()['coverage_bbox'] == before
+    after = call(world.a, 'get', f'{BASE}/options').get_json()
+    assert (after['coverage_polygon'], after['coverage_bbox']) == (before['coverage_polygon'], before['coverage_bbox'])
 
 
-@pytest.mark.parametrize('value', [[0, 0, 10 ** 400, 1], [-10 ** 400, 0, 1, 1], [0, 2 ** 1030, 1, 1]])
-def test_a_huge_integer_in_a_rectangle_is_a_400_never_a_500(world, value):
-    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': value}, raw=json.dumps({'routing.coverage_bbox': value}))
+@pytest.mark.parametrize('value', [[[0, 0], [10 ** 400, 1], [1, 0]], [[-10 ** 400, 0], [1, 1], [1, 0]], [[0, 2 ** 1030], [1, 1], [1, 0]]])
+def test_a_huge_integer_in_a_polygon_is_a_400_never_a_500(world, value):
+    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_polygon': value}, raw=json.dumps({'routing.coverage_polygon': value}))
     assert r.status_code == 400
 
 
+def test_the_removed_rectangle_setting_is_unknown_to_the_settings_api(world):
+    """Lot Z1 (CA-85) : plus de ligne `routing.coverage_bbox` ; son PATCH est refusé comme tout réglage inconnu, la version ne bouge pas."""
+    assert 'routing.coverage_bbox' not in REGISTRY
+    listed = call(world.adm, 'get', '/api/admin/settings').get_json()
+    assert all(s['key'] != 'routing.coverage_bbox' for s in listed['settings'])
+    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})
+    assert r.status_code == 400 and 'Réglage inconnu' in r.get_json()['error'], r.get_data(as_text=True)
+    assert call(world.adm, 'get', '/api/admin/settings').get_json()['version'] == listed['version']
+
+
 def test_the_default_coverage_is_the_one_written_in_the_spec():
-    """Lit la valeur dans le tableau §5.6 de la spec (ligne routing.coverage_bbox), pas une copie en dur : spec et registre ne divergent plus."""
+    """Lit la valeur dans le tableau §5.6 de la spec (ligne routing.coverage_polygon), pas une copie en dur : spec et registre ne divergent plus."""
     path = Path(__file__).resolve().parents[2] / 'docs' / 'specs' / 'gpx-route-builder.md'
     if not path.is_file():
         pytest.skip("spec absente : la CI ne monte que web-app dans le conteneur (le test protège en local et en développement)")
     spec = path.read_text(encoding='utf-8')
-    row = next(line for line in spec.splitlines() if line.startswith('| `routing.coverage_bbox`'))
-    written = [json.loads(m) for m in re.findall(r'\[[-0-9., ]+\]', row)]
-    assert written and written[-1] == DEFAULT_COVERAGE, (written, DEFAULT_COVERAGE)
+    row = next(line for line in spec.splitlines() if line.startswith('| `routing.coverage_polygon`'))
+    written = [json.loads(m) for m in re.findall(r'\[\[[-0-9., \[\]]+\]\]', row)]
+    assert written and written[-1] == DEFAULT_POLYGON, (written, DEFAULT_POLYGON)
+    assert 'routing.coverage_bbox' not in ''.join(line for line in spec.splitlines() if line.startswith('| `routing.'))      # plus de ligne du rectangle
 
 
 def test_a_forged_coverage_in_the_database_falls_back_to_the_default_not_to_no_limit(world):
-    for forged in ('"x"', '[1,2,3]', '[0,0,100,100]', 'null', '[NaN,0,1,1]'):
-        world.conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at, updated_by) VALUES ('routing.coverage_bbox', ?, 'x', 'sql')", (forged,))
+    for forged in ('"x"', '[1,2,3]', '[]', '[[0,0],[1,1]]', '[[0,0],[1,1],[1,0],[0,1]]', 'null', '[[NaN,0],[1,1],[1,0]]'):
+        world.conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at, updated_by) VALUES ('routing.coverage_polygon', ?, 'x', 'sql')", (forged,))
         world.conn.execute("UPDATE settings_meta SET version = version + 1")
         world.conn.commit()
         world.app.config['SETTINGS_STORE'].refresh(world.conn, force=True)
         options = call(world.a, 'get', f'{BASE}/options').get_json()
-        assert options['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55], forged
+        assert options['coverage_polygon'] == DEFAULT_POLYGON and options['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55], forged
         assert world.route(points=[[52.37, 4.90], [52.38, 4.91]], distance_km=None).status_code == 400
     assert world.provider.calls == []
 
 
 def test_the_configured_coverage_blocks_points_before_any_call_and_follows_changes(world):
-    world.set(**{'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})
+    world.set(**{'routing.coverage_polygon': [[3.0, 50.6], [3.2, 50.6], [3.2, 50.7], [3.0, 50.7]]})
     assert world.route(points=[[50.63, 3.05], [50.66, 3.10]], distance_km=None).status_code == 200
     calls = len(world.provider.calls)
     assert world.route(points=[[50.63, 3.05], [50.66, 3.30]], distance_km=None).status_code == 400

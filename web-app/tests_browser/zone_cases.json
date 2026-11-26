@@ -2,11 +2,23 @@
  "description": "Jeu de cas commun de la zone couverte (CA-R51) : joué par la CI contre app/services/routing/zone.py (tests/test_zone_edge.py) et, plus tard, par le banc contre la fonction du front. Point = [latitude, longitude] ; sommets = [longitude, latitude] ; expected = appartenance à la zone sur la carte (Web Mercator), bord compris.",
  "zones": {
   "rectangle_par_defaut": {
-   "rectangle": [
-    1.35,
-    48.83,
-    6.42,
-    51.55
+   "polygon": [
+    [
+     1.35,
+     48.83
+    ],
+    [
+     6.42,
+     48.83
+    ],
+    [
+     6.42,
+     51.55
+    ],
+    [
+     1.35,
+     51.55
+    ]
    ]
   },
   "u_ouvert_au_nord": {

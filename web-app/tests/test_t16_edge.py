@@ -67,8 +67,7 @@ OTHER = {                      # clé -> (type, défaut)
     'map.basemaps': ('basemaps', None), 'map.default_basemap': ('str', 'osm'), 'smtp.host': ('str', ''),
     'smtp.security': ('enum', 'starttls'), 'smtp.username': ('str', ''), 'smtp.sender': ('email', ''), 'DEM_URL': ('url', ''),
     'routing.base_url': ('url', ''), 'routing.detour_strategy': ('enum', 'hybrid'),
-    'routing.coverage_bbox': ('rectangle', [1.35, 48.83, 6.42, 51.55]),      # RB-1.3, P-TR5-1 (tests/test_route_builder_api.py)
-    'routing.coverage_polygon': ('polygon', []),                            # RB-1.3b, EF-6.20 (tests/test_zone_edge.py)
+    'routing.coverage_polygon': ('polygon', [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]),   # seul réglage de zone (lot Z1, EF-6.20)
 }
 NUMERIC = list(SPEC)
 

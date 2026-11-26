@@ -71,10 +71,9 @@ const Zone = (() => {
         return null;
     }
 
-    // Contrôles de EF-6.20, dans le même ordre et avec les mêmes messages que le serveur : message, ou null si valide (`[]` compris)
+    // Contrôles de EF-6.20, dans le même ordre et avec les mêmes messages que le serveur : message, ou null si valide (`[]` refusé)
     function check(value) {
         if (!Array.isArray(value)) return 'Zone : de 3 à 50 sommets.';
-        if (!value.length) return null;
         if (value.length < MIN_VERTICES || value.length > MAX_VERTICES) return 'Zone : de 3 à 50 sommets.';
         if (!value.every((v) => Array.isArray(v) && v.length === 2 && isNumber(v[0]) && isNumber(v[1]))) return 'Zone : chaque sommet est [longitude, latitude].';
         if (!value.every(([lon, lat]) => lon >= -180 && lon <= 180 && lat >= -MAX_LAT && lat <= MAX_LAT)) {
@@ -88,10 +87,6 @@ const Zone = (() => {
         return null;
     }
 
-    function rectangleVertices(box) {                   // [lonMin, latMin, lonMax, latMax] → SO, SE, NE, NO
-        const [lonMin, latMin, lonMax, latMax] = box;
-        return [[lonMin, latMin], [lonMax, latMin], [lonMax, latMax], [lonMin, latMax]];
-    }
     function isAxisRectangle(vertices) {
         if (vertices.length !== 4) return false;
         return new Set(vertices.map((v) => v[0])).size === 2 && new Set(vertices.map((v) => v[1])).size === 2
@@ -119,5 +114,5 @@ const Zone = (() => {
         return inside;
     }
 
-    return { MAX_VERTICES, MIN_VERTICES, MAX_LAT, project, unproject, check, firstCrossing, envelope, sides, sidesOf, rectangleVertices, contains };
+    return { MAX_VERTICES, MIN_VERTICES, MAX_LAT, project, unproject, check, firstCrossing, envelope, sides, sidesOf, contains };
 })();

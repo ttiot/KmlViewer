@@ -438,7 +438,8 @@ def test_a_healthy_engine_with_unusual_profile_names_stays_available(profiles):
 # ===== B. Le builder ============================================================================================================
 
 COVERAGE = (49.0, 2.0, 51.6, 6.5)
-CFG = BuildConfig(coverage_bbox=COVERAGE)
+COVERAGE_POLYGON = ((COVERAGE[1], COVERAGE[0]), (COVERAGE[3], COVERAGE[0]), (COVERAGE[3], COVERAGE[2]), (COVERAGE[1], COVERAGE[2]))   # lon, lat
+CFG = BuildConfig(coverage_bbox=COVERAGE, coverage_polygon=COVERAGE_POLYGON)
 TODAY = None
 
 
@@ -495,7 +496,7 @@ def test_two_hundred_random_generations_keep_every_invariant_even_with_random_en
     outcomes = {'ok': 0, 'invalid': 0, 'engine': 0}
     for case in range(200):
         points, activity, target, seed = random_case(rng)
-        cfg = BuildConfig(coverage_bbox=COVERAGE, max_calls=rng.choice((1, 2, 3, 5, 15)), seed_retries=rng.choice((0, 1, 2)),
+        cfg = BuildConfig(coverage_bbox=COVERAGE, coverage_polygon=COVERAGE_POLYGON, max_calls=rng.choice((1, 2, 3, 5, 15)), seed_retries=rng.choice((0, 1, 2)),
                           detour_strategy=rng.choice(('s1', 's2', 'hybrid')), tolerance_pct=rng.choice((5.0, 15.0, 30.0)),
                           total_budget_s=rng.choice((5.0, 30.0)))
         provider = Flaky(rng, rng.choice((0.0, 0.0, 0.1, 0.3)), sinuosity=rng.choice((0.0, 0.05, 0.2)))
@@ -648,7 +649,7 @@ def test_never_more_than_max_calls_and_never_more_calls_than_counted_with_a_fail
     for max_calls in (1, 2, 3, 4, 6, 15):
         for rate in (0.0, 0.5, 1.0):
             provider = Flaky(rng, rate, sinuosity=0.1)
-            cfg = BuildConfig(coverage_bbox=COVERAGE, max_calls=max_calls)
+            cfg = BuildConfig(coverage_bbox=COVERAGE, coverage_polygon=COVERAGE_POLYGON, max_calls=max_calls)
             try:
                 generate(provider, [(50.63, 3.05), (50.66, 3.12), (50.60, 3.10)], 'run', 40.0, 5, cfg)
             except (InvalidBuild, RoutingError):
@@ -664,7 +665,7 @@ def test_the_time_budget_is_never_exceeded_with_a_slow_provider_and_a_fake_clock
         sleeps.append(s)
         now[0] += s
     provider = FakeProvider(sinuosity=0.1, delay_s=7.0, sleep=sleep, clock=lambda: now[0])
-    cfg = BuildConfig(coverage_bbox=COVERAGE, total_budget_s=20.0)
+    cfg = BuildConfig(coverage_bbox=COVERAGE, coverage_polygon=COVERAGE_POLYGON, total_budget_s=20.0)
     try:
         generate(provider, [(50.63, 3.05), (50.66, 3.12)], 'run', 40.0, 5, cfg, clock=lambda: now[0])
     except RoutingError:

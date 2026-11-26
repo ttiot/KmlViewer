@@ -121,8 +121,8 @@ class RoutingRuntime:
         """P-TR5-9 : pour l'onglet admin des fonctions bêta (RB-1.2, RB-1.3)."""
         with self._lock:
             health = self._health
-        area = zone.effective_zone(lambda key: effective(self.cfg, key))      # polygone, sinon rectangle (RB-1.3b)
-        coverage = zone.envelope_lonlat(area) if area else None
+        area = zone.effective_zone(lambda key: effective(self.cfg, key))      # toujours un polygone (RB-1.3b)
+        coverage = zone.envelope_lonlat(area)
         info = health['bbox'] if health else None
         contained = None
         if info and coverage:

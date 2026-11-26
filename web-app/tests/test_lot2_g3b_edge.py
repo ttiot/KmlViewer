@@ -97,7 +97,8 @@ const sandbox = {
   window: { localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, addEventListener(t, f) { (windowListeners[t] = windowListeners[t] || []).push(f); },
             location: { pathname: '/', search: '' } },
   App: { api: async (path) => (scenario.failOpen ? Promise.reject(new Error('indisponible')) : path.includes('options')
-            ? { available: true, state: 'ok', activities: [{ key: 'run', label: 'Course' }], default_activity: 'run', min_km: 1, max_km: 100, step_km: 1, coverage_bbox: null }
+            ? { available: true, state: 'ok', activities: [{ key: 'run', label: 'Course' }], default_activity: 'run', min_km: 1, max_km: 100, step_km: 1, coverage_bbox: [1.35, 48.83, 6.42, 51.55],
+            coverage_polygon: [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]] }
             : { user: { id: 7 } }),
          el: (tag, attrs, ...children) => { const n = new FakeEl(tag); for (const c of children.flat()) n.append(c instanceof Node ? c : new FakeText(c)); return n; },
          notify() {} },
@@ -429,7 +430,7 @@ def test_the_extent_is_written_in_words_and_the_coverage_answer_is_yes_or_no():
     text = render_diagnostic(BASE)['text']
     assert re.search(r'sud 49\.00°.*ouest 2\.00°.*nord 51\.60°.*est 6\.50°', text)
     assert 'Zone couverte :oui' in text.replace(' ', '') or 'Zone couverte :' in text and 'oui' in text
-    assert 'non' in render_diagnostic(STATES['zone non couverte'])['text'] and 'routing.coverage_bbox' in render_diagnostic(STATES['zone non couverte'])['text']
+    assert 'non' in render_diagnostic(STATES['zone non couverte'])['text'] and 'routing.coverage_polygon' in render_diagnostic(STATES['zone non couverte'])['text']
 
 
 @needs_node

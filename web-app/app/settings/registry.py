@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlsplit
 
-TYPES = ('int', 'float', 'bool', 'str', 'enum', 'list', 'url', 'email', 'timezone', 'basemaps', 'rectangle', 'polygon')
+TYPES = ('int', 'float', 'bool', 'str', 'enum', 'list', 'url', 'email', 'timezone', 'basemaps', 'polygon')
 BASEMAP_KEYS = frozenset({'name', 'url', 'subdomains', 'attribution', 'max_zoom'})
 # Sections du registre, dans l'ordre d'affichage des sous-onglets de l'admin (EF-6.9)
 SECTIONS = ('Sécurité', 'E-mail', 'Carte', 'Traces planifiées', 'Altitude', 'Dossier surveillé', 'Stockage', 'Général')
@@ -58,7 +58,7 @@ class Setting:
             'str': not self.max_length, 'enum': not self.choices,
             'list': not self.max_items or not self.max_length, 'bool': False,
             'url': not self.max_length or not self.schemes, 'email': not self.max_length,
-            'timezone': not self.max_length, 'basemaps': not self.max_items, 'rectangle': False, 'polygon': False,
+            'timezone': not self.max_length, 'basemaps': not self.max_items, 'polygon': False,
         }[self.type]
         if missing:
             raise ValueError(f"Réglage {self.key!r} : bornes obligatoires manquantes")
@@ -91,8 +91,6 @@ class Setting:
             return self._timezone(value)
         if kind == 'basemaps':
             return self._basemaps(value)
-        if kind == 'rectangle':
-            return self._rectangle(value)
         if kind == 'polygon':
             return self._polygon(value)
         if kind == 'url':
@@ -199,34 +197,9 @@ class Setting:
         return {'name': name, 'url': url, 'subdomains': subdomains,
                 'attribution': self._no_markup(self._string(item.get('attribution', ''), 200)), 'max_zoom': zoom}
 
-    def _rectangle(self, value):
-        """
-        Rectangle géographique `[lon_min, lat_min, lon_max, lat_max]` (RB-1.3, P-TR5-1) : 4 nombres finis, lon dans [-180, 180],
-        lat dans [-90, 90], min < max, côtés ≤ 2 000 km (largeur le long du parallèle le plus proche de l'équateur, hauteur le
-        long d'un méridien, en haversine).
-        """
-        if not isinstance(value, (list, tuple)) or len(value) != 4:
-            raise ValueError("Rectangle : [lon_min, lat_min, lon_max, lat_max]")
-        for number in value:
-            # Un entier démesuré n'est jamais converti en float (OverflowError) : il est borné tel quel (T-TR5-B)
-            if isinstance(number, bool) or not isinstance(number, (int, float)) or (isinstance(number, float)
-                                                                                    and not math.isfinite(number)):
-                raise ValueError("Rectangle : quatre nombres finis")
-        lon_min, lat_min, lon_max, lat_max = value
-        if not (-180 <= lon_min < lon_max <= 180 and -90 <= lat_min < lat_max <= 90):
-            raise ValueError("Rectangle : longitudes dans [-180, 180], latitudes dans [-90, 90], minimum < maximum")
-        lon_min, lat_min, lon_max, lat_max = (float(v) for v in value)
-        from app.services import geo
-        parallel = 0.0 if lat_min <= 0 <= lat_max else min(abs(lat_min), abs(lat_max))
-        width = float(geo.haversine(parallel, lon_min, parallel, lon_max))
-        height = float(geo.haversine(lat_min, lon_min, lat_max, lon_min))
-        if max(width, height) > MAX_RECTANGLE_SIDE_M:
-            raise ValueError("Rectangle : côté de 2 000 km au plus")
-        return [lon_min, lat_min, lon_max, lat_max]
-
     @staticmethod
     def _polygon(value):
-        """Zone couverte en polygone (EF-6.20) : `[]` ou 3 à 50 sommets `[lon, lat]` ; contrôles dans `zone.validate`."""
+        """Zone couverte en polygone (EF-6.20) : 3 à 50 sommets `[lon, lat]`, `[]` refusé ; contrôles dans `zone.validate`."""
         from app.services.routing import zone
         return zone.validate(value)
 
@@ -265,9 +238,6 @@ class Setting:
         if not all(c.isprintable() for c in value):
             raise ValueError("Caractères de contrôle interdits")
         return value
-
-
-MAX_RECTANGLE_SIDE_M = 2_000_000.0
 
 
 # Fonds de carte embarqués aujourd'hui (static/js/viewer/map.js) : valeur par défaut du registre
@@ -332,9 +302,8 @@ _ENTRIES = (
     Setting('routing.detour_strategy', 'enum', 'hybrid', 'Traces planifiées', "Stratégie de détours",
             choices=('s1', 's2', 'hybrid')),
     _int('routing.seed_retries', 2, 0, 2, 'Traces planifiées', "Essais de graine supplémentaires", unit=''),
-    Setting('routing.coverage_bbox', 'rectangle', [1.35, 48.83, 6.42, 51.55], 'Traces planifiées',
-            "Zone couverte (lon min, lat min, lon max, lat max)"),
-    Setting('routing.coverage_polygon', 'polygon', [], 'Traces planifiées', "Zone couverte (polygone)"),
+    Setting('routing.coverage_polygon', 'polygon', [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]],
+            'Traces planifiées', "Zone couverte (polygone)"),
     _int('routing.max_concurrent', 2, 1, 4, 'Traces planifiées', "Générations simultanées sur l'instance", unit=''),
     # Tâches de fond (EF-6.5) : relues à chaque tour de l'ordonnanceur, aucun redémarrage
     Setting('INBOX_ENABLED', 'bool', True, 'Dossier surveillé', "Surveiller le dossier d'import", env='INBOX_ENABLED'),

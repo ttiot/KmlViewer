@@ -51,17 +51,17 @@ Les deux images locales (`kmlviewer-bench-app:<hachage de requirements.txt>` et 
   (c2) recherche (casse et accents ignorés), pastille de résultats, onglets grisés (contraste ≥ 4,5:1), filtre « valeurs modifiées », saisie conservée sous un filtre, ni URL ni stockage ;
   (c3) pastilles d'origine, aide repliée, « Rétablir… → valeur » avec confirmation dans la page, autres saisies conservées ;
   (c4) fonds de carte (cartes ordonnées, contrôle d'hôte `tiles=`, doublon, texte brut, Monter/Descendre puis ordre reçu par le visualiseur, fond par défaut, volet Avancé, 10 fonds, envoi forcé = 400) ;
-  (c5) rectangle (4 champs, « ≈ 371 km × 302 km », aperçu qui suit la saisie, contrôles, volet Avancé, tuiles seulement des hôtes autorisés) ;
+  (c5) supprimé par le lot Z1 (CA-76 supprimé : plus de réglage `rectangle`) ; l'emprise « ≈ 371 km × 302 km » est vérifiée par (w) ;
   (c6) enregistrement par onglet (avant/après, un seul PATCH avec la `version`, audits), 400 sous le champ (`aria-invalid`, focus), version périmée + « Recharger », rien ne se perd, `beforeunload` ;
   (c7) éditeur de liste, `requires_restart` (pastille, confirmation, bandeau), secret absent de la page (registre de test).
   (m) lisibilité (CA-82) : 8 onglets sur une ligne, pastilles de nombre, contrastes calculés (thèmes clair et sombre), tailles, largeurs d'éditeurs, colonnes, 390 px ;
-  (n) rectangle édité sur la carte (CA-83) : poignées, souris, doigt réel (`hasTouch` + CDP), clavier, bornes, champs synchronisés, `PATCH` unique, aucune requête hors tuiles autorisées.
+  (n) supprimé par le lot Z1 (CA-83 supprimé, EF-6.19 retirée) : les gestes de l'éditeur de zone sont dans (w) et (w2).
 - **(j) / (l) Invitations** : profil d'un compte SSO (cookie signé par l'application, IdP jamais joint), puis onglet Invitations de l'administration (CA-84 : « Émise par », statuts, compte créé, comptes supprimés, texte seul).
 - **(k) Constructeur** : points effacés du stockage local après l'enregistrement (réussi ou « déjà enregistrée »), gardés sinon (CA-R40).
-- **(w) (w2) (x) (y) Zone couverte en polygone** (`zone_front.py`, CA-86, CA-R50, CA-R51) : (w) éditeur de Réglages (rectangle en 4 sommets, contour croisé refusé et corrigé,
-  insertion sur une arête à 9 / 12 px, clic droit, minimum 3 et maximum 50, contour fermé collé, clavier, liste, un seul `PATCH`, « Inutilisé » sur la ligne du rectangle, retour au rectangle,
+- **(w) (w2) (x) (y) Zone couverte en polygone** (`zone_front.py`, CA-86, CA-R50, CA-R51) : (w) éditeur de Réglages (zone par défaut en 4 sommets, ligne « Emprise ≈ 371 km × 302 km · 4 sommets », aucune ligne `routing.coverage_bbox`, contour croisé refusé et corrigé,
+  insertion sur une arête à 9 / 12 px, clic droit, minimum 3 et maximum 50, contour fermé collé, clavier, liste, un seul `PATCH`, « Rétablir la valeur par défaut » (jamais un « retour au rectangle »),
   390 px) ; (w2) mêmes gestes au doigt réel ; (x) constructeur : contour de la zone, refus dans l'échancrure d'un U, point glissé dans l'échancrure avec retour exact ;
-  (y) le jeu de cas commun `zone_cases.json` (49 cas, aussi joué par la CI contre le serveur) rejoué contre `Zone.contains` et `Zone.check` du front.
+  (y) le jeu de cas commun `zone_cases.json` (49 cas, aussi joué par la CI contre le serveur ; la zone par défaut y est un polygone de 4 sommets) rejoué contre `Zone.contains` et `Zone.check` du front (`[]` refusé).
 - **(p0) à (v2) RB-2.7** (`rb27.py`, CA-R41 à CA-R48) : déplacer, insérer par appui sur la trace (tolérances 10 / 16 px, doigt réel), ajouter, retirer, clavier,
   échec et « Annuler » (retour exact), historique (onze gestes, plafond de 10 résultats), verrouillage pendant le calcul, points limites, trace enregistrée intacte.
   Le résultat de départ est une génération réelle, gardée ; les régénérations sont répondues par un double (`RouteMock`) qui peut les retarder ou les faire échouer

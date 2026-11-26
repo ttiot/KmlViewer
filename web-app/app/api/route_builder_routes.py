@@ -61,14 +61,14 @@ def route_builder_options():
     runtime, cfg = _runtime(), current_app.config
     db, user_id = get_db(), current_user_id()
     state = runtime.state()
-    area = zone.effective_zone(lambda key: effective(cfg, key))          # polygone, sinon les 4 angles du rectangle (RB-1.3b)
+    area = zone.effective_zone(lambda key: effective(cfg, key))          # toujours un polygone (RB-1.3b)
     return jsonify({
         'available': state == 'ok', 'state': state, 'activities': profiles.options(),
         'default_activity': profiles.default_for(profile_service.default_activity_type(db, user_id)),
         'min_km': builder.MIN_DISTANCE_KM, 'max_km': effective(cfg, 'routing.max_distance_km'), 'step_km': 0.5,
         'max_waypoints': effective(cfg, 'routing.max_waypoints'),
         'tolerance_pct': effective(cfg, 'routing.distance_tolerance_pct'),
-        'coverage_bbox': zone.envelope_lonlat(area) if area else None, 'coverage_polygon': area})
+        'coverage_bbox': zone.envelope_lonlat(area), 'coverage_polygon': area})
 
 
 def _error(exc) -> ApiError:

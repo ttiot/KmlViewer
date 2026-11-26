@@ -187,11 +187,17 @@ def poly_editor(page, c):
     start = len(host.intercepted)
     open_editor(page)
     writes = host.recorder(page)
-    # -- état de départ : le rectangle en 4 sommets, rien à enregistrer
+    # -- état de départ : la zone par défaut (4 sommets du rectangle par défaut, lot Z1), rien à enregistrer
     c('carte ≥ 320 px', page.locator(PREVIEW).bounding_box()['height'] >= 320, page.locator(PREVIEW).bounding_box()['height'])
-    c('4 sommets aux angles du rectangle', vertices(page) == RECT, vertices(page))
-    mention = host.norm(page.locator(f'{PROW} .polygon-editor > p.hint').first.inner_text())
-    c('mention « Zone actuelle : le rectangle. »', mention.startswith('Zone actuelle : le rectangle.'), mention)
+    c('4 sommets aux angles du rectangle par défaut', vertices(page) == RECT, vertices(page))
+    dims = host.norm(page.locator(f'{PROW} .polygon-editor > p.hint').first.inner_text())
+    found = re.fullmatch(r'Emprise ≈ (\d+) km × (\d+) km · 4 sommets', dims)
+    c('ligne « Emprise ≈ 371 km × 302 km · 4 sommets » (à 1 km près)', bool(found) and abs(int(found.group(1)) - 371) <= 1
+      and abs(int(found.group(2)) - 302) <= 1, dims)
+    c('origine « défaut » : aucune pastille d\'origine sur la ligne', page.locator(f'{PROW} .badge-soft').count() == 0,
+      host.norm(page.locator(PROW).first.inner_text())[:120])
+    c('aucune ligne routing.coverage_bbox ni mention « Zone actuelle : le rectangle… »',
+      page.locator(BBOX_ROW).count() == 0 and 'Zone actuelle' not in host.norm(page.locator(PROW).first.inner_text()))
     c('onglet non marqué', not host.has_unsaved(page, 'Traces planifiées'), host.tab_names(page, 'Traces planifiées'))
     c('aucune tuile (fond par défaut hors liste)', page.locator(f'{PREVIEW} .leaflet-tile').count() == 0)
     c('nom accessible de la carte', page.locator(PREVIEW).get_attribute('aria-label') ==
@@ -250,8 +256,7 @@ def poly_editor(page, c):
     page.wait_for_timeout(300)
     c('corrigé par la liste : erreur levée', problem(page) == '' and not dashed(page), (problem(page), dashed(page)))
     cancel(page)
-    c('Annuler : le rectangle chargé', vertices(page) == RECT and 'Zone actuelle' in host.norm(
-        page.locator(f'{PROW} .polygon-editor > p.hint').first.inner_text()), vertices(page))
+    c('Annuler : le polygone chargé', vertices(page) == RECT, vertices(page))
     # -- appui au milieu de l'arête sud puis glisser de 50 px vers le sud
     phase[0] = 'insertion sur l\'arête sud'
     cal = Calibration(page)
@@ -381,30 +386,29 @@ def poly_editor(page, c):
     c('liste : même instance de carte, zoom et centre inchangés',
             page.locator(f'{PREVIEW}[data-mark=meme-carte]').count() == 1 and
       abs(relative(page, 1)[0] - anchor[0]) < 1.5 and abs(relative(page, 1)[1] - anchor[1]) < 1.5, (anchor, relative(page, 1)))
-    # -- enregistrer : confirmation « n sommets, emprise », un seul PATCH, mention sur la ligne du rectangle
+    # -- enregistrer : confirmation « n sommets, emprise », un seul PATCH, aucune ligne de rectangle
     phase[0] = 'enregistrement'
     expected_value = vertices(page)
     summary, sent = save_and_confirm(page, writes)
     c('confirmation « 5 sommets, emprise ≈ … km × … km »', re.search(r'5 sommets, emprise ≈ \d+ km × \d+ km',
             summary) is not None, summary)
-    c('confirmation : « aucun polygone (rectangle) » avant', 'aucun polygone (rectangle)' in summary, summary)
+    c('confirmation : l\'état avant est les 4 sommets par défaut, suivi de « (défaut) »',
+      re.search(r'4 sommets, emprise ≈ \d+ km × \d+ km \(défaut\)', summary, re.I) is not None, summary)
     c('confirmation : jamais la liste des coordonnées', '50.4' not in summary and '3.5' not in summary, summary)
     c('un seul PATCH, avec la valeur de la carte', len(sent) == 1 and sent[0]['settings'].get(KEY) == expected_value, sent)
-    unused = page.locator(f'{BBOX_ROW} .setting-unused')
-    c('ligne du rectangle : « Inutilisé : la zone polygonale s\'applique. »', unused.count() == 1 and
-      host.norm(unused.inner_text()) == "Inutilisé : la zone polygonale s'applique.", unused.count())
-    # -- revenir au rectangle
-    phase[0] = 'retour au rectangle'
-    page.locator(f'{PROW} button', has_text='Revenir au rectangle').click()
+    c('toujours aucune ligne routing.coverage_bbox après l\'enregistrement', page.locator(BBOX_ROW).count() == 0)
+    # -- revenir au défaut : le rétablissement de la ligne (origine Base), jamais un « retour au rectangle »
+    phase[0] = 'retour au défaut'
+    reset = page.locator(f'{PROW} button', has_text='Rétablir la valeur par défaut')
+    c('« Rétablir la valeur par défaut » proposé (origine Base)', reset.count() == 1, reset.count())
+    c('aucun bouton « Revenir au rectangle »', page.locator(f'{PROW} button', has_text='rectangle').count() == 0)
+    reset.click()
     page.locator(f'{PROW} button', has_text='Confirmer').click()
-    page.wait_for_timeout(300)
-    c('retour au rectangle : les 4 sommets et la mention', vertices(page) == RECT and 'Zone actuelle' in host.norm(
-        page.locator(f'{PROW} .polygon-editor > p.hint').first.inner_text()), vertices(page))
-    summary, sent = save_and_confirm(page, writes)
-    c('retour au rectangle : PATCH avec []', len(sent) == 1 and sent[0]['settings'].get(KEY) == [], sent)
-    c('mention de la ligne du rectangle disparue', page.locator(f'{BBOX_ROW} .setting-unused').count() == 0)
-    c('la valeur relue est []', host.api(page, 'GET', '/api/admin/settings')['body']['settings'] and next(
-        s for s in host.api(page, 'GET', '/api/admin/settings')['body']['settings'] if s['key'] == KEY)['value'] == [])
+    page.wait_for_timeout(500)
+    c('retour au défaut : les 4 sommets par défaut', vertices(page) == RECT, vertices(page))
+    row = next(s for s in host.api(page, 'GET', '/api/admin/settings')['body']['settings'] if s['key'] == KEY)
+    c('la valeur relue est le défaut, origine défaut', row['value'] == RECT and row['source'] == 'défaut', row)
+    c('plus de pastille d\'origine sur la ligne', page.locator(f'{PROW} .badge-soft').count() == 0)
     # -- téléphone
     phase[0] = 'téléphone'
     open_editor(page, (390, 844))
@@ -528,7 +532,7 @@ def poly_builder(page, c):
             view.context.close()
     finally:
         clear_zone(page)
-    # sans polygone : le rectangle en pointillés ; Londres refusé, Lille accepté
+    # zone par défaut (4 sommets) : contour en pointillés ; Londres refusé, Lille accepté
     view = rb27.new_view(page)
     try:
         view.goto(host.BASE + '/')
@@ -537,7 +541,7 @@ def poly_builder(page, c):
         view.click('#routeBuilderOpen')
         view.evaluate('(c) => Viewer.map.setView(c, 6, { animate: false })', [50.0, 3.0])
         view.wait_for_timeout(300)
-        c('sans polygone : rectangle en pointillés (4 sommets)', coverage_points(view) == 4, coverage_points(view))
+        c('zone par défaut : 4 sommets en pointillés', coverage_points(view) == 4, coverage_points(view))
         view.evaluate('(c) => Viewer.map.setView(c, 9, { animate: false })', [51.5072, -0.1276])
         view.wait_for_timeout(300)
         x, y = rb27.to_page(view, (51.5072, -0.1276))
@@ -560,11 +564,11 @@ def poly_builder(page, c):
 CASES = os.path.join(os.path.dirname(os.path.abspath(host.__file__)), 'zone_cases.json')
 CHECK_EVAL = """(cases) => cases.cases.map((c) => {
     const z = cases.zones[c.zone];
-    const v = z.rectangle ? Zone.rectangleVertices(z.rectangle) : z.polygon;
-    return Zone.contains(v, c.point[0], c.point[1]);
+    return Zone.contains(z.polygon, c.point[0], c.point[1]);
 })"""
 CHECK_BAD = [
-    ([[0, 0], [1, 1]], 'Zone : de 3 à 50 sommets.'), ([[1, 2]] * 10_000, 'Zone : de 3 à 50 sommets.'),
+    ([], 'Zone : de 3 à 50 sommets.'), ([[0, 0], [1, 1]], 'Zone : de 3 à 50 sommets.'),
+    ([[1, 2]] * 10_000, 'Zone : de 3 à 50 sommets.'),
     ([[1, '50'], [2, 50], [3, 51]], 'Zone : chaque sommet est [longitude, latitude].'),
     ([[True, 50], [2, 50], [3, 51]], 'Zone : chaque sommet est [longitude, latitude].'),
     ([[1, 50, 3], [2, 50], [3, 51]], 'Zone : chaque sommet est [longitude, latitude].'),
@@ -573,7 +577,7 @@ CHECK_BAD = [
     ([[0, 0], [0, 19], [1, 10]], 'Zone : emprise de 2 000 km de côté au plus.'),
     ([[0, 0], [1, 1], [1, 0], [0, 1]], 'Zone : le contour se croise (arêtes 1–2 et 3–4).'),
 ]
-CHECK_GOOD = [[], [[2, 49], [5, 49], [5, 51], [4, 51], [4, 50], [3, 50], [3, 51], [2, 51]], [[0, 0], [1, 0], [0, 1]]]
+CHECK_GOOD = [RECT, [[2, 49], [5, 49], [5, 51], [4, 51], [4, 50], [3, 50], [3, 51], [2, 51]], [[0, 0], [1, 0], [0, 1]]]
 
 
 def check_in(page, url, label, c):
@@ -591,8 +595,9 @@ def check_in(page, url, label, c):
     for value in CHECK_GOOD:
         got = page.evaluate('(v) => Zone.check(v)', value)
         c(f'{label} : zone valide {json.dumps(value)[:30]}', got in (None, ''), got)
-    corners = page.evaluate('() => Zone.rectangleVertices([1.35, 48.83, 6.42, 51.55])')
-    c(f'{label} : les 4 angles dans l\'ordre sud-ouest, sud-est, nord-est, nord-ouest', corners == RECT, corners)
+    c(f'{label} : la liste vide est refusée (lot Z1)', page.evaluate('() => Zone.check([])') == 'Zone : de 3 à 50 sommets.')
+    c(f'{label} : plus de fonction rectangleVertices (le rectangle n\'existe plus)',
+      page.evaluate('() => typeof Zone.rectangleVertices') == 'undefined')
 
 
 @host.scenario("(y) Zone : jeu de cas commun (49 cas) rejoué contre Zone.contains et Zone.check du front (CA-R51)")

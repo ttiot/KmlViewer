@@ -440,6 +440,146 @@ def _emails_canonical(conn: sqlite3.Connection) -> None:
                      details={'kind': 'adresse', 'accounts': sorted(collisions)[:50]})
 
 
+def _coverage_polygon_only(conn: sqlite3.Connection) -> None:
+    """
+    0017 - un seul réglage de zone (lot Z1, admin-space EF-6.20, CA-87) : reprise de `routing.coverage_bbox` dans
+    `routing.coverage_polygon`, puis suppression de la ligne du rectangle. Données seulement, aucun changement de schéma.
+    Principe : la zone en vigueur avant est la zone en vigueur après (polygone valide non vide, sinon rectangle valide,
+    sinon défaut). Idempotente : rejouée, elle ne trouve plus de rectangle. Aucune coordonnée dans les journaux ;
+    valeurs avant / après dans l'audit, acteur `system`.
+    """
+    import json
+    import math
+    from datetime import datetime, timezone
+
+    from app import audit
+
+    polygon_key, bbox_key = 'routing.coverage_polygon', 'routing.coverage_bbox'
+    rows = {r['key']: r['value'] for r in conn.execute(
+        "SELECT key, value FROM settings WHERE key IN (?, ?)", (polygon_key, bbox_key))}
+    if not rows:
+        return
+
+    def loads(text):
+        try:
+            return json.loads(text)
+        except (ValueError, RecursionError):
+            return None
+
+    def finite(number):
+        try:
+            return not isinstance(number, bool) and isinstance(number, (int, float)) and math.isfinite(number)
+        except OverflowError:                       # entier démesuré : jamais converti en flottant
+            return False
+
+    # Copie FIGÉE des contrôles (EF-6.20 contrôles 1 à 5, et ancien type `rectangle`) : une migration publiée ne change plus
+    # (ADR-0012). Elle n'importe ni le registre des réglages ni `zone`, dont l'évolution ne doit pas la modifier.
+    def side_too_large(lon_min, lat_min, lon_max, lat_max):
+        def haversine(lat1, lon1, lat2, lon2):
+            p1, p2 = math.radians(lat1), math.radians(lat2)
+            a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
+            return 2 * 6_371_000.0 * math.asin(min(1.0, math.sqrt(a)))
+        parallel = 0.0 if lat_min <= 0 <= lat_max else min(abs(lat_min), abs(lat_max))
+        return max(haversine(parallel, lon_min, parallel, lon_max), haversine(lat_min, lon_min, lat_max, lon_min)) > 2_000_000.0
+
+    def mercator(lon, lat):
+        return float(lon), math.degrees(math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)))
+
+    def orientation(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def in_segment(a, b, q):
+        return min(a[0], b[0]) <= q[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= q[1] <= max(a[1], b[1])
+
+    def segments_touch(a, b, c, d):
+        o1, o2, o3, o4 = orientation(a, b, c), orientation(a, b, d), orientation(c, d, a), orientation(c, d, b)
+        if ((o1 > 0 > o2) or (o1 < 0 < o2)) and ((o3 > 0 > o4) or (o3 < 0 < o4)):
+            return True
+        return ((o1 == 0 and in_segment(a, b, c)) or (o2 == 0 and in_segment(a, b, d))
+                or (o3 == 0 and in_segment(c, d, a)) or (o4 == 0 and in_segment(c, d, b)))
+
+    def adjacent_overlap(a, b, c):
+        u, v = (b[0] - a[0], b[1] - a[1]), (c[0] - b[0], c[1] - b[1])
+        if u == (0.0, 0.0) or v == (0.0, 0.0):
+            return True
+        return orientation(a, b, c) == 0 and u[0] * v[0] + u[1] * v[1] < 0
+
+    def is_simple(vertices):
+        points = [mercator(lon, lat) for lon, lat in vertices]
+        count = len(points)
+        for e1 in range(count):
+            for e2 in range(e1 + 1, count):
+                if e2 == e1 + 1 or (e1 == 0 and e2 == count - 1):
+                    first, second = (e1, e2) if e2 == e1 + 1 else (e2, e1)
+                    bad = adjacent_overlap(points[first], points[(first + 1) % count], points[(second + 1) % count])
+                else:
+                    bad = segments_touch(points[e1], points[(e1 + 1) % count], points[e2], points[(e2 + 1) % count])
+                if bad:
+                    return False
+        return True
+
+    def valid_polygon(value):
+        """Les sommets `[lon, lat]` en flottants si la valeur passe les contrôles 1 à 5, sinon None."""
+        if not isinstance(value, list) or not 3 <= len(value) <= 50:
+            return None
+        if not all(isinstance(v, list) and len(v) == 2 and all(finite(n) for n in v) for v in value):
+            return None
+        if not all(-180 <= lon <= 180 and -85.0511 <= lat <= 85.0511 for lon, lat in value):
+            return None
+        vertices = [[float(lon), float(lat)] for lon, lat in value]
+        lons, lats = [v[0] for v in vertices], [v[1] for v in vertices]
+        if side_too_large(min(lons), min(lats), max(lons), max(lats)) or not is_simple(vertices):
+            return None
+        return vertices
+
+    def valid_rectangle(value):                     # anciennes règles du type `rectangle` (RB-1.3, P-TR5-1)
+        if not isinstance(value, list) or len(value) != 4 or not all(finite(n) for n in value):
+            return None
+        lon_min, lat_min, lon_max, lat_max = value
+        if not (-180 <= lon_min < lon_max <= 180 and -90 <= lat_min < lat_max <= 90):
+            return None
+        lon_min, lat_min, lon_max, lat_max = (float(n) for n in value)
+        return None if side_too_large(lon_min, lat_min, lon_max, lat_max) else [lon_min, lat_min, lon_max, lat_max]
+
+    old_polygon = loads(rows[polygon_key]) if polygon_key in rows else None
+    old_bbox = loads(rows[bbox_key]) if bbox_key in rows else None
+    new_polygon = None                              # valeur à écrire ; None : rien à écrire
+    delete_polygon = polygon_key in rows
+    if valid_polygon(old_polygon) is not None:      # 1. polygone valide : gardé tel quel
+        delete_polygon = False
+    else:
+        rectangle = valid_rectangle(old_bbox)
+        if rectangle is not None and rectangle != [1.35, 48.83, 6.42, 51.55]:   # 2. rectangle personnalisé valide
+            vertices = [[rectangle[0], rectangle[1]], [rectangle[2], rectangle[1]],
+                        [rectangle[2], rectangle[3]], [rectangle[0], rectangle[3]]]
+            if valid_polygon(vertices) is not None:
+                new_polygon, delete_polygon = vertices, False
+            else:
+                logger.warning("routing.coverage_bbox hors de la projection de la carte : zone remise au défaut")
+        # 3. sinon : la ligne du polygone est supprimée, la zone est le défaut
+
+    changed = False
+    migration = '0017_coverage_polygon_only'
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    actor = audit.Actor.system()
+    if new_polygon is not None:
+        conn.execute("INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, 'system') "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, "
+                     "updated_by = excluded.updated_by", (polygon_key, json.dumps(new_polygon), now))
+        audit.record(conn, 'setting.update', actor=actor, target_type='setting', target_id=polygon_key,
+                     details={'key': polygon_key, 'old': old_polygon, 'new': new_polygon, 'migration': migration})
+        changed = True
+    for key, old, drop in ((polygon_key, old_polygon, delete_polygon), (bbox_key, old_bbox, bbox_key in rows)):
+        if drop:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            audit.record(conn, 'setting.reset', actor=actor, target_type='setting', target_id=key,
+                         details={'keys': [key], 'old': {key: old}, 'migration': migration})
+            changed = True
+    if changed:
+        conn.execute("INSERT INTO settings_meta (id, version) VALUES (1, 1) "
+                     "ON CONFLICT(id) DO UPDATE SET version = version + 1")
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
 # dernière passée. SCHEMA décrit l'état final de ces 5 migrations positionnelles : une base neuve le reçoit
 # directement, puis chacune est un no-op. Les tables ajoutées depuis (ADR-0012) ne sont créées que par
@@ -489,6 +629,7 @@ NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ('0014_emails_canonical', _emails_canonical),
     ('0015_second_factors', _second_factors),
     ('0016_webauthn_credentials', _webauthn_credentials),
+    ('0017_coverage_polygon_only', _coverage_polygon_only),
 ]
 
 _MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')

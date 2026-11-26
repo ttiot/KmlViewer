@@ -32,7 +32,7 @@ WEB_APP = pathlib.Path(__file__).resolve().parent.parent
 CLI = Actor.cli()
 OUTBOUND = 'smtp=127.0.0.1:2525,routing=graphhopper.internal:8989,routing=other.internal:8989'
 EXPECTED_SECTIONS = ('Sécurité', 'E-mail', 'Carte', 'Traces planifiées', 'Altitude', 'Dossier surveillé', 'Stockage', 'Général')
-EXPECTED_COUNTS = {'Sécurité': 11, 'E-mail': 6, 'Carte': 5, 'Traces planifiées': 17, 'Altitude': 7, 'Dossier surveillé': 3,
+EXPECTED_COUNTS = {'Sécurité': 11, 'E-mail': 6, 'Carte': 5, 'Traces planifiées': 16, 'Altitude': 7, 'Dossier surveillé': 3,
                    'Stockage': 1, 'Général': 1}
 
 
@@ -597,15 +597,16 @@ def test_every_registry_type_has_an_editor_and_none_goes_through_a_json_area_out
     assert not ({'json', 'textarea'} & set(mapping.values()))                                   # aucun type ne passe par du JSON
     assert mapping['bool'] == 'switch' and mapping['enum'] == 'select' and mapping['int'] == mapping['float'] == 'number'
     assert {mapping['str'], mapping['url'], mapping['email'], mapping['timezone']} == {'text'}
-    assert mapping['list'] == 'chips' and mapping['basemaps'] == 'basemap-cards' and mapping['rectangle'] == 'rectangle-fields' and mapping['polygon']
+    assert mapping['list'] == 'chips' and mapping['basemaps'] == 'basemap-cards' and mapping['polygon']
+    assert 'rectangle' not in mapping and 'rectangle' not in TYPES and 'rectangle-fields' not in js          # lot Z1 : le type et son éditeur sont supprimés
     code = code_without_comments(js)
     areas = [m.start() for m in re.finditer(r"""el\(\s*['"]textarea['"]""", code)]
     assert len(areas) == 1, "une seule zone de texte (le volet « Avancé »)"
     start = code.index('function advancedPane')
     end = code.index('\n    // ', start) if '\n    // ' in code[start:] else len(code)
     assert start < areas[0] < start + (end - start if end > start else len(code))
-    for kind in ('basemaps', 'rectangle'):
-        # le volet ne sert qu'à ces deux types
+    for kind in ('basemaps', 'polygon'):
+        # le volet ne sert qu'à ces deux types (lot Z1 : le rectangle n'existe plus)
         assert f"setting.type === '{kind}'" in code or kind in code
 
 

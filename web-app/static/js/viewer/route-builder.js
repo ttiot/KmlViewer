@@ -56,11 +56,10 @@ const RouteBuilder = (() => {
     function alertText(text) { $('rbAlert').textContent = text; }       // role="alert" : échec d'un recalcul (RB-2.7)
 
     // -- géométrie ---------------------------------------------------------------------------------------------------------
-    // Zone en vigueur : sommets [lon, lat] du polygone, sinon les 4 angles du rectangle (RB-1.3b) ; même fonction que le serveur
+    // Zone en vigueur : sommets [lon, lat] du polygone renvoyé par `options`, toujours présent (RB-1.3b) ; pas de repli sur un rectangle
     function coverageVertices() {
         const options = state.options || {};
-        if (Array.isArray(options.coverage_polygon) && options.coverage_polygon.length >= 3) return options.coverage_polygon;
-        return options.coverage_bbox ? Zone.rectangleVertices(options.coverage_bbox) : null;
+        return Array.isArray(options.coverage_polygon) && options.coverage_polygon.length >= 3 ? options.coverage_polygon : null;
     }
     function inCoverage(lat, lon) {
         const vertices = coverageVertices();
@@ -580,7 +579,7 @@ const RouteBuilder = (() => {
         $('rbDistance').step = state.options.step_km;
         restore();
         const zone = coverageVertices();
-        if (zone) {                                        // contour discret de la zone couverte : polygone ou rectangle (RB-1.3b)
+        if (zone) {                                        // contour discret de la zone couverte : polygone (RB-1.3b)
             state.coverage = L.polygon(zone.map(([lon, lat]) => [lat, lon]), { color: '#0d6efd', weight: 1, dashArray: '6 6', fill: false,
                 interactive: false }).addTo(Viewer.map);
         }

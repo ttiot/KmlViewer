@@ -1311,18 +1311,6 @@ input[type="range"] {
     margin-bottom: 8px;
 }
 
-.rect-fields {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 12px;
-}
-
-.rect-fields .field {
-    flex: 0 1 10rem;
-    max-width: 10rem;
-}
-
-.rect-preview,
 .poly-preview {
     height: 320px;
     margin: 8px 0;
@@ -1331,13 +1319,12 @@ input[type="range"] {
 }
 
 @media (max-width: 576px) {
-    .rect-preview,
-.poly-preview {
+    .poly-preview {
         height: 240px;
     }
 }
 
-/* Poignées du rectangle : zone de prise de 28 px, pastille visible au centre */
+/* Poignées des sommets : zone de prise de 28 px, pastille visible au centre */
 .rect-handle {
     position: relative;
     background: transparent;
@@ -1353,11 +1340,6 @@ input[type="range"] {
     border-radius: 50%;
     background: #0d6efd;
     box-shadow: 0 0 0 1px #0a3d91;
-}
-
-.rect-handle-centre::after {
-    border-radius: 3px;
-    transform: rotate(45deg);
 }
 
 .rect-handle:focus-visible {
@@ -1390,9 +1372,8 @@ input[type="range"] {
     margin-left: auto;
 }
 
-.rect-preview path.leaflet-interactive,
 .poly-preview path.leaflet-interactive {
-    cursor: inherit;      /* le contour ne se saisit pas : glisser dessus déplace la carte (EF-6.19) */
+    cursor: inherit;      /* le contour ne se saisit pas : glisser dessus déplace la carte (EF-6.21) */
 }
 
 /* Polygone de la zone couverte (EF-6.21) : numéro du sommet au survol et au focus, sommet sélectionné, liste des coordonnées */
@@ -1457,11 +1438,6 @@ input[type="range"] {
 .poly-row .setting-error {
     flex-basis: 100%;
     margin: 0;
-}
-
-.setting-unused {
-    font-weight: 600;
-    color: var(--text);
 }
 
 /* La mention et l'erreur partagent une seule ligne réservée au-dessus de la carte : la carte ne se décale jamais pendant un geste */

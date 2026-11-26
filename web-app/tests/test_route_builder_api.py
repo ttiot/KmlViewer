@@ -140,6 +140,7 @@ def test_options_carry_the_contract_even_before_the_first_health_probe_CA_R29(ap
     body = call(client, 'get', '/api/route-builder/options').get_json()
     assert body['available'] is False and body['state'] == 'starting'                         # cache vide : injoignable (n8)
     assert body['coverage_bbox'] == [1.35, 48.83, 6.42, 51.55]
+    assert body['coverage_polygon'] == [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]       # lot Z1 : toujours un polygone
     assert (body['min_km'], body['step_km'], body['max_km'], body['max_waypoints'], body['tolerance_pct']) == (1.0, 0.5, 300, 50, 15)
     assert [a['key'] for a in body['activities']] == ['run', 'trail', 'hike', 'road_bike', 'gravel', 'mtb']
     assert body['default_activity'] == 'run'
@@ -414,22 +415,25 @@ def test_result_ids_have_at_least_128_bits_and_are_unique():
     assert len(ids) == 50 and all(len(i) >= 32 for i in ids) and all(re.fullmatch(r'[A-Za-z0-9_-]+', i) for i in ids)
 
 
-# --- Réglage routing.coverage_bbox (CA-R20b, P-TR5-1) -------------------------------------------------------------------------------------
+# --- Réglage routing.coverage_polygon, seul réglage de zone depuis le lot Z1 (CA-R20b, EF-6.20) -----------------------------------------------
 
-@pytest.mark.parametrize('value', [[0, 0, 1], [1, 2, 3, 4, 5], 'x', [1, 48, 1, 51], [6, 48, 1, 51], [1, 51, 6, 48], [1, 48, 6, 95],
-                                   [-181, 48, 6, 51], [1, 48, float('nan'), 51], [True, 48, 6, 51], ['1', 48, 6, 51], [0, 0, 40, 10],
-                                   [0, 0, 5, 40], None])
-def test_coverage_bbox_validation_rejects_malformed_inverted_and_oversized_rectangles(value):
+@pytest.mark.parametrize('value', [[], [[0, 0], [1, 1]], 'x', None, [[1, 2, 3]] * 3, [['1', 2]] * 3, [[True, 48], [6, 48], [6, 51]],
+                                   [[-181, 48], [6, 48], [6, 51]], [[1, 86], [6, 48], [6, 51]], [[1, 48], [6, 48], [float('nan'), 51]],
+                                   [[0, 0], [40, 0], [0, 10]], [[0, 0], [5, 0], [0, 40]], [[0, 0], [1, 1], [1, 0], [0, 1]]])
+def test_coverage_polygon_validation_rejects_malformed_oversized_and_self_crossing_zones(value):
     with pytest.raises(ValueError):
-        REGISTRY['routing.coverage_bbox'].validate(value)
+        REGISTRY['routing.coverage_polygon'].validate(value)
 
 
-def test_coverage_bbox_default_and_a_valid_write_through_the_settings_store(app, conn):
-    assert REGISTRY['routing.coverage_bbox'].validate([1.35, 48.83, 6.42, 51.55]) == [1.35, 48.83, 6.42, 51.55]
+def test_coverage_polygon_default_and_a_valid_write_through_the_settings_store(app, conn):
+    default = [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]
+    assert REGISTRY['routing.coverage_polygon'].validate(default) == default
     store = app.config['SETTINGS_STORE']
-    store.set_many(conn, {'routing.coverage_bbox': [2, 49, 5, 51]}, actor=CLI)
-    assert store.get('routing.coverage_bbox') == [2.0, 49.0, 5.0, 51.0]
-    assert builder.BuildConfig.from_settings(store.get).coverage_bbox == (49.0, 2.0, 51.0, 5.0)
+    assert store.get('routing.coverage_polygon') == default
+    store.set_many(conn, {'routing.coverage_polygon': [[2, 49], [5, 49], [5, 51], [2, 51]]}, actor=CLI)
+    assert store.get('routing.coverage_polygon') == [[2.0, 49.0], [5.0, 49.0], [5.0, 51.0], [2.0, 51.0]]
+    config = builder.BuildConfig.from_settings(store.get)
+    assert config.coverage_bbox == (49.0, 2.0, 51.0, 5.0) and len(config.coverage_polygon) == 4
 
 
 # --- Diagnostic admin (P-TR5-9) -----------------------------------------------------------------------------------------------------------
@@ -594,7 +598,8 @@ def test_no_user_visible_text_uses_the_word_itineraire_CA_R19():
 
 
 def test_the_default_coverage_matches_the_engine_extent_and_is_reported_contained(app, conn):
-    assert REGISTRY['routing.coverage_bbox'].default == [1.35, 48.83, 6.42, 51.55]
+    assert REGISTRY['routing.coverage_polygon'].default == [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]
+    assert 'routing.coverage_bbox' not in REGISTRY
     runtime = app.extensions['routing']
     runtime.provider_factory = lambda: FakeProvider(bbox=(48.83, -8.32, 54.60, 6.42))        # /info du moteur réel (lat, lon, lat, lon)
     healthy(app)
@@ -678,7 +683,7 @@ def _engine_up():
 def test_another_proposal_differs_against_the_local_engine():
     from app.services.routing.graphhopper import GraphHopperProvider
     engine = GraphHopperProvider('http://127.0.0.1:8989', guard=lambda d: None)
-    config = builder.BuildConfig(coverage_bbox=(48.83, 1.35, 51.55, 6.42))
+    config = builder.BuildConfig.from_settings(lambda key: REGISTRY[key].default)
     points = [(50.6292, 3.0573), (50.6371, 3.0630), (50.6300, 3.0700)]
     seed, seen = 1, set()
     for _ in range(5):

@@ -5,7 +5,7 @@ du texte.
 
  A. contrôles à l'écriture (validate) : forme, bornes, emprise, polygone simple, ordre des contrôles, valeur stockée
  B. appartenance d'un point : jeu de cas commun (tests_browser/zone_cases.json), bords, sommets, U concave, projection de la carte
- C. zone en vigueur : repli sur le rectangle, valeur forgée, emprise
+ C. zone en vigueur : toujours un polygone (défaut = 4 sommets), valeur forgée, emprise
  D. rabattement d'un point technique (pull_inside) et emprise RB-S7
  E. API : PATCH /api/admin/settings (CA-85), options, contrôle avant tout appel au moteur, détours S1, déterminisme (CA-R49)
  F. diagnostic, journaux sans coordonnée
@@ -29,7 +29,7 @@ from tests.pw_harness import call
 
 CASES_FILE = Path(__file__).resolve().parent.parent / 'tests_browser' / 'zone_cases.json'
 KEY = 'routing.coverage_polygon'
-DEFAULT_RECTANGLE = [1.35, 48.83, 6.42, 51.55]
+DEFAULT_RECTANGLE = [1.35, 48.83, 6.42, 51.55]                                      # emprise de la zone par défaut
 CORNERS = [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]            # sud-ouest, sud-est, nord-est, nord-ouest
 
 # Polygone de 8 sommets qui suit le nord de la France et la Belgique (CA-85) : [lon, lat]
@@ -51,7 +51,7 @@ def crossing(first, second):
 
 # ============================================================ A. contrôles à l'écriture ======================================
 
-@pytest.mark.parametrize('value', [NORTH_FR_BE, U, list(reversed(U)), [], [[0, 0], [1, 0], [0, 1]], SMALL_U])
+@pytest.mark.parametrize('value', [NORTH_FR_BE, U, list(reversed(U)), [[0, 0], [1, 0], [0, 1]], SMALL_U, CORNERS])
 def test_valid_polygons_are_accepted_in_either_direction(value):
     assert zone.validate(value) == [[float(a), float(b)] for a, b in value]
 
@@ -65,6 +65,7 @@ def test_a_value_is_stored_as_received_with_floats_and_no_rounding():
 
 
 @pytest.mark.parametrize('value, message', [
+    ([], MSG_COUNT), ((), MSG_COUNT),                                  # lot Z1 : `[]` n'est plus « aucun polygone », il est refusé
     ([[0, 0], [1, 1]], MSG_COUNT), ([[0, 0]], MSG_COUNT),
     ([[i / 100, 50 + i / 100] for i in range(51)], MSG_COUNT),
     ([[1, 2]] * 10_000, MSG_COUNT),
@@ -168,8 +169,7 @@ def load_cases():
 
 
 def vertices_of(data, name):
-    entry = data['zones'][name]
-    return zone.rectangle_vertices(entry['rectangle']) if 'rectangle' in entry else entry['polygon']
+    return data['zones'][name]['polygon']                                 # lot Z1 : plus de zone « rectangle », le défaut est un polygone de 4 sommets
 
 
 def case_ids():
@@ -243,9 +243,9 @@ def test_every_vertex_and_every_edge_midpoint_is_inside_and_a_point_just_outside
         assert zone.contains(vertices, lat, lon) is True, ('milieu d arête', i)
 
 
-def test_a_rectangle_is_exactly_the_old_rectangle_edges_and_corners_included():
+def test_the_default_zone_is_exactly_the_old_rectangle_edges_and_corners_included():
     box = DEFAULT_RECTANGLE
-    area = zone.rectangle_vertices(box)
+    area = zone.effective_zone(getter())
     assert area == CORNERS
     rng = random.Random(7)
     for _ in range(500):
@@ -299,23 +299,25 @@ def getter(**values):
     return lambda key: values[key] if key in values else REGISTRY[key].default
 
 
-def test_without_a_polygon_the_zone_is_the_rectangle_as_four_corners_south_west_first():
-    assert zone.effective_zone(getter()) == CORNERS
-    assert zone.effective_zone(getter(**{'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})) == [[3.0, 50.6], [3.2, 50.6], [3.2, 50.7], [3.0, 50.7]]
+def test_by_default_the_zone_is_the_four_corners_south_west_first_and_the_registry_says_so():
+    assert zone.effective_zone(getter()) == CORNERS == [list(v) for v in zone.DEFAULT_ZONE]
+    assert REGISTRY[KEY].default == CORNERS and 'routing.coverage_bbox' not in REGISTRY
+    assert zone.validate(REGISTRY[KEY].default) == CORNERS                    # le défaut passe ses propres contrôles
 
 
-def test_a_polygon_replaces_the_rectangle_and_the_two_settings_are_independent():
+def test_a_polygon_is_the_zone_and_the_removed_rectangle_setting_is_ignored_even_if_a_getter_still_has_it():
     assert zone.effective_zone(getter(**{KEY: U})) == [[float(a), float(b)] for a, b in U]
-    far = {'routing.coverage_bbox': [-5.0, 40.0, 5.0, 50.0], KEY: U}
-    assert zone.effective_zone(getter(**far)) == [[float(a), float(b)] for a, b in U]
+    far = {'routing.coverage_bbox': [-5.0, 40.0, 5.0, 50.0]}
+    assert zone.effective_zone(getter(**far)) == CORNERS                      # le réglage supprimé n'a plus aucun effet
+    assert zone.effective_zone(getter(**far, **{KEY: U})) == [[float(a), float(b)] for a, b in U]
 
 
-@pytest.mark.parametrize('forged', ['x', None, [[0, 0], [1, 1]], [[0, 0], [1, 1], [1, 0], [0, 1]], 5, {'a': 1}, [[1, 2, 3]] * 5, [[200, 0]] * 3,
+@pytest.mark.parametrize('forged', ['x', None, [], [[0, 0], [1, 1]], [[0, 0], [1, 1], [1, 0], [0, 1]], 5, {'a': 1}, [[1, 2, 3]] * 5, [[200, 0]] * 3,
                                     [['a', 'b']] * 3])
-def test_a_forged_polygon_means_the_rectangle_never_no_zone(forged):
+def test_a_forged_polygon_means_the_default_zone_never_no_zone(forged):
     assert zone.effective_zone(getter(**{KEY: forged})) == CORNERS
     cfg = BuildConfig.from_settings(getter(**{KEY: forged}))
-    assert cfg.coverage_polygon is None and cfg.coverage_bbox == (48.83, 1.35, 51.55, 6.42)
+    assert cfg.coverage_polygon == tuple(tuple(v) for v in CORNERS) and cfg.coverage_bbox == (48.83, 1.35, 51.55, 6.42)
     assert cfg.zone_vertices() == CORNERS
 
 
@@ -420,11 +422,20 @@ def options(world, client=None):
     return call(client or world.a, 'get', f'{BASE}/options').get_json()
 
 
-def test_the_polygon_has_no_value_by_default_and_the_default_origin(world):
+def test_the_polygon_is_the_four_default_corners_with_the_default_origin(world):
     state = snapshot(world)
-    assert state['value'] == [] and state['source'] == 'défaut'
+    assert state['value'] == CORNERS and state['source'] == 'défaut'
     assert KEY in REGISTRY and REGISTRY[KEY].type == 'polygon' and REGISTRY[KEY].section == 'Traces planifiées'
-    assert REGISTRY[KEY].default == [] and REGISTRY[KEY].label == "Zone couverte (polygone)" and not REGISTRY[KEY].env
+    assert REGISTRY[KEY].default == CORNERS and REGISTRY[KEY].label == "Zone couverte (polygone)" and not REGISTRY[KEY].env
+
+
+def test_the_rectangle_setting_is_gone_from_the_list_and_its_patch_is_an_unknown_setting(world):
+    listed = call(world.adm, 'get', '/api/admin/settings').get_json()
+    assert all(s['key'] != 'routing.coverage_bbox' for s in listed['settings'])
+    before = snapshot(world)
+    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})
+    assert r.status_code == 400 and 'Réglage inconnu' in r.get_json()['error'], r.get_data(as_text=True)
+    assert snapshot(world) == before
 
 
 def test_a_polygon_of_eight_vertices_is_written_read_back_identical_with_a_new_version_and_an_audit_entry(world):
@@ -436,20 +447,23 @@ def test_a_polygon_of_eight_vertices_is_written_read_back_identical_with_a_new_v
     assert after['version'] == before['version'] + 1 and after['audits'] == before['audits'] + 1
 
 
-@pytest.mark.parametrize('value', [U, list(reversed(U)), []])
-def test_a_concave_polygon_the_other_direction_and_empty_are_accepted(world, value):
+@pytest.mark.parametrize('value', [U, list(reversed(U))])
+def test_a_concave_polygon_and_the_other_direction_are_accepted(world, value):
     assert patch(world, value).status_code == 200
     assert snapshot(world)['value'] == [[float(a), float(b)] for a, b in value]
 
 
-def test_writing_an_empty_list_goes_back_to_the_rectangle(world):
+def test_reset_to_default_gives_the_four_corners_and_the_default_origin(world):
     assert patch(world, U).status_code == 200
-    assert patch(world, []).status_code == 200
+    r = call(world.adm, 'delete', f'/api/admin/settings/{KEY}')
+    assert r.status_code == 200 and r.get_json()['reset'] is True, r.get_data(as_text=True)
+    state = snapshot(world)
+    assert state['value'] == CORNERS and state['source'] == 'défaut'
     assert options(world)['coverage_polygon'] == CORNERS
 
 
 BAD = [
-    ('2 sommets', [[0, 0], [1, 1]], MSG_COUNT), ('51 sommets', [[i / 100, 50 + i / 100] for i in range(51)], MSG_COUNT),
+    ('liste vide', [], MSG_COUNT), ('2 sommets', [[0, 0], [1, 1]], MSG_COUNT), ('51 sommets', [[i / 100, 50 + i / 100] for i in range(51)], MSG_COUNT),
     ('10 000 sommets', [[1, 2]] * 10_000, MSG_COUNT),
     ('texte', [[1, "50"], [2, 50], [3, 51]], MSG_SHAPE), ('booléen', [[True, 50], [2, 50], [3, 51]], MSG_SHAPE),
     ('3 nombres', [[1, 50, 3], [2, 50], [3, 51]], MSG_SHAPE), ('NaN', [[float('nan'), 50], [2, 50], [3, 51]], MSG_SHAPE),
@@ -494,16 +508,16 @@ def forge(world, text):
     world.app.config['SETTINGS_STORE'].refresh(world.conn, force=True)
 
 
-@pytest.mark.parametrize('forged', ['"x"', 'null', '[[0,0],[1,1]]', '[[0,0],[1,1],[1,0],[0,1]]', '5', '[[1,2,3],[1,2,3],[1,2,3]]'])
-def test_a_forged_polygon_in_the_database_reads_back_as_empty_and_the_rectangle_applies(world, forged):
+@pytest.mark.parametrize('forged', ['"x"', 'null', '[]', '[[0,0],[1,1]]', '[[0,0],[1,1],[1,0],[0,1]]', '5', '[[1,2,3],[1,2,3],[1,2,3]]'])
+def test_a_forged_polygon_in_the_database_reads_back_as_the_default_zone_and_it_applies(world, forged):
     forge(world, forged)
-    assert snapshot(world)['value'] == []
+    assert snapshot(world)['value'] == CORNERS
     assert options(world)['coverage_polygon'] == CORNERS and options(world)['coverage_bbox'] == DEFAULT_RECTANGLE
     assert world.route(points=[[51.5072, -0.1276], [51.51, -0.12]], distance_km=None).status_code == 400          # Londres refusé
     assert world.route(points=[[50.63, 3.05], [50.66, 3.10]], distance_km=None).status_code == 200                # Lille accepté
 
 
-def test_options_without_a_polygon_give_the_four_corners_and_the_rectangle(world):
+def test_options_by_default_give_the_four_corners_and_their_envelope(world):
     body = options(world)
     assert body['coverage_polygon'] == CORNERS and body['coverage_bbox'] == DEFAULT_RECTANGLE
 
@@ -514,18 +528,13 @@ def test_options_with_a_polygon_give_it_and_its_envelope(world):
     assert body['coverage_polygon'] == [[float(a), float(b)] for a, b in U] and body['coverage_bbox'] == [2.0, 49.0, 5.0, 51.0]
 
 
-def test_options_follow_a_new_rectangle_when_there_is_no_polygon(world):
-    world.set(**{'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})
+def test_options_follow_a_four_vertex_polygon_the_way_they_followed_a_rectangle(world):
+    rectangle = [[3.0, 50.6], [3.2, 50.6], [3.2, 50.7], [3.0, 50.7]]
+    world.set(**{KEY: rectangle})
     body = options(world)
-    assert body['coverage_bbox'] == [3.0, 50.6, 3.2, 50.7] and body['coverage_polygon'] == [[3.0, 50.6], [3.2, 50.6], [3.2, 50.7], [3.0, 50.7]]
+    assert body['coverage_bbox'] == [3.0, 50.6, 3.2, 50.7] and body['coverage_polygon'] == rectangle
     world.set(**{KEY: SMALL_U})
-    assert options(world)['coverage_bbox'] == [3.0, 50.4, 3.4, 50.8]          # le rectangle devient « inutilisé » : la zone est le polygone
-
-
-def test_the_rectangle_setting_stays_writable_while_a_polygon_is_in_force(world):
-    world.set(**{KEY: U})
-    r = call(world.adm, 'patch', '/api/admin/settings', {'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})
-    assert r.status_code == 200 and options(world)['coverage_polygon'] == [[float(a), float(b)] for a, b in U]
+    assert options(world)['coverage_bbox'] == [3.0, 50.4, 3.4, 50.8]
 
 
 def test_a_point_in_the_notch_is_a_400_before_any_call_to_the_engine(world):
@@ -550,7 +559,7 @@ def test_the_point_numbers_are_the_original_ones_even_after_deduplication(world)
     assert r.status_code == 400 and "Le point 3 est hors de la zone couverte." == r.get_json()['error']
 
 
-def test_the_rectangle_alone_behaves_exactly_as_before(world):
+def test_the_default_zone_behaves_exactly_as_the_old_rectangle_did(world):
     assert world.route(points=[[50.63, 3.05], [50.66, 3.10]], distance_km=None).status_code == 200
     r = world.route(points=[[50.63, 3.05], [52.37, 4.90]], distance_km=None)                  # Amsterdam
     assert r.status_code == 400 and r.get_json()['error'] == "Le point 2 est hors de la zone couverte."
@@ -592,7 +601,7 @@ def test_every_point_sent_to_the_engine_technical_points_included_is_inside_the_
 
 
 def test_without_the_polygon_the_same_request_does_send_technical_points_into_the_notch(tmp_path):
-    """Le test précédent a un sens : avec le seul rectangle, les mêmes détours placent des points dans l'échancrure."""
+    """Le test précédent a un sens : avec la zone par défaut (le rectangle), les mêmes détours placent des points dans l'échancrure."""
     world = build_world(tmp_path)
     try:
         world.set(**{'routing.detour_strategy': 's1'})
@@ -659,17 +668,7 @@ def test_the_diagnostic_compares_the_envelope_of_the_zone_in_force_with_the_engi
         assert view(world)['coverage_contained'] is True
         world.set(**{KEY: [[-5, 40], [5, 40], [0, 50]]})                  # l'emprise [-5, 40, 5, 50] dépasse celle du moteur
         assert view(world)['coverage_contained'] is False
-        world.set(**{KEY: [], 'routing.coverage_bbox': [3.0, 50.6, 3.2, 50.7]})
-        assert view(world)['coverage_contained'] is True
-    finally:
-        world.conn.close()
-
-
-def test_the_polygon_and_the_rectangle_stay_independent_in_the_diagnostic(tmp_path):
-    provider = FakeProvider(sinuosity=0.05, bbox=(48.0, 0.0, 53.0, 8.0))
-    world = build_world(tmp_path, provider)
-    try:
-        world.set(**{KEY: SMALL_U, 'routing.coverage_bbox': [-5.0, 40.0, 5.0, 50.0]})        # le rectangle sort, mais il est inutilisé
+        world.set(**{KEY: [[3.0, 50.6], [3.2, 50.6], [3.2, 50.7], [3.0, 50.7]]})        # ancien rectangle personnalisé, devenu 4 sommets
         assert view(world)['coverage_contained'] is True
     finally:
         world.conn.close()

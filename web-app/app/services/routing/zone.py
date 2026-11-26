@@ -1,8 +1,8 @@
 """
 Zone couverte du constructeur de traces (gpx-route-builder RB-1.3b, admin-space EF-6.20). Module PUR : ni base, ni env.
 
-La zone en vigueur est le polygone `routing.coverage_polygon` s'il n'est pas vide, sinon le rectangle `routing.coverage_bbox`
-vu comme un polygone de 4 sommets. Un seul code de contrôle sert aux deux cas.
+La zone en vigueur est la valeur effective de `routing.coverage_polygon` : toujours un polygone de 3 à 50 sommets
+(lot Z1 : plus de rectangle de repli, `[]` refusé).
 
 Géométrie commune : tout se calcule dans la projection de la carte (Web Mercator, en degrés), où la carte trace chaque
 arête en ligne droite. Un sommet est un couple `(lon, lat)` en degrés.
@@ -18,6 +18,7 @@ MAX_SIDE_M = 2_000_000.0
 EDGE_EPSILON = 1e-9             # un point à 10⁻⁹ près (coordonnées projetées) d'une arête est sur le contour : dedans
 EARTH_RADIUS_M = 6_371_000.0    # même rayon que `geo.haversine`
 DICHOTOMY_STEPS = 12
+DEFAULT_ZONE = ((1.35, 48.83), (6.42, 48.83), (6.42, 51.55), (1.35, 51.55))   # = défaut du registre (EF-6.20)
 
 
 def project(lon: float, lat: float) -> tuple:
@@ -35,13 +36,11 @@ def _is_number(value) -> bool:
 
 def validate(value) -> list:
     """
-    Liste de sommets `[lon, lat]` normalisée (flottants, sans arrondi) ; `[]` = aucun polygone. Lève `ValueError(message)`.
+    Liste de sommets `[lon, lat]` normalisée (flottants, sans arrondi) ; `[]` refusé. Lève `ValueError(message)`.
     Ordre des contrôles : nombre de sommets (avant d'en lire un seul), forme, bornes, emprise, polygone simple.
     """
     if not isinstance(value, (list, tuple)):
         raise ValueError("Zone : de 3 à 50 sommets.")
-    if not value:
-        return []
     if not MIN_VERTICES <= len(value) <= MAX_VERTICES:
         raise ValueError("Zone : de 3 à 50 sommets.")
     for vertex in value:
@@ -122,24 +121,12 @@ def first_crossing(vertices: Sequence) -> Optional[tuple]:
 
 # -- Zone en vigueur -------------------------------------------------------------------------------------------------------
 
-def rectangle_vertices(bbox) -> list:
-    """Les 4 angles d'un rectangle `[lon_min, lat_min, lon_max, lat_max]` : sud-ouest, sud-est, nord-est, nord-ouest."""
-    lon_min, lat_min, lon_max, lat_max = (float(v) for v in bbox)
-    return [[lon_min, lat_min], [lon_max, lat_min], [lon_max, lat_max], [lon_min, lat_max]]
-
-
 def effective_zone(get: Callable[[str], object]) -> list:
-    """Sommets `[lon, lat]` de la zone en vigueur ; `[]` si ni polygone ni rectangle exploitable. `get` : clé -> valeur."""
+    """Sommets `[lon, lat]` de la zone en vigueur (jamais vide : repli sur le défaut). `get` : clé -> valeur."""
     try:
-        polygon = validate(get('routing.coverage_polygon'))
+        return validate(get('routing.coverage_polygon'))
     except (KeyError, ValueError):
-        polygon = []
-    if polygon:
-        return polygon
-    try:
-        return rectangle_vertices(get('routing.coverage_bbox'))
-    except (KeyError, TypeError, ValueError, IndexError):
-        return []
+        return [list(v) for v in DEFAULT_ZONE]
 
 
 def envelope(vertices: Sequence) -> tuple:

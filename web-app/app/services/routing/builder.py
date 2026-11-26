@@ -61,26 +61,20 @@ class BuildConfig:
     total_budget_s: float = 30.0
     detour_strategy: str = 'hybrid'
     seed_retries: int = 2
-    coverage_bbox: Optional[tuple] = None        # emprise de la zone (lat_min, lon_min, lat_max, lon_max) ; RB-1.3
-    coverage_polygon: Optional[tuple] = None     # sommets (lon, lat) du polygone en vigueur (RB-1.3b) ; None : le rectangle
+    coverage_bbox: Optional[tuple] = None        # emprise de la zone (lat_min, lon_min, lat_max, lon_max), calculée ; RB-1.3
+    coverage_polygon: Optional[tuple] = None     # sommets (lon, lat) de la zone en vigueur (RB-1.3b) ; None : aucune zone
 
     def zone_vertices(self) -> Optional[list]:
-        """Sommets `[lon, lat]` de la zone en vigueur : le polygone, sinon le rectangle ; None sans zone (RB-1.3b)."""
+        """Sommets `[lon, lat]` de la zone en vigueur ; None sans zone (RB-1.3b)."""
         if self.coverage_polygon:
             return [list(v) for v in self.coverage_polygon]
-        if self.coverage_bbox is not None:
-            lat_min, lon_min, lat_max, lon_max = self.coverage_bbox
-            return zone.rectangle_vertices([lon_min, lat_min, lon_max, lat_max])
         return None
 
     @classmethod
     def from_settings(cls, get: Callable[[str], object]) -> 'BuildConfig':
-        vertices = zone.effective_zone(get)                        # polygone s'il y en a un, sinon le rectangle (RB-1.3b)
-        bbox = zone.envelope(vertices) if vertices else None       # (lat_min, lon_min, lat_max, lon_max)
-        try:
-            polygon = tuple(tuple(v) for v in zone.validate(get('routing.coverage_polygon')))
-        except (KeyError, ValueError):
-            polygon = ()
+        vertices = zone.effective_zone(get)                        # toujours un polygone (RB-1.3b)
+        bbox = zone.envelope(vertices)                             # (lat_min, lon_min, lat_max, lon_max)
+        polygon = tuple(tuple(v) for v in vertices)
         return cls(max_waypoints=int(get('routing.max_waypoints')), max_distance_km=float(get('routing.max_distance_km')),
                    tolerance_pct=float(get('routing.distance_tolerance_pct')),
                    snap_tolerance_m=float(get('routing.snap_tolerance_m')),
@@ -367,7 +361,7 @@ def _loop(provider, kept, numbers, profile, target_m, tolerance, seed, budget, c
         last_seed = seed + attempt
         ctx = detours.DetourContext(provider=provider, profile=profile, points=kept, base_points=base_points, base_distance_m=d0,
                                     target_m=target_m, tolerance=tolerance, seed=last_seed, budget=budget, bbox=bbox,
-                                    accepts=accepts, area=config.coverage_polygon and config.zone_vertices())
+                                    accepts=accepts, area=config.zone_vertices())
         outcome = strategy.run(ctx)
         tried += 1
         seen = quality.fingerprint(outcome.points) in avoid          # déjà proposée : écartée si une autre existe

@@ -11,10 +11,8 @@ const AdminSettings = (() => {
 
     // Contrôle de saisie de CHAQUE type du registre ; aucun ne passe par une zone JSON hors du volet « Avancé » (EF-6.12)
     const CONTROL_FOR_TYPE = { bool: 'switch', enum: 'select', int: 'number', float: 'number', str: 'text', url: 'text', email: 'text',
-        timezone: 'text', list: 'chips', basemaps: 'basemap-cards', rectangle: 'rectangle-fields', polygon: 'polygon-map' };
-    const MAX_RECTANGLE_SIDE_M = 2_000_000;
-    const SIZE_MESSAGE = 'Côtés de 2 000 km au plus.';
-    const STEP = 0.0001, MAP_LAT = 85.0511;                  // pas des champs ; limite de la projection Web Mercator (EF-6.19)
+        timezone: 'text', list: 'chips', basemaps: 'basemap-cards', polygon: 'polygon-map' };
+    const STEP = 0.0001, MAP_LAT = 85.0511;                  // pas des champs ; limite de la projection Web Mercator (EF-6.21)
     const MARKUP = /[<>&"']/;
     const LINKED_SECRETS = { 'smtp.host': 'smtp.password', 'smtp.port': 'smtp.password', 'routing.base_url': 'routing.api_key' };
     const ALERT_KEYS = { smtp: ['smtp.host', 'smtp.port'], routing: ['routing.base_url'], dem: ['DEM_URL'], tiles: ['map.basemaps'] };
@@ -54,13 +52,12 @@ const AdminSettings = (() => {
             case 'int': case 'float': return `${value}${unit}`;
             case 'basemaps': return `${(value || []).length} fond(s) : ${(value || []).map((b) => b.name).join(', ') || '—'}`;
             case 'polygon': return polygonSummary(value);
-            case 'rectangle': return Array.isArray(value) ? `lon ${value[0]} → ${value[2]}, lat ${value[1]} → ${value[3]}` : '—';
             case 'list': return (value || []).join(', ') || '—';
             default: return value === '' || value === null || value === undefined ? '(vide)' : String(value);
         }
     }
     function polygonSummary(vertices) {
-        if (!Array.isArray(vertices) || !vertices.length) return 'aucun polygone (rectangle)';
+        if (!Array.isArray(vertices)) return '—';
         if (Zone.check(vertices)) return `${vertices.length} sommets`;
         const { width, height } = Zone.sides(vertices);
         return `${vertices.length} sommets, emprise ≈ ${Math.round(width / 1000)} km × ${Math.round(height / 1000)} km`;
@@ -75,18 +72,6 @@ const AdminSettings = (() => {
         else if (setting.type === 'list') parts.push(`${setting.max_items} éléments au plus`);
         if (setting.env) parts.push(setting.env_overridden ? `variable ${setting.env}, remplacée par la valeur en base` : `variable ${setting.env}`);
         return parts.join(' · ');
-    }
-
-    // -- géométrie (même calcul que le serveur : haversine, largeur au parallèle le plus proche de l'équateur) -----------------
-    function haversine(lat1, lon1, lat2, lon2) {
-        const rad = Math.PI / 180, dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
-        const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
-        return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(a)));
-    }
-    function rectangleSides(box) {
-        const [lonMin, latMin, lonMax, latMax] = box;
-        const parallel = latMin <= 0 && latMax >= 0 ? 0 : Math.min(Math.abs(latMin), Math.abs(latMax));
-        return { width: haversine(parallel, lonMin, parallel, lonMax), height: haversine(latMin, lonMin, latMax, lonMin) };
     }
 
     // -- contrôles de la page (le serveur garde les siens) ----------------------------------------------------------------
@@ -121,15 +106,6 @@ const AdminSettings = (() => {
         }
         return null;
     }
-    function validateRectangle(box) {
-        if (!Array.isArray(box) || box.length !== 4 || box.some((v) => typeof v !== 'number' || !Number.isFinite(v))) return { message: 'Quatre nombres sont attendus.' };
-        const [lonMin, latMin, lonMax, latMax] = box;
-        if (!(lonMin >= -180 && lonMax <= 180 && latMin >= -90 && latMax <= 90)) return { message: 'Longitudes dans [-180, 180], latitudes dans [-90, 90].' };
-        if (!(lonMin < lonMax && latMin < latMax)) return { message: 'Le minimum doit être inférieur au maximum.' };
-        const { width, height } = rectangleSides(box);
-        if (Math.max(width, height) > MAX_RECTANGLE_SIDE_M) return { message: SIZE_MESSAGE };
-        return null;
-    }
     function validateOne(setting) {
         const value = current(setting.key);
         switch (setting.type) {
@@ -139,7 +115,6 @@ const AdminSettings = (() => {
                 if (value < setting.min || value > setting.max) return { message: `Valeur de ${setting.min} à ${setting.max}.` };
                 return null;
             case 'basemaps': return validateBasemaps(value, setting);
-            case 'rectangle': return validateRectangle(value);
             case 'polygon': {
                 const message = S.polygonIssues[setting.key] || Zone.check(value);      // une seule fonction de contrôle, celle du serveur (EF-6.20)
                 return message ? { message } : null;
@@ -286,153 +261,16 @@ const AdminSettings = (() => {
         return holder;
     }
 
-    // Rectangle : 4 champs ET carte Leaflet éditable (EF-6.12, EF-6.19). Une seule fonction de contrôle (validateRectangle) pour les deux.
     const r4 = (v) => Math.round(v * 1e4) / 1e4;
     const clampTo = (v, lo, hi) => (hi < lo ? v : Math.min(hi, Math.max(lo, v)));
-    const CORNERS = [{ name: 'sud-ouest', lon: 0, lat: 1 }, { name: 'nord-ouest', lon: 0, lat: 3 }, { name: 'nord-est', lon: 2, lat: 3 }, { name: 'sud-est', lon: 2, lat: 1 }];
-    const usableBox = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[0] >= -180 && b[2] <= 180 && b[1] >= -90 && b[3] <= 90
-        && b[0] < b[2] && b[1] < b[3];
-    // Un angle suit le geste ; l'angle opposé reste fixe ; on s'arrête à un pas de lui (min < max toujours vrai) et aux bords de la carte
-    function moveCorner(box, index, lon, lat) {
-        const corner = CORNERS[index], west = corner.lon === 0, south = corner.lat === 1;
-        const oppositeLon = box[west ? 2 : 0], oppositeLat = box[south ? 3 : 1];
-        const next = box.slice();
-        next[corner.lon] = r4(clampTo(lon, west ? -180 : oppositeLon + STEP, west ? oppositeLon - STEP : 180));
-        next[corner.lat] = r4(clampTo(lat, south ? -MAP_LAT : oppositeLat + STEP, south ? oppositeLat - STEP : MAP_LAT));
-        return next;
-    }
-    // Déplacement : largeur et hauteur (en degrés) conservées
-    function moveCentre(box, dLon, dLat) {
-        const width = box[2] - box[0], height = box[3] - box[1];
-        const limit = box[3] > MAP_LAT || box[1] < -MAP_LAT ? 90 : MAP_LAT;
-        const lonMin = r4(clampTo(box[0] + dLon, -180, 180 - width)), latMin = r4(clampTo(box[1] + dLat, -limit, limit - height));
-        return [lonMin, latMin, r4(lonMin + width), r4(latMin + height)];
-    }
-
-    function rectangleEditor(setting) {
-        const key = setting.key;
-        const holder = el('div', { class: 'rectangle-editor' });
-        const labels = ['Longitude min', 'Latitude min', 'Longitude max', 'Latitude max'];
-        const dims = el('p', { class: 'hint mb-1' });
-        const preview = el('div', { class: 'rect-preview', role: 'group',
-            'aria-label': 'Carte du rectangle : déplace les poignées, ou saisis les valeurs dans les champs' });
-        const problem = el('p', { class: 'setting-error', role: 'alert', hidden: true });      // même message pour un champ et pour un geste
-        const bounds = [[-180, 180], [-90, 90], [-180, 180], [-90, 90]];
-        const inputs = [];
-        let map = null, rectangle = null, handles = [];
-        let lastBox = (usableBox(current(key)) ? current(key) : loadedValue(key)).slice();      // jamais NaN : une saisie incomplète a pu précéder le dessin
-        const drawable = () => usableBox(lastBox) && lastBox.every((v) => Number.isFinite(v));
-
-        const syncInputs = () => {
-            const box = current(key);
-            inputs.forEach((input, i) => { if (document.activeElement !== input) input.value = Number.isFinite(box[i]) ? box[i] : ''; });
-        };
-        const place = (box) => {
-            if (!usableBox(box)) return;
-            const lat = (v) => clampTo(v, -MAP_LAT, MAP_LAT);
-            const spots = [[lat(box[1]), box[0]], [lat(box[3]), box[0]], [lat(box[3]), box[2]], [lat(box[1]), box[2]], [lat((box[1] + box[3]) / 2), (box[0] + box[2]) / 2]];
-            handles.forEach((marker, i) => { if (!marker.isDragging) marker.setLatLng(spots[i]); });
-        };
-        // Reflète la saisie courante sur la carte SANS la recréer : zoom et centre conservés
-        const refresh = () => {
-            const box = current(key);
-            const issue = validateRectangle(box);
-            const usable = usableBox(box);
-            problem.textContent = issue ? issue.message : '';
-            problem.hidden = !issue;
-            if (usable) {
-                lastBox = box;
-                const { width, height } = rectangleSides(box);
-                dims.textContent = `≈ ${Math.round(width / 1000)} km × ${Math.round(height / 1000)} km`;
-            } else dims.textContent = '';
-            if (!map || !drawable()) return;               // aucune valeur vide ou non numérique n'atteint Leaflet
-            rectangle.setBounds([[lastBox[1], lastBox[0]], [lastBox[3], lastBox[2]]]);
-            rectangle.setStyle(issue ? { color: '#dc3545', dashArray: '6 6' } : { color: '#0d6efd', dashArray: null });
-            place(lastBox);
-            handles.forEach((marker) => {              // poignées inactives tant qu'une saisie invalide reste
-                const node = marker.getElement();
-                if (usable) marker.dragging.enable(); else marker.dragging.disable();
-                if (node) { node.tabIndex = usable ? 0 : -1; node.setAttribute('aria-disabled', usable ? 'false' : 'true'); node.classList.toggle('is-inactive', !usable); }
-            });
-        };
-        const commit = (box) => { setEdit(key, box); syncInputs(); refresh(); };
-        const fit = () => {
-            if (!map || !drawable()) return;
-            const size = map.getSize();
-            if (!size.x || !size.y) return;                // carte sans taille (onglet masqué, redimensionnement) : fitBounds donnerait NaN
-            map.invalidateSize({ animate: false });
-            map.fitBounds(rectangle.getBounds(), { padding: [10, 10], animate: false });
-        };
-
-        const fields = labels.map((label, i) => {
-            const input = el('input', { type: 'number', class: 'form-control', id: `rect-${i}`, min: bounds[i][0], max: bounds[i][1], step: STEP,
-                value: current(key)[i], 'aria-label': label,
-                oninput: () => { const box = current(key).slice(); box[i] = input.value === '' ? NaN : Number(input.value); setEdit(key, box); refresh(); } });
-            inputs.push(input);
-            return el('div', { class: 'field' }, el('label', { for: `rect-${i}` }, label), input);
-        });
-
-        const init = () => {
-            if (typeof L === 'undefined' || !holder.isConnected || map || !drawable()) return;
-            if (!preview.clientWidth || !preview.clientHeight) {          // conteneur sans taille : on attend qu'il en ait une
-                if (typeof ResizeObserver === 'function') {
-                    const watcher = new ResizeObserver(() => { if (preview.clientWidth && preview.clientHeight) { watcher.disconnect(); init(); } });
-                    watcher.observe(preview);
-                }
-                return;
-            }
-            map = L.map(preview, { zoomControl: false, attributionControl: false });
-            S.previewMaps.push(map);
-            const maps = S.byKey['map.basemaps'], wanted = S.byKey['map.default_basemap'];
-            const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
-            if (base && tileHosts(base, maps.allowlist || []).every((h) => h.ok)) App.basemapLayer(base).addTo(map);      // seulement si autorisé
-            rectangle = L.rectangle([[lastBox[1], lastBox[0]], [lastBox[3], lastBox[2]]], { color: '#0d6efd', weight: 2, fill: false }).addTo(map);
-            fit();                                  // la carte doit avoir une vue avant d'accueillir des marqueurs
-            const names = [...CORNERS.map((c) => `Angle ${c.name} du rectangle`), 'Déplacer le rectangle'];
-            let startBox = null, startSpot = null;
-            names.forEach((name, i) => {              // ordre de création = ordre de Tab : SO, NO, NE, SE, centre
-                const icon = L.divIcon({ className: `rect-handle${i === 4 ? ' rect-handle-centre' : ''}`, iconSize: [28, 28] });
-                const marker = L.marker([0, 0], { draggable: true, icon, keyboard: true, zIndexOffset: i === 4 ? 0 : 100 }).addTo(map);
-                marker.on('dragstart', () => { marker.isDragging = true; startBox = usableBox(current(key)) ? current(key).slice() : null; startSpot = marker.getLatLng(); });
-                marker.on('drag', () => {
-                    const at = marker.getLatLng();
-                    if (!Number.isFinite(at.lat) || !Number.isFinite(at.lng) || !usableBox(current(key)) || (i === 4 && !startBox)) return;
-                    commit(i === 4 ? moveCentre(startBox, at.lng - startSpot.lng, at.lat - startSpot.lat) : moveCorner(current(key), i, at.lng, at.lat));
-                });
-                marker.on('dragend', () => { marker.isDragging = false; refresh(); });      // se recale sur les valeurs arrondies
-                const node = marker.getElement();
-                node.setAttribute('aria-label', name);
-                node.setAttribute('role', 'button');
-                node.addEventListener('keydown', (event) => {
-                    const dir = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[event.key];
-                    const box = current(key);
-                    if (!dir || !usableBox(box)) return;
-                    event.preventDefault(); event.stopPropagation();                 // la carte ne doit pas se déplacer
-                    const step = event.shiftKey ? 0.1 : 0.01;
-                    if (i === 4) commit(moveCentre(box, dir[0] * step, dir[1] * step));
-                    else commit(moveCorner(box, i, box[CORNERS[i].lon] + dir[0] * step, box[CORNERS[i].lat] + dir[1] * step));
-                });
-                handles.push(marker);
-            });
-            refresh();
-        };
-        holder.append(el('div', { class: 'field-grid rect-fields' }, fields), dims, problem, preview,
-            el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary mt-1', onclick: fit }, 'Recadrer'),
-            advancedPane(setting, () => { syncInputs(); refresh(); fit(); }));
-        refresh();
-        setTimeout(init, 0);
-        return holder;
-    }
 
     // Polygone : carte Leaflet éditable + liste des sommets (EF-6.20, EF-6.21). Les contrôles sont ceux du serveur (Zone.check).
-    // Valeur `[]` : aucun polygone, la carte montre le rectangle enregistré ; le premier geste fait de ses 4 sommets la valeur saisie.
     const TOLERANCE_MOUSE = 10, TOLERANCE_TOUCH = 16;
     function polygonEditor(setting) {
         const key = setting.key;
         const holder = el('div', { class: 'polygon-editor' });
-        const mention = el('p', { class: 'hint mb-1 poly-slot', hidden: true }, 'Zone actuelle : le rectangle. Modifie un sommet pour en faire un polygone.');
         const dims = el('p', { class: 'hint mb-1' });
-        const problem = el('p', { class: 'setting-error poly-slot', role: 'alert', hidden: true });     // même case que la mention : la carte ne bouge jamais
+        const problem = el('p', { class: 'setting-error poly-slot', role: 'alert', hidden: true });     // case réservée : la carte ne bouge jamais
         const notice = el('p', { class: 'hint mb-1', role: 'status' });                // « 50 sommets au plus. », « 3 sommets au moins. »
         const preview = el('div', { class: 'poly-preview', role: 'group',
             'aria-label': 'Carte de la zone couverte : déplace les sommets, ou saisis-les dans la liste' });
@@ -442,9 +280,7 @@ const AdminSettings = (() => {
         let map = null, shape = null, handles = [], selected = null, hover = null, gesture = null, listCount = -1;
         const issues = new Map();                                                       // champs de la liste en erreur : index -> message
 
-        const rectangle = () => Zone.rectangleVertices(loadedValue('routing.coverage_bbox'));
-        const isRect = () => !(Array.isArray(current(key)) && current(key).length);
-        const shown = () => (isRect() ? rectangle() : current(key)).map((v) => [...v]);
+        const shown = () => (Array.isArray(current(key)) ? current(key) : []).map((v) => [...v]);
         const drawable = (vs) => Array.isArray(vs) && vs.length >= 3 && vs.every((v) => Number.isFinite(v[0]) && Number.isFinite(v[1])
             && Math.abs(v[0]) <= 180 && Math.abs(v[1]) <= MAP_LAT);
         let lastDrawn = shown();
@@ -531,12 +367,10 @@ const AdminSettings = (() => {
         // -- dessin : un seul L.polygon et un marqueur par sommet, jamais recréés à la saisie ----------------------------------
         const bounds = () => shape.getBounds();
         const refresh = () => {
-            const rect = isRect();
             const value = current(key);
-            const issue = S.polygonIssues[key] || (rect ? null : Zone.check(value));
+            const issue = S.polygonIssues[key] || Zone.check(value);
             problem.textContent = issue || '';
             problem.hidden = !issue;
-            mention.hidden = !rect || !!issue;
             const vs = shown();
             if (vs.length >= 3 && drawable(vs)) {
                 const { width, height } = Zone.sides(vs);
@@ -556,7 +390,6 @@ const AdminSettings = (() => {
             }
             syncList();
             removeButton.disabled = selected === null;
-            backButton.hidden = rect;
         };
         const buildHandles = () => {
             handles.forEach((m) => map.removeLayer(m));
@@ -625,7 +458,7 @@ const AdminSettings = (() => {
             if (shown().length >= Zone.MAX_VERTICES) { notice.textContent = '50 sommets au plus.'; return; }
             clearHover();
             map.dragging.disable();
-            const start = isRect() ? [] : current(key).map((v) => [...v]);
+            const start = shown();
             const at = map.mouseEventToLatLng(event);
             const vs = shown();
             const index = hit.edge + 1;
@@ -696,16 +529,10 @@ const AdminSettings = (() => {
 
         const removeButton = el('button', { type: 'button', class: 'btn btn-sm btn-outline-danger mt-1', disabled: true,
             onclick: () => { if (selected !== null) removeAt(selected); } }, 'Retirer le sommet');
-        const backButton = el('span', { class: 'mt-1' });
-        const backStart = el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: () => backButton.replaceChildren(
-            el('span', { class: 'me-1' }, 'Revenir au rectangle enregistré ?'),
-            el('button', { type: 'button', class: 'btn btn-sm btn-danger me-1', onclick: () => { selected = null; backButton.replaceChildren(backStart); commit([]); } }, 'Confirmer'),
-            el('button', { type: 'button', class: 'btn btn-sm btn-link', onclick: () => backButton.replaceChildren(backStart) }, 'Annuler')) }, 'Revenir au rectangle');
-        backButton.append(backStart);
         listPane.append(el('summary', {}, 'Coordonnées des sommets'), listBody);
-        holder.append(mention, dims, problem, preview, help, notice,
+        holder.append(dims, problem, preview, help, notice,
             el('div', { class: 'd-flex flex-wrap gap-2' }, el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary mt-1', onclick: fit }, 'Recadrer'),
-                removeButton, backButton),
+                removeButton),
             listPane, advancedPane(setting, () => { selected = null; issues.clear(); notice.textContent = ''; listCount = -1; refresh(); fit(); }));
         buildList();
         refresh();
@@ -713,9 +540,9 @@ const AdminSettings = (() => {
         return holder;
     }
 
-    // Volet « Avancé » : JSON brut de la valeur EN COURS DE SAISIE (basemaps et rectangle seulement)
+    // Volet « Avancé » : JSON brut de la valeur EN COURS DE SAISIE (basemaps et polygone)
     function advancedPane(setting, redraw) {
-        const area = el('textarea', { class: 'form-control mono', rows: setting.type === 'rectangle' ? 2 : 8, 'aria-label': `JSON de ${setting.label}` },
+        const area = el('textarea', { class: 'form-control mono', rows: 8, 'aria-label': `JSON de ${setting.label}` },
             JSON.stringify(current(setting.key), null, 2));
         const problem = el('p', { class: 'setting-error', role: 'alert', hidden: true });
         S.jsonViews[setting.key] = area;
@@ -726,11 +553,9 @@ const AdminSettings = (() => {
             if (setting.type === 'polygon' && Array.isArray(parsed) && parsed.length >= 4 && same(parsed[0], parsed[parsed.length - 1])) {
                 parsed = parsed.slice(0, -1);                    // contour fermé : le doublon final est retiré avant d'appliquer (EF-6.21)
             }
-            const shape = setting.type === 'rectangle'
-                ? Array.isArray(parsed) && parsed.length === 4 && parsed.every((v) => typeof v === 'number')
-                : setting.type === 'polygon'
-                    ? Array.isArray(parsed) && parsed.every((v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number'))
-                    : Array.isArray(parsed) && parsed.every((b) => b && typeof b === 'object' && !Array.isArray(b));
+            const shape = setting.type === 'polygon'
+                ? Array.isArray(parsed) && parsed.every((v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number'))
+                : Array.isArray(parsed) && parsed.every((b) => b && typeof b === 'object' && !Array.isArray(b));
             if (!shape) { problem.textContent = 'Forme inattendue.'; problem.hidden = false; return; }
             problem.hidden = true;
             setEdit(setting.key, setting.type === 'basemaps' ? parsed.map((b) => ({ subdomains: 'abc', attribution: '', max_zoom: 19, ...b })) : parsed);
@@ -762,7 +587,6 @@ const AdminSettings = (() => {
             case 'number': return numberEditor(setting);
             case 'chips': return chipsEditor(setting);
             case 'basemap-cards': return basemapEditor(setting);
-            case 'rectangle-fields': return rectangleEditor(setting);
             case 'polygon-map': return polygonEditor(setting);
             default: return textEditor(setting);
         }
@@ -780,7 +604,7 @@ const AdminSettings = (() => {
     }
 
     // Ligne : un en-tête (libellé, « ? », pastille, aide, description) et un éditeur (champ, rétablissement, erreurs) (EF-6.18)
-    const WIDE = ['basemaps', 'rectangle', 'polygon'];
+    const WIDE = ['basemaps', 'polygon'];
     function row(setting) {
         const badges = [];
         if (setting.source === 'env') badges.push(el('span', { class: 'badge-soft is-warn' }, 'Environnement'));      // aucune pastille « Défaut » (EF-6.11)
@@ -796,14 +620,12 @@ const AdminSettings = (() => {
                 toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
             } }, '?') : null;
         const hintText = hint(setting);
-        const polygon = S.byKey['routing.coverage_polygon'];       // un polygone en vigueur : la ligne du rectangle n'est que le repli (EF-6.20)
-        const unused = setting.key === 'routing.coverage_bbox' && polygon && Array.isArray(polygon.value) && polygon.value.length > 0;
         return el('div', { class: `setting-row${isDirty(setting.key) ? ' is-dirty' : ''}${WIDE.includes(setting.type) ? ' is-wide' : ''}`,
             'data-setting': setting.key, 'data-type': setting.type },
         el('div', { class: 'setting-head' },
             el('div', { class: 'setting-title' }, el('label', { class: 'setting-label', for: `f-${setting.key}` }, setting.label), toggle, ...badges),
             hintText ? el('p', { class: 'setting-hint' }, hintText) : null,
-            unused ? el('p', { class: 'setting-hint setting-unused', 'data-unused': 'true' }, "Inutilisé : la zone polygonale s'applique.") : null, description),
+            description),
         el('div', { class: 'setting-editor' }, el('div', { class: 'setting-control' }, editorFor(setting)), resetControl(setting),
             setting.type === 'basemaps' ? null : errorLine(setting.key)));
     }

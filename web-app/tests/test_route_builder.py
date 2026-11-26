@@ -52,7 +52,7 @@ def test_invalid_seed_is_refused_before_any_call(seed):
 
 
 def test_a_point_outside_the_configured_coverage_is_refused_without_any_call():
-    cfg = BuildConfig(coverage_bbox=(49.0, 2.0, 51.6, 6.5))
+    cfg = BuildConfig(coverage_bbox=(49.0, 2.0, 51.6, 6.5), coverage_polygon=((2.0, 49.0), (6.5, 49.0), (6.5, 51.6), (2.0, 51.6)))
     provider = FakeProvider()
     for outside in ((51.51, -0.13), (52.37, 4.90)):
         with pytest.raises(InvalidBuild):
@@ -497,7 +497,8 @@ def test_config_from_settings_reads_the_registry_keys():
               'routing.max_calls': 9, 'routing.total_budget_s': 12.5, 'routing.detour_strategy': 's1', 'routing.seed_retries': 1}
     cfg = BuildConfig.from_settings(lambda key: values[key])
     assert (cfg.max_waypoints, cfg.tolerance_pct, cfg.overlap_warning_pct_2pts, cfg.detour_strategy, cfg.coverage_bbox) == \
-        (10, 20.0, 45.0, 's1', None)
+        (10, 20.0, 45.0, 's1', (48.83, 1.35, 51.55, 6.42))          # sans la clé de zone : la zone par défaut (lot Z1), jamais « aucune zone »
+    assert len(cfg.coverage_polygon) == 4
     assert math.isclose(cfg.total_budget_s, 12.5)
 
 
