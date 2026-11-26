@@ -502,7 +502,7 @@ facultative qui donne sa valeur initiale.
 | `ratelimit.token_per_ip` (essais de jeton, / 15 min / IP) | — | 10 | 5 – 30 |
 | `map.basemaps`, `map.default_basemap`, `map.center_lat`, `map.center_lon`, `map.zoom` | — | 5 fonds embarqués, `osm`, 46,603354 / 1,888334, zoom 6 | ≤ 10 fonds ; lat −85 – 85, lon −180 – 180, zoom 1 – 22 |
 | `routing.*` (traces planifiées : délais, budgets, appels, points, distance, tolérances, recouvrement, stratégie de détours `s1` / `s2` / `hybrid` (défaut `hybrid`), essais de graine 0 – 2, `routing.base_url` ← `ROUTING_BASE_URL`) | `ROUTING_BASE_URL` pour l'URL | voir [Constructeur de traces](#constructeur-de-traces-bêta) | bornées dans le registre |
-| `routing.coverage_bbox` (zone couverte : `[lon min, lat min, lon max, lat max]`) | — | `[1.35, 48.83, 6.42, 51.55]` | 4 nombres, lon −180 – 180, lat −90 – 90, min < max, côtés ≤ 2 000 km |
+| `routing.coverage_polygon` (zone couverte : sommets `[lon, lat]`) | — | 4 sommets du rectangle `[1.35, 48.83, 6.42, 51.55]` | 3 à 50 sommets, lon −180 – 180, lat −85,0511 – 85,0511, contour sans croisement, emprise ≤ 2 000 km de côté ; `[]` refusé |
 
 Les seuils du limiteur s'appliquent à chaud, sans remettre les compteurs à zéro. Ne sont **pas**
 administrables (environnement ou code seulement) : tout ce qui figure dans « Variables d'amorçage et de
@@ -657,7 +657,7 @@ l'enregistrer dans la bibliothèque. Fonction **bêta**, fermée par défaut.
    l'administration, l'adresse doit figurer dans `OUTBOUND_ALLOWED_HOSTS` (`routing=graphhopper:8989`).
 2. Onglet **Fonctions bêta** › « Créer une trace » : **Désactivée** (défaut), **Pour une liste de comptes** (cocher les
    comptes) ou **Pour tous**. La liste est conservée quand on passe à « Pour tous » puis qu'on revient. Le diagnostic affiché
-   dit si le moteur est configuré et joignable, la date du dernier sondage et si le rectangle de couverture tient dans la zone
+   dit si le moteur est configuré et joignable, la date du dernier sondage et si l'emprise de la zone couverte tient dans la zone
    annoncée par le moteur.
 3. Le bouton n'existe **que si la fonction est ouverte à l'utilisateur ET le moteur configuré** (adresse autorisée) :
    sinon il n'y a aucun élément dans la page et `/api/route-builder/*` répond 404. Le moteur est sondé au démarrage puis toutes
@@ -709,7 +709,7 @@ l'enregistrer dans la bibliothèque. Fonction **bêta**, fermée par défaut.
 
 **Erreurs** (message fixe, jamais de coordonnée ni d'adresse du moteur ; N est le numéro du point **tel que posé**) : 400 entrée
 invalide, sans appel au moteur : points, activité, distance (« Distance : de 1 à 300 km »), **« Le point N est hors de la zone
-couverte. »** (hors `routing.coverage_bbox`), « Distance requise avec un seul point », « Points trop éloignés les uns des
+couverte. »** (hors `routing.coverage_polygon`), « Distance requise avec un seul point », « Points trop éloignés les uns des
 autres » ; 422 **« Le point N est trop loin d'une voie praticable : rapproche-le d'un chemin. »** (le point est dans la zone
 mais à plus de `routing.snap_tolerance_m` d'une voie : le **déplacer sur un chemin**) ou « Aucune trace possible avec ces
 points : essaie d'autres points. » ;
@@ -717,12 +717,15 @@ points : essaie d'autres points. » ;
 « Trop de générations » (`routing.rate_limit_per_user` = 30 par heure et par utilisateur) ; 502 réponse invalide, 503 moteur
 indisponible, 504 délai dépassé (`routing.timeout_s`, budget `routing.total_budget_s`, appels `routing.max_calls`).
 
-**Zone couverte (`routing.coverage_bbox`)** : rectangle `[lon min, lat min, lon max, lat max]`, défaut
-`[1.35, 48.83, 6.42, 51.55]` (Hauts-de-France et Belgique, resserré sur l'emprise réelle du moteur : le diagnostic de la
-fonction indique si le rectangle tient dans la zone annoncée par le moteur). Le serveur refuse (400) toute demande dont un point
-en sort, avant tout appel au moteur ; le rectangle annoncé par le moteur (`/info`) est trop large pour servir de zone. Saisie :
-onglet Réglages, en JSON (`[1.35, 48.83, 6.42, 51.55]`), valeur refusée si les bornes sont incohérentes (min ≥ max, hors
-limites, côté > 2 000 km) ; `flask settings-reset routing.coverage_bbox` revient au défaut.
+**Zone couverte (`routing.coverage_polygon`)** : polygone de 3 à 50 sommets `[lon, lat]`, **seul réglage de zone** ; défaut : les 4
+sommets du rectangle `[1.35, 48.83, 6.42, 51.55]` (`[[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]`, Hauts-de-France
+et Belgique, resserré sur l'emprise réelle du moteur : le diagnostic de la fonction indique si l'emprise de la zone tient dans la
+zone annoncée par le moteur). Le serveur refuse (400) toute demande dont un point en sort, avant tout appel au moteur ; le
+rectangle annoncé par le moteur (`/info`) est trop large pour servir de zone. Saisie : onglet Réglages, éditeur sur carte (déplacer,
+ajouter, retirer des sommets) ou liste de sommets ; valeur refusée hors de 3 à 50 sommets (`[]` compris), hors des limites de
+la carte, si le contour se croise ou si l'emprise dépasse 2 000 km de côté ; `flask settings-reset routing.coverage_polygon` revient
+au défaut. L'ancien réglage `routing.coverage_bbox` est supprimé : la migration `0017_coverage_polygon_only` reprend un rectangle
+personnalisé en 4 sommets. La zone filtre les demandes côté application, elle ne réduit pas le graphe du moteur.
 
 **Altitude** : le moteur n'est **pas** interrogé pour l'altitude (aucun fournisseur d'altitude dans `routing/config.yml`) ; la
 trace générée n'a donc **ni profil d'altitude ni D+ avant l'enregistrement**. À l'enregistrement, la correction d'altitude par
