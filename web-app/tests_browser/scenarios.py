@@ -78,21 +78,22 @@ def scenario(name):
     return wrap
 
 
-@scenario("(a) Créer une trace : popup masqué, clic au centre = un point posé")
+@scenario("(a) Créer une trace : plus d'encart sur la carte, clic au centre = un point posé")
 def builder(page):
     page.goto(BASE + '/')
     page.wait_for_selector('#map.leaflet-container')
-    empty = page.locator('#emptyState')
-    expect(empty).to_be_visible()                                        # sans fichier : le popup est là
-    box = page.locator('#emptyState .viewer-empty-box').bounding_box()
-    cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2   # l'endroit exact du popup
+    empty = page.locator('#panelEmpty')
+    expect(empty).to_be_visible()                                        # sans fichier : les boutons sont dans le panneau
+    expect(empty.locator('#emptyChooseButton')).to_be_visible()
+    assert page.locator('#emptyState, .viewer-empty').count() == 0, "l'encart central existe encore dans la page"
+    box = page.locator('#map').bounding_box()
+    cx, cy = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2   # le centre de la carte (l'ancien emplacement du popup)
     page.screenshot(path=f'{OUT}/01-visualiseur-etat-vide.png')
     page.click('#routeBuilderOpen')
     expect(page.locator('#routeBuilderPanel')).to_be_visible()
-    expect(empty).to_be_hidden()                                         # le popup ne couvre plus la carte
     on_map = page.evaluate(
         "([x, y]) => { const e = document.elementFromPoint(x, y); return !!e && !!e.closest('#map'); }", [cx, cy])
-    assert on_map, "le centre de l'ancien popup n'est pas sur la carte (un élément le recouvre)"
+    assert on_map, "le centre de la carte n'est pas sur la carte (un élément le recouvre)"
     expect(page.locator('#rbCount')).to_have_text(re.compile(r'^0 point'))
     page.mouse.click(cx, cy)
     expect(page.locator('#rbCount')).to_have_text(re.compile(r'^1 point'))      # un point posé, pas un formulaire de point
@@ -100,8 +101,8 @@ def builder(page):
     page.screenshot(path=f'{OUT}/02-constructeur-point-pose.png')
     page.click('#rbClose')
     expect(page.locator('#routeBuilderPanel')).to_be_hidden()
-    expect(empty).to_be_visible()                                        # fermeture sans trace : le popup revient
-    page.screenshot(path=f'{OUT}/03-constructeur-ferme-popup-revenu.png')
+    expect(empty).to_be_visible()                                        # fermeture sans trace : l'état vide du panneau est là
+    page.screenshot(path=f'{OUT}/03-constructeur-ferme-etat-vide.png')
 
 
 @scenario("(b1) /admin : diagnostic du moteur lisible, jamais de JSON brut")
@@ -1819,7 +1820,7 @@ def fresh_builder(page):
     view = context.new_page()
     view.goto(BASE + '/')
     view.wait_for_selector('#map.leaflet-container')
-    expect(view.locator('#emptyState')).to_be_visible()                  # la page est prête (comme le scénario (a))
+    expect(view.locator('#panelEmpty')).to_be_visible()                  # la page est prête (comme le scénario (a))
     view.click('#routeBuilderOpen')
     expect(view.locator('#routeBuilderPanel')).to_be_visible()
     view.evaluate('() => Viewer.map.setView([50.635, 3.055], 14, { animate: false })')       # dans la couverture du moteur
@@ -1840,7 +1841,7 @@ def generate_result(view):
 def reopen_builder(view):
     view.reload()
     view.wait_for_selector('#map.leaflet-container')
-    expect(view.locator('#emptyState')).to_be_visible()
+    expect(view.locator('#panelEmpty')).to_be_visible()
     view.click('#routeBuilderOpen')
     expect(view.locator('#routeBuilderPanel')).to_be_visible()
 

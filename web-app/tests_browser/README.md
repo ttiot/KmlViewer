@@ -36,8 +36,9 @@ Les deux images locales (`kmlviewer-bench-app:<hachage de requirements.txt>` et 
 
 ## Scénarios (`scenarios.py`)
 
-- **(a) Créer une trace** : sans fichier, `#emptyState` est visible ; ouverture de « Créer une trace » ⇒ il est masqué ; le centre de l'ancien
-  popup tombe sur la carte (`elementFromPoint`) ; un clic à cet endroit pose **un point** (`1 point`, un marqueur) ; fermeture ⇒ le popup revient.
+- **(a) Créer une trace** : sans fichier, l'état vide est dans le panneau (`#panelEmpty`, boutons « Choisir des fichiers » / exemple) et plus aucun
+  encart (`#emptyState`, `.viewer-empty`) n'existe sur la carte ; une fois « Créer une trace » ouvert, le centre de la carte tombe sur la carte
+  (`elementFromPoint`) ; un clic à cet endroit pose **un point** (`1 point`, un marqueur) ; fermeture ⇒ l'état vide du panneau est toujours là.
 - **(b) /admin** : diagnostic du moteur lisible (pastille d'état, « Vérifié … » en heure locale, zone, étendue, profils ; aucun JSON, aucun epoch) ;
   journal d'audit lisible (colonnes et détails, jamais `[object Object]`).
 - **(d) Page de connexion en mode oidc** (deuxième instance, IdP factice jamais joint, comptes à mot de passe disponibles) : UNE page avec le bouton

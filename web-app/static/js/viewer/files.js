@@ -78,7 +78,6 @@ function addUploadedFile(filename, data, { activate = true, fit = true } = {}) {
     }
     file.tab = fileTab(file);
     document.getElementById('fileTabs').appendChild(file.tab);
-    updateEmptyState();
 
     if (activate || !Viewer.activeFileId) setActiveFile(id);
     return file;
@@ -99,7 +98,6 @@ function closeFile(fileId) {
     if (file.layer) Viewer.map.removeLayer(file.layer);
     file.tab.remove();
     Viewer.files.delete(fileId);
-    updateEmptyState();
 
     let next = wasActive ? null : Viewer.files.get(Viewer.activeFileId);
     if (wasActive) {

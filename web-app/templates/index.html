@@ -17,7 +17,12 @@
                 <div class="viewer-panel-body">
                     <div class="empty-state" id="panelEmpty">
                         <strong>Aucune trace ouverte.</strong>
-                        <span>Choisis une activité de ta bibliothèque, ouvre un fichier ou dépose-le sur la page.</span>
+                        <span>Choisis une activité de ta bibliothèque ou ouvre un fichier.</span>
+                        <button type="button" class="btn btn-primary" id="emptyChooseButton">Choisir des fichiers</button>
+                        <button type="button" class="btn btn-sm btn-ghost" id="emptySamplesButton" hidden>
+                            ou essayer un fichier d'exemple
+                        </button>
+                        <span class="hint">Glisse-dépose des KML, KMZ ou GPX n'importe où sur la page</span>
                     </div>
 
                     <div class="viewer-summary" id="fileSummary" hidden>
@@ -70,7 +75,6 @@
             <div class="viewer-main">
                 <section class="map-area" aria-label="Carte">
                     <div id="map"></div>
-                    {% include 'viewer/empty_state.html' %}
                 </section>
 
                 <!-- Profil le long de la trace : altitude ou vitesse, curseur lié à la carte -->

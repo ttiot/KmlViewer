@@ -1,15 +1,7 @@
 // Visualiseur : ouverture de fichiers. Menu « Ouvrir » (sélecteur de fichiers, fichiers
-// d'exemple), état vide posé sur la carte et glisser-déposer sur toute la page.
+// d'exemple), boutons de l'état vide du panneau et glisser-déposer sur toute la page.
 // Un seul champ de fichiers et un seul chemin d'envoi : uploadFiles (files.js).
 'use strict';
-
-// L'état vide n'est affiché que tant qu'aucun fichier n'est ouvert ET que le constructeur de traces est fermé (son encart couvrait
-// la carte au milieu de la pose des points) ; à la fermeture du constructeur, l'état d'avant est rétabli.
-function updateEmptyState() {
-    const empty = document.getElementById('emptyState');
-    const builderOpen = typeof RouteBuilder !== 'undefined' && RouteBuilder.isOpen();
-    if (empty) empty.hidden = Viewer.files.size > 0 || builderOpen;
-}
 
 function openMenu() {
     return bootstrap.Dropdown.getOrCreateInstance(document.getElementById('openMenuButton'));
@@ -45,8 +37,17 @@ function setupPageDrop() {
     // lorsque le compteur revient à zéro, pas à chaque passage d'un élément à son voisin.
     let depth = 0;
     let watchdog = 0;
-    const carriesFiles = (event) => Boolean(event.dataTransfer)
-        && Array.from(event.dataTransfer.types || []).includes('Files');
+    // Firefox/Linux ne renseigne pas dataTransfer.types au dragenter (liste vide, « Files »
+    // n'apparaît qu'ensuite) : une liste vide est donc acceptée, tout autre contenu non fichier
+    // (texte, lien…) reste écarté.
+    const carriesFiles = (event) => {
+        if (!event.dataTransfer) return false;
+        const types = Array.from(event.dataTransfer.types || []);
+        return types.length === 0 || types.includes('Files');
+    };
+    // Types renseignés sans « Files » (texte, lien…) : drag étranger, le voile doit tomber
+    const isForeign = (event) => Boolean(event.dataTransfer)
+        && Array.from(event.dataTransfer.types || []).length > 0 && !carriesFiles(event);
     const hide = () => {
         depth = 0;
         clearTimeout(watchdog);
@@ -67,6 +68,7 @@ function setupPageDrop() {
         keepAlive();
     });
     window.addEventListener('dragover', (event) => {
+        if (isForeign(event)) hide();
         if (!carriesFiles(event)) return;
         // Sans preventDefault, le navigateur refuserait le dépôt (ou ouvrirait le fichier)
         event.preventDefault();
@@ -80,6 +82,7 @@ function setupPageDrop() {
         if (depth === 0) hide();
     });
     window.addEventListener('drop', (event) => {
+        if (isForeign(event)) hide();
         if (!carriesFiles(event)) return;
         event.preventDefault(); // où que tombe le fichier, le navigateur ne l'ouvre pas
         hide();
@@ -107,6 +110,5 @@ function setupOpening() {
         if (first) first.focus();
     });
     setupPageDrop();
-    updateEmptyState();
     loadSampleFiles();
 }

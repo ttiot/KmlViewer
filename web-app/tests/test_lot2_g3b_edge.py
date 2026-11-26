@@ -1,6 +1,6 @@
 """
 2e lot, groupe 3b (rôle test) : retours de l'utilisateur pendant sa recette.
-  - état vide « Glisse-dépose… » en mode « Créer une trace » (opener.js + route-builder.js EXÉCUTÉS sous Node, bac à sable vm) ;
+  - glisser-déposer sur la page, voile et état vide dans le panneau (opener.js + route-builder.js EXÉCUTÉS sous Node, bac à sable vm) ;
   - diagnostic du moteur lisible dans /admin (admin.js + common.js exécutés, DOM minimal) ;
   - CA-66 de bout en bout : un VRAI gunicorn, un SMTP factice qui ne répond pas, des messages en file, SIGTERM, la ligne WARNING.
 Aucun marqueur xfail : un test rouge est un défaut à rapporter. Les tests Node sont ignorés si `node` est absent.
@@ -76,7 +76,7 @@ function serialize(node) {   // texte rendu + classes (pour distinguer les pasti
 }
 """
 
-EMPTY_STATE_HARNESS = PRELUDE + r"""
+BUILDER_DROP_HARNESS = PRELUDE + r"""
 const [openerPath, builderPath] = process.argv.slice(2, 4);
 const scenario = JSON.parse(process.argv[4]);
 const elements = {};
@@ -84,7 +84,7 @@ const clicks = {};
 const calls = { uploads: [], cancelEditing: 0 };
 const ids = new Proxy({}, { get(_, id) {
   if (!elements[id]) {
-    elements[id] = universal({ hidden: id === 'emptyState' || id === 'routeBuilderPanel' ? scenario.initialHidden[id] === true : false, value: '',
+    elements[id] = universal({ hidden: false, value: '',
       addEventListener(type, f) { (clicks[id + ':' + type] = clicks[id + ':' + type] || []).push(f); } });
   }
   return elements[id];
@@ -111,83 +111,47 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(openerPath, 'utf8'), sandbox);
 vm.runInContext(fs.readFileSync(builderPath, 'utf8'), sandbox);
 vm.runInContext('RouteBuilder.setup(); setupPageDrop();', sandbox);
-const empty = () => ids.emptyState.hidden;
-const out = [];
-const log = (label) => out.push([label, empty(), ids.routeBuilderPanel.hidden]);
 const tick = () => new Promise((r) => setTimeout(r, 5));
 const click = async (id) => { for (const f of (clicks[id + ':click'] || [])) await f(); await tick(); };
 const setFiles = (n) => { sandbox.Viewer.files = new Map(Array.from({ length: n }, (_, i) => [i, {}])); };
 (async () => {
   setFiles(scenario.files || 0);
-  vm.runInContext('updateEmptyState()', sandbox); log('initial');
-  await click('routeBuilderOpen'); log('apres ouverture');
-  vm.runInContext('updateEmptyState()', sandbox); log('mise a jour pendant constructeur');
-  if (scenario.loadWhileOpen) { setFiles(1); vm.runInContext('updateEmptyState()', sandbox); log('fichier ouvert pendant constructeur'); setFiles(0); vm.runInContext('updateEmptyState()', sandbox); log('fichier ferme pendant constructeur'); }
+  await click('routeBuilderOpen');
   if (scenario.dropWhileOpen) { for (const f of (windowListeners.drop || [])) f({ dataTransfer: { types: ['Files'], files: [{}] }, preventDefault() {} }); }
-  await click(scenario.closeWith || 'rbClose'); log('apres fermeture');
-  await click('routeBuilderOpen'); log('reouverture');
-  await click('routeBuilderOpen'); log('refermeture par le bouton');
+  await click(scenario.closeWith || 'rbClose');
+  await click('routeBuilderOpen');
+  await click('routeBuilderOpen');
   if (scenario.dropAfter) { for (const f of (windowListeners.drop || [])) f({ dataTransfer: { types: ['Files'], files: [{}, {}] }, preventDefault() {} }); }
-  console.log(JSON.stringify({ steps: out, uploads: calls.uploads, cancelEditing: calls.cancelEditing }));
+  console.log(JSON.stringify({ uploads: calls.uploads, cancelEditing: calls.cancelEditing }));
 })();
 """
 
 
-def run_empty_state(**scenario):
-    scenario.setdefault('initialHidden', {})
+def run_builder_and_drop(**scenario):
     done = subprocess.run(['node', '-', str(STATIC / 'js' / 'viewer' / 'opener.js'), str(STATIC / 'js' / 'viewer' / 'route-builder.js'),
-                           json.dumps(scenario)], input=EMPTY_STATE_HARNESS, capture_output=True, text=True, timeout=60)
+                           json.dumps(scenario)], input=BUILDER_DROP_HARNESS, capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     data = json.loads(done.stdout.strip().splitlines()[-1])
-    data['by'] = {label: (empty_hidden, builder_hidden) for label, empty_hidden, builder_hidden in data['steps']}
     return data
 
 
 @needs_node
-def test_the_empty_state_is_shown_without_file_and_hidden_for_the_whole_time_the_builder_is_open():
-    data = run_empty_state()['by']
-    assert data['initial'][0] is False                                   # aucun fichier, constructeur fermé : le popup est là
-    assert list(data['apres ouverture']) == [True, False]                # constructeur ouvert : popup masqué, panneau visible
-    assert data['mise a jour pendant constructeur'][0] is True           # une mise à jour de l'état vide ne le ramène pas
-    assert list(data['apres fermeture']) == [False, True]                # fermeture sans trace : le popup revient
-    assert data['reouverture'][0] is True and data['refermeture par le bouton'][0] is False
-
-
-@needs_node
-def test_a_file_opened_or_closed_while_the_builder_is_open_does_not_bring_the_popup_back():
-    data = run_empty_state(loadWhileOpen=True)['by']
-    assert data['fichier ouvert pendant constructeur'][0] is True and data['fichier ferme pendant constructeur'][0] is True
-
-
-@needs_node
-def test_with_a_trace_already_open_the_popup_stays_hidden_before_during_and_after_the_builder():
-    data = run_empty_state(files=2)['by']
-    assert all(hidden is True for hidden, _ in (data['initial'], data['apres ouverture'], data['apres fermeture'], data['reouverture']))
-
-
-@needs_node
-def test_a_builder_that_fails_to_open_leaves_the_popup_as_it_was():
-    data = run_empty_state(failOpen=True)['by']
-    assert data['apres ouverture'][0] is False
-
-
-@needs_node
 def test_opening_the_builder_closes_the_point_editor_once_per_opening():
-    result = run_empty_state()
+    result = run_builder_and_drop()
     assert result['cancelEditing'] == 2                                 # deux ouvertures dans le scénario
 
 
 @needs_node
 def test_page_wide_drag_and_drop_stays_active_outside_the_builder_and_during_it():
-    outside = run_empty_state(dropAfter=True)
+    outside = run_builder_and_drop(dropAfter=True)
     assert outside['uploads'] == [2]                                    # constructeur fermé : le dépôt envoie les fichiers
-    during = run_empty_state(dropWhileOpen=True)
+    during = run_builder_and_drop(dropWhileOpen=True)
     assert during['uploads'] == [1]                                     # « sur toute la page » : le constructeur ne le désactive pas
 
 
 @needs_node
 def test_a_drop_that_carries_no_file_is_ignored_and_never_uploads():
-    assert run_empty_state()['uploads'] == []
+    assert run_builder_and_drop()['uploads'] == []
 
 
 def stylesheet():
@@ -200,36 +164,132 @@ def rule(css, selector):
     return match.group(1)
 
 
-def test_the_empty_state_container_never_captures_the_map_clicks_only_its_box_does():
-    css = stylesheet()
-    outer, box = rule(css, '.viewer-empty'), rule(css, '.viewer-empty-box')
-    assert re.search(r'pointer-events\s*:\s*none', outer)                # le conteneur plein carte laisse passer les clics
-    assert re.search(r'pointer-events\s*:\s*auto', box)                  # seul l'encart capte la souris
-
-
-def test_a_hidden_empty_state_is_really_not_displayed_even_though_its_rule_sets_display():
-    """`.viewer-empty { display: grid }` l'emporterait sur l'attribut hidden : il faut une règle qui force display:none."""
-    css = stylesheet()
-    assert re.search(r'display\s*:\s*grid', rule(css, '.viewer-empty'))
-    forced = re.search(r'\.viewer-empty\[hidden\]\s*\{[^}]*display\s*:\s*none', css)
-    bootstrap = (STATIC / 'vendor' / 'bootstrap' / 'bootstrap.min.css').read_text(encoding='utf-8')
-    reboot = re.search(r'\[hidden\]\s*\{\s*display\s*:\s*none\s*!important', bootstrap)
-    assert forced or reboot, "le popup « masqué » resterait affiché : aucune règle ne force display:none sur [hidden]"
-    assert forced or reboot  # la règle de Bootstrap (!important) suffit tant que bootstrap.css est chargé avant et sans surcharge
-    assert not re.search(r'\.viewer-empty[^{]*\{[^}]*display\s*:\s*grid\s*!important', css)
-
-
-def test_the_hidden_empty_state_has_no_pointer_events_override_that_would_block_the_map():
-    template = (WEB_APP / 'templates' / 'viewer' / 'empty_state.html').read_text(encoding='utf-8')
-    assert 'id="emptyState"' in template and 'pointer-events' not in template and 'style=' not in template
-    css = stylesheet()
-    assert not re.search(r'#emptyState[^{]*\{[^}]*pointer-events\s*:\s*auto', css)
-    assert not re.search(r'\.viewer-empty\s*\{[^}]*pointer-events\s*:\s*auto', css)
-
-
-def test_the_empty_state_is_rendered_by_the_viewer_page_with_its_choose_button():
+def test_the_central_empty_overlay_is_gone_and_its_actions_live_in_the_side_panel():
     html = (WEB_APP / 'templates' / 'index.html').read_text(encoding='utf-8')
-    assert "viewer/empty_state.html" in html
+    assert not (WEB_APP / 'templates' / 'viewer' / 'empty_state.html').exists()
+    assert 'viewer/empty_state.html' not in html and 'id="emptyState"' not in html
+    panel = re.search(r'id="panelEmpty">(.*?)</div>', html, re.S).group(1)
+    assert 'id="emptyChooseButton"' in panel and 'id="emptySamplesButton"' in panel
+    assert 'Glisse-dépose des KML, KMZ ou GPX n\'importe où sur la page' in panel
+    css = stylesheet()
+    assert '.viewer-empty' not in css
+    for name in ('static/js/viewer/opener.js', 'static/js/viewer/files.js', 'static/js/viewer/route-builder.js'):
+        assert 'updateEmptyState' not in (WEB_APP / name).read_text(encoding='utf-8')
+
+
+DRAG_HARNESS = PRELUDE + r"""
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const scenario = JSON.parse(process.argv[3]);
+const overlay = { hidden: true };
+const listeners = {};
+const sandbox = { console, setTimeout, clearTimeout, Array, Boolean, Math,
+  document: { getElementById: () => overlay },
+  window: { addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); } },
+  uploadFiles() {}, bootstrap: {}, App: {}, Viewer: {} };
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox);
+vm.runInContext('setupPageDrop()', sandbox);
+const fire = (type, types) => { const e = { dataTransfer: types === null ? null : { types, files: [] }, prevented: false, preventDefault() { this.prevented = true; } };
+  (listeners[type] || []).forEach((f) => f(e)); return e; };
+const out = {};
+out.enterEmpty = [fire('dragenter', []).prevented, overlay.hidden];       // Firefox/Linux : types vide au dragenter
+fire('drop', ['Files']);
+out.enterFiles = [fire('dragenter', ['Files']).prevented, overlay.hidden];
+fire('drop', ['Files']);
+out.enterText = [fire('dragenter', ['text/plain']).prevented, overlay.hidden];
+out.overText = [fire('dragover', ['text/uri-list']).prevented, overlay.hidden];
+out.overFiles = [fire('dragover', ['Files']).prevented, overlay.hidden];
+out.overEmpty = [fire('dragover', []).prevented];
+out.noTransfer = [fire('dragenter', null).prevented];
+// Séquence Firefox/Linux d'un glisser qui n'est pas un fichier : types vide au dragenter, puis types renseigné sans « Files »
+fire('drop', ['Files']);
+out.seqEnter = overlay.hidden;
+fire('dragenter', []);
+out.seqShown = overlay.hidden;
+fire('dragover', ['text/plain']);
+out.seqOver = overlay.hidden;
+fire('dragenter', []);
+const afterReenter = overlay.hidden;
+fire('drop', ['text/uri-list']);
+out.seqDrop = [afterReenter, overlay.hidden];
+process.exit((console.log(JSON.stringify(out)), 0));
+"""
+
+
+@needs_node
+def test_the_drop_veil_shows_when_types_is_empty_or_has_files_and_ignores_other_drags():
+    done = subprocess.run(['node', '-', str(STATIC / 'js' / 'viewer' / 'opener.js'), '{}'], input=DRAG_HARNESS, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    data = json.loads(done.stdout.strip().splitlines()[-1])
+    assert data['enterEmpty'] == [True, False]       # types vide (Firefox/Linux) : voile affiché
+    assert data['enterFiles'] == [True, False]
+    assert data['enterText'] == [False, True]        # texte / lien : filtre strict, voile masqué
+    assert data['overText'] == [False, True]
+    assert data['overFiles'] == [True, False]
+    assert data['overEmpty'] == [True]
+    assert data['noTransfer'] == [False]
+    assert data['seqShown'] is False                 # dragenter [] : voile affiché (types pas encore renseigné)
+    assert data['seqOver'] is True                   # puis dragover ['text/plain'] : types renseigné sans Files, le voile tombe aussitôt
+    assert data['seqDrop'] == [False, True]          # et un drop de lien / texte le masque aussi, sans attendre le garde-fou de 1,5 s
+
+
+# ===== État vide du panneau (#panelEmpty) : masqué avec un fichier, réaffiché quand le dernier est fermé ==========================
+
+PANEL_EMPTY_HARNESS = PRELUDE + r"""
+const [corePath, panelPath, filesPath] = process.argv.slice(2, 5);
+const elements = {};
+const ids = new Proxy({}, { get(_, id) {
+  if (!elements[id]) elements[id] = universal({ hidden: id === 'fileSummary', value: '', textContent: '', disabled: false });   // l'état du HTML servi
+  return elements[id];
+} });
+const tab = () => universal({ remove() {}, querySelector: () => universal(), scrollIntoView() {} });
+const sandbox = {
+  console, Object, JSON, Error, Promise, Date, Math, Number, String, Array, Map, Set, setTimeout, clearTimeout, Intl, Boolean,
+  document: { getElementById: (id) => ids[id] },
+  window: { confirm: () => true },
+  App: { api: async () => ({ activity: null }), el: () => tab(), icon: () => universal(), number: (n) => String(n), date: String },
+  LINE_TYPES: ['polyline', 'track', 'multitrack'],
+  renderFile() {}, cancelEditing() {}, displayPointsList() {}, restoreAdvancedAnalysis() {}, analyzeTrajectory() {}, showAlert() {},
+};
+sandbox.window.document = sandbox.document;
+vm.createContext(sandbox);
+for (const path of [corePath, panelPath, filesPath]) vm.runInContext(fs.readFileSync(path, 'utf8'), sandbox);
+vm.runInContext('Viewer.map = { closePopup() {}, removeLayer() {} };', sandbox);
+const state = (label) => [label, ids.panelEmpty.hidden, ids.fileSummary.hidden];
+const open = (name) => vm.runInContext(`addUploadedFile(${JSON.stringify(name)}, { features: [], points: [] }).id`, sandbox);
+const close = (id) => vm.runInContext(`closeFile(${JSON.stringify(id)})`, sandbox);
+const steps = [state('initial')];
+const a = open('a.gpx');
+steps.push(state('un fichier'));
+const b = open('b.gpx');
+steps.push(state('deux fichiers'));
+close(b);
+steps.push(state('un fichier ferme, un reste'));
+// Constructeur : un résultat remplace le précédent (closeFile puis addUploadedFile, comme RouteBuilder.show)
+const r1 = open('trace-1.gpx'); close(r1); open('trace-2.gpx');
+steps.push(state('resultat du constructeur remplace'));
+for (const id of vm.runInContext('Array.from(Viewer.files.keys())', sandbox)) close(id);
+steps.push(state('dernier ferme'));
+open('c.gpx');
+steps.push(state('rouvert'));
+console.log(JSON.stringify(steps));
+"""
+
+
+@needs_node
+def test_the_side_panel_empty_state_follows_the_open_files():
+    js = STATIC / 'js' / 'viewer'
+    done = subprocess.run(['node', '-', str(js / 'core.js'), str(js / 'panel.js'), str(js / 'files.js')], input=PANEL_EMPTY_HARNESS,
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    by = {label: (empty_hidden, summary_hidden) for label, empty_hidden, summary_hidden in json.loads(done.stdout.strip().splitlines()[-1])}
+    assert by['initial'] == (False, True)                               # sans fichier : état vide visible, résumé masqué
+    assert by['un fichier'] == (True, False)                            # un fichier ouvert : état vide masqué
+    assert by['deux fichiers'] == (True, False)
+    assert by['un fichier ferme, un reste'] == (True, False)            # fermer l'un des deux ne réaffiche pas l'état vide
+    assert by['resultat du constructeur remplace'] == (True, False)     # un résultat du constructeur est un fichier comme un autre
+    assert by['dernier ferme'] == (False, True)                         # le dernier fermé : l'état vide revient
+    assert by['rouvert'] == (True, False)
 
 
 # ===== Diagnostic du moteur dans /admin : lisible, jamais le JSON brut ============================================================

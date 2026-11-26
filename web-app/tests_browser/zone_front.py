@@ -482,7 +482,7 @@ def poly_builder(page, c):
         try:
             view.goto(host.BASE + '/')
             view.wait_for_selector('#map.leaflet-container')
-            expect(view.locator('#emptyState')).to_be_visible()
+            expect(view.locator('#panelEmpty')).to_be_visible()
             view.click('#routeBuilderOpen')
             expect(view.locator('#routeBuilderPanel')).to_be_visible()
             view.evaluate('(c) => Viewer.map.setView(c, 10, { animate: false })', [50.6, 3.2])
@@ -533,7 +533,7 @@ def poly_builder(page, c):
     try:
         view.goto(host.BASE + '/')
         view.wait_for_selector('#map.leaflet-container')
-        expect(view.locator('#emptyState')).to_be_visible()
+        expect(view.locator('#panelEmpty')).to_be_visible()
         view.click('#routeBuilderOpen')
         view.evaluate('(c) => Viewer.map.setView(c, 6, { animate: false })', [50.0, 3.0])
         view.wait_for_timeout(300)

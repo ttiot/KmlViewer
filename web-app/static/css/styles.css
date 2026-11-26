@@ -150,6 +150,11 @@
     min-height: 40px;
 }
 
+/* État vide masqué tant que le constructeur de traces est ouvert */
+body.rb-active #panelEmpty {
+    display: none;
+}
+
 .rb-active .viewer-summary > .button-row {
     display: none;          /* constructeur de traces ouvert : Exporter / Éditer / Analyse reviennent à sa fermeture */
 }
@@ -270,38 +275,7 @@
     opacity: 1;
 }
 
-/* ----------------------------------------------- État vide et dépôt de fichiers */
-
-/* Posé sur la carte ; seul l'encart capte la souris, la carte reste manipulable autour.
-   z-index : au-dessus des couches Leaflet (700 au plus), sous ses contrôles (1000). */
-.viewer-empty {
-    position: absolute;
-    inset: 0;
-    z-index: 750;
-    display: grid;
-    place-items: center;
-    padding: 16px;
-    pointer-events: none;
-}
-
-.viewer-empty-box {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    max-width: min(360px, 100%);
-    padding: 24px 28px;
-    text-align: center;
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-l);
-    pointer-events: auto;
-}
-
-.viewer-empty-box .btn-primary {
-    margin-top: 10px;
-}
+/* ----------------------------------------------- Dépôt de fichiers */
 
 /* Voile plein écran pendant le survol avec des fichiers. Il ne capte pas la souris :
    le dépôt est reçu par la page, et le voile n'émet aucun dragenter / dragleave. */

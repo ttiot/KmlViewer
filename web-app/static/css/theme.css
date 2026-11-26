@@ -886,6 +886,14 @@ input[type="range"] {
     font-weight: 500;
 }
 
+.empty-state .btn {
+    align-self: flex-start;
+}
+
+.empty-state .btn-primary {
+    margin-top: 8px;
+}
+
 /* ------------------------------------------------------ Bandeau de profil */
 /* Courbe le long de la trace (static/js/profile-strip.js), sur fond sombre dans les deux thèmes. */
 
