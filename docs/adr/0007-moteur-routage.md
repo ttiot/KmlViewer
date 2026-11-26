@@ -1,6 +1,6 @@
 # ADR-0007 — Moteur de routage : GraphHopper auto-hébergé
 
-Statut : **Accepté** (auto-hébergement : arbitrage Q-R2 ; GraphHopper : 2e vague ; emprise Hauts-de-France + Belgique : 4e vague ; levée de la réserve du spike : décision D1 de l'utilisateur ; **condition « mesures sur la machine cible » levée** et méthode de build tranchée : décision journalisée par coord, relayée le 2026-11-24, d'après les mesures d'ops sur « dune »). Périmètre belge « pays entier » : recommandation de cet ADR. **Amendé par l'[ADR-0013](0013-zone-pilote-donnees-moteur.md)** (effet à la livraison du lot Z2) : les extraits et l'emprise du graphe suivent le polygone de zone ; la RAM de l'import et du service est doublée pour dune (`-Xmx12g` dans 14 Gio, `-Xmx3g` dans 4 Gio).
+Statut : **Accepté** (auto-hébergement : arbitrage Q-R2 ; GraphHopper : 2e vague ; emprise Hauts-de-France + Belgique : 4e vague ; levée de la réserve du spike : décision D1 de l'utilisateur ; **condition « mesures sur la machine cible » levée** et méthode de build tranchée : décision journalisée par coord, relayée le 2026-11-24, d'après les mesures d'ops sur « dune »). Périmètre belge « pays entier » : recommandation de cet ADR. **Amendé par l'[ADR-0013](0013-zone-pilote-donnees-moteur.md)** (effet à la livraison du lot Z2) : les extraits et l'emprise du graphe suivent le polygone de zone ; la chaîne recadre chaque extrait avant la fusion ; la RAM de l'import et du service est recalée sur les mesures de dune du 2026-11-26 (`-Xmx8g` dans 10 Gio, `-Xmx3g` dans 5 Gio ; section « Mesures sur dune, lot Z2 »).
 Spec : [gpx-route-builder](../specs/gpx-route-builder.md)
 
 ## Contexte
@@ -126,6 +126,20 @@ Points à vérifier à la recette de TR7 (non mesurés tels quels) :
 - la configuration retenue elle-même : **`-Xmx1536m` dans 2 Go**, RAM du conteneur après charge (cible : ≤ ~1,8 Go, aucune mise à mort par le noyau) ;
 - l'image du projet (jar de la **release** 11.0 sur Temurin 21) au lieu du jar `SNAPSHOT` mesuré : rejouer le banc court (latence `route` par profil, `round_trip`) et vérifier que `/info` annonce les 6 profils ;
 - la mise à jour mensuelle de bout en bout, y compris un **retour arrière** volontaire (`routing/update.sh`).
+
+## Mesures sur dune, lot Z2 (ops, 2026-11-26)
+
+Le chiffrage ci-dessus vaut pour l'emprise d'origine (3 extraits, 1,08 Go). Avec le lot Z2 ([ADR-0013](0013-zone-pilote-donnees-moteur.md)), la zone par défaut tire 17 régions. Relevé d'ops du premier build réel, relayé par coord :
+
+| Poste | Mesure | Valeur retenue (remplace celle du chiffrage ci-dessus) |
+|---|---|---|
+| Sources | 17 extraits, 3,279 Go (téléchargement 1 616 s) ; recadrage extrait par extrait 118 s ; fusion des recadrés 74 s, 1,956 Go | recadrer avant de fusionner : `osmium extract` sur le fichier fusionné échoue (« Node ID twice ») |
+| Import | 287 s avec `-Xmx12g` dans 14 Gio ; tas au plus 4,4 Go ; pic du conteneur 5,2 Gio | **`-Xmx8g` dans 10 Gio** |
+| Graphe | 662 Mo | — |
+| Service | `-Xmx3g` dans 4 Gio : 1,42 Gio au repos, 3,25 Gio après 256 appels dont 8 en parallèle (81 %), pic 3,28 Gio, p50 83 ms | **`-Xmx3g` dans 5 Gio** |
+| Disque | ≈ 7,9 Go pour la chaîne, ≈ 9,4 Go avec les dalles (835 Mo) et le graphe en service | volume ≈ 18 Go, cache des extraits 8 Gio |
+
+Ces valeurs sont dimensionnées pour dune (64 Go) ; la règle de dimensionnement est dans la spec [routing-zone-donnees](../specs/routing-zone-donnees.md) (ZD-4).
 
 ## Limites connues relevées au spike
 - **Profil gravel** (avis d'ops sur l'échantillon) : il **évite surtout le bitume** — part de bitume Durbuy 62 → 29 %, Spa 85 → 60 %, Ypres 72 → 39 % — au prix de **+3 à +21 %** de distance ; la part de surface non revêtue **taguée** dans OSM reste faible (≤ 18 %), le modèle ne peut donc pas viser activement les chemins de gravier ; dans les Ardennes, il se rapproche du profil `mtb`. Limite acceptée pour la bêta ; **le jugement terrain revient à l'utilisateur** (appréciation de l'échantillon `spike/detours/out/echantillon/`).

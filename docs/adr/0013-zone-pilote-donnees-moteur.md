@@ -1,6 +1,6 @@
 # ADR-0013 — Le polygone de zone, source unique de la couverture
 
-Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par coord ; dimensionnement mémoire provisoire pour dune, vérifié au premier build réel). La v1 a été acceptée sous réserve de review ; la relecture (`REVIEW.md`) a relevé un bloquant et quatre majeurs, repris ici et dans la spec v2. **Principe confirmé par l'utilisateur** : le polygone `routing.coverage_polygon` est la **source unique** de tout ce qui dépend de la couverture (extraits OSM, graphe, points acceptés, dalles MNT), avec **une seule tâche de fond, un seul statut, une seule zone active**. **Acquis** : MNT = option (1) (dalles = zone, jamais purgées sous le plafond), précisée au point 5. **Décidé** : la zone par défaut reste le rectangle du lot Z1, avec des plafonds relevés (D2) ; calcul géométrique exact par `shapely` (G1) ; budget de 6 tâches et 12 Gio par jour, délai de 300 s, 10 % hors des données ; RAM doublée plutôt que mesurée d'abord (point 4), valeurs dimensionnées pour dune et vérifiées au premier build réel (spec §9, V-Z2) ; `shapely==2.2.0`, feu vert de review (point 3). Lot Z2 · Spec : [routing-zone-donnees](../specs/routing-zone-donnees.md) · Amende l'[ADR-0007](0007-moteur-routage.md) (chaîne de données, extraits fixes, `DEM_BBOX`) et renverse la règle RB-1.3b « la zone ne réduit pas le graphe du moteur » ([gpx-route-builder](../specs/gpx-route-builder.md)).
+Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par coord ; dimensionnement recalé sur les mesures de dune du 2026-11-26). La v1 a été acceptée sous réserve de review ; la relecture (`REVIEW.md`) a relevé un bloquant et quatre majeurs, repris ici et dans la spec v2. **Principe confirmé par l'utilisateur** : le polygone `routing.coverage_polygon` est la **source unique** de tout ce qui dépend de la couverture (extraits OSM, graphe, points acceptés, dalles MNT), avec **une seule tâche de fond, un seul statut, une seule zone active**. **Acquis** : MNT = option (1) (dalles = zone, jamais purgées sous le plafond), précisée au point 5. **Décidé** : la zone par défaut reste le rectangle du lot Z1, avec des plafonds relevés (D2) ; calcul géométrique exact par `shapely` (G1) ; budget de 6 tâches et 12 Gio par jour, délai de 300 s, 10 % hors des données ; RAM doublée d'abord, puis recalée sur les mesures de dune du 2026-11-26 (point 4, section « Mesures ») ; recadrage de chaque extrait avant la fusion (point 6) ; `shapely==2.2.0`, feu vert de review (point 3). Lot Z2 · Spec : [routing-zone-donnees](../specs/routing-zone-donnees.md) · Amende l'[ADR-0007](0007-moteur-routage.md) (chaîne de données, extraits fixes, `DEM_BBOX`) et renverse la règle RB-1.3b « la zone ne réduit pas le graphe du moteur » ([gpx-route-builder](../specs/gpx-route-builder.md)).
 
 ## Contexte
 
@@ -12,7 +12,7 @@ Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par
 - Contraintes existantes :
   - l'application n'a **pas** le socket Docker (il donnerait l'hôte) et elle est exposée à Internet ;
   - `update.sh` tourne sur l'hôte : verrou, dossier de graphe neuf, bascule atomique, retour arrière, outils sans réseau sauf le téléchargement ;
-  - mesures sur dune (64 Go, 12 cœurs ; ADR-0007) : environ 1,1 Go d'extraits, import `-Xmx6g` avec **6,2 Go de pic** en 154 s, fusion 41 s, service 2 Go, démarrage ≈ 3 s. Ces mesures valent pour 3 régions ; la zone par défaut gardée en tire 17 (vérification au premier build réel) ;
+  - mesures sur dune (64 Go, 12 cœurs ; ADR-0007) : environ 1,1 Go d'extraits, import `-Xmx6g` avec **6,2 Go de pic** en 154 s, fusion 41 s, service 2 Go, démarrage ≈ 3 s. Ces mesures valent pour 3 régions ; la zone par défaut gardée en tire 17 : mesures du 2026-11-26 dans la section « Mesures » ;
   - dalles Copernicus : environ 45 Mo par degré carré (docs/bibliotheque.md).
 
 ## Décision
@@ -45,7 +45,7 @@ Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par
    - `ROUTING_EXTRACT_URLS` disparaît. `ROUTING_ALLOWED_HOSTS` reste (`download.geofabrik.de`).
 4. **Plafond de ressources obligatoire**, contrôlé à l'écriture (**400** clair, rien n'est écrit), puis recontrôlé par l'hôte.
    - Taille cumulée des extraits retenus (`ROUTING_MAX_SOURCE_BYTES`) : elle borne le réseau et le disque, et elle est recontrôlée sur les octets réellement reçus ;
-   - taille du fichier recadré envoyé à l'import (`ROUTING_MAX_IMPORT_BYTES`) : c'est **elle** qui borne la RAM. Elle est contrôlée par l'hôte après l'extraction. Défaut **2,4 Go**, avec `ROUTING_IMPORT_XMX=12g` et `ROUTING_IMPORT_MEM_LIMIT=14g` (au lieu de 6g et 8g), service `-Xmx3g` dans 4 Gio : décision de l'utilisateur de **doubler la RAM** plutôt que de mesurer d'abord. Le pic de 6 244 Mio de l'ADR-0007 était plafonné par `-Xmx6g` et ne mesure pas le besoin réel. Le recadré de la zone par défaut est estimé à ≈ 1,9 Go. **Ces valeurs sont dimensionnées pour dune** (64 Go, 51 Go disponibles) ; une autre machine applique la règle de dimensionnement de la spec (ZD-4). Elles sont vérifiées au premier build réel (spec §9, V-Z2), pas mesurées avant ;
+   - taille du fichier recadré envoyé à l'import (`ROUTING_MAX_IMPORT_BYTES`) : c'est **elle** qui borne la RAM. Elle est contrôlée par l'hôte après le recadrage et la fusion. L'utilisateur a choisi de **doubler la RAM** plutôt que de mesurer d'abord (`-Xmx12g` dans 14 Gio, service `-Xmx3g` dans 4 Gio), puis coord a recalé les valeurs sur les mesures de dune du 2026-11-26, avec ≈ 30 % de marge : défaut **2,4 Go** (fichier mesuré : 1,956 Go), `ROUTING_IMPORT_XMX=8g` et `ROUTING_IMPORT_MEM_LIMIT=10g` (tas mesuré au plus 4,4 Go, pic 5,2 Gio), service `-Xmx3g` dans **5 Gio** (81 % de 4 Gio après charge : cible de 80 % non tenue), cache des extraits 8 Gio. **Ces valeurs sont dimensionnées pour dune** (64 Go, 51 Go disponibles) ; une autre machine applique la règle de dimensionnement de la spec (ZD-4) ;
    - nombre de régions (`ROUTING_MAX_REGIONS`) ;
    - nombre de dalles MNT (`DEM_MAX_TILES`) ;
    - part du polygone hors des données (`ROUTING_MAX_UNCOVERED_PCT`) ;
@@ -60,6 +60,7 @@ Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par
    - **Propriété** (revue Z2-M3) : la tâche ne compte et ne peut purger que les dalles **qu'elle a téléchargées**. Une dalle présente avant elle (ancienne `DEM_BBOX`) n'est jamais supprimée. Au-delà de `DEM_MAX_TILES`, on purge les dalles de la tâche hors de la zone active, les plus anciennes d'abord.
    - Après la bascule, les activités `dem_status = 'no_coverage'` sont remises en file ; la tâche `dem_backfill` du service est réveillée par un **marqueur en base**, puisque la commande tourne dans un autre processus.
 6. **Extraction sur l'emprise plus une marge** (`osmium extract --bbox`, stratégie `complete_ways`, défaut 10 km), et non sur le polygone.
+   - **Chaque extrait est recadré, puis les recadrés sont fusionnés** (décision de coord d'après les mesures de dune). L'ordre inverse échoue : les extraits Geofabrik voisins se chevauchent, la fusion ne dédoublonne pas ces objets, et `osmium extract` sur le fichier fusionné s'arrête sur « Node ID twice ».
    - Une arête droite sur la carte (Web Mercator) reste dans le rectangle longitude/latitude de ses extrémités. On évite ainsi l'écart entre droite de la carte et droite d'`osmium`, sans bibliothèque de géométrie.
 7. **Cache des extraits.**
    - Les `.pbf` sont gardés dans le volume, avec leur date et leur somme MD5. Les liens `*-latest` de Geofabrik redirigent (307) vers un fichier daté : l'hôte suit au plus 2 redirections, en `https`, et recontrôle l'hôte de chaque cible.
@@ -84,6 +85,23 @@ Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par
     - L'enregistrement annonce ce qu'il déclenche : régions, taille à télécharger, dalles, durée, court redémarrage.
     - Chaque étape est auditée, avec l'acteur `system`.
 
+## Mesures sur dune (ops, 2026-11-26)
+
+Premier build réel de la zone par défaut (17 régions, confirmées sur l'index réel), relevé d'ops relayé par coord.
+
+| Grandeur | Mesure | Valeur retenue (≈ 30 % de marge) |
+|---|---|---|
+| Extraits | 3,279 Go, téléchargés en 1 616 s | `ROUTING_MAX_SOURCE_BYTES` 4 Gio |
+| Recadrage extrait par extrait | 1,958 Go en 118 s | recadrer avant de fusionner (point 6) |
+| Fusion des recadrés | 1,956 Go en 74 s | `ROUTING_MAX_IMPORT_BYTES` 2,4 Go |
+| Import (`-Xmx12g` dans 14 Gio) | 287 s ; tas au plus 4,4 Go ; pic du conteneur 5,2 Gio ; pas d'OOM | `-Xmx8g` dans 10 Gio |
+| Graphe | 662 Mo | — |
+| Service (`-Xmx3g` dans 4 Gio) | repos 1,42 Gio ; 3,25 Gio après 256 appels dont 8 en parallèle (81 %) ; pic du cgroup 3,28 Gio ; p50 83 ms | `-Xmx3g` dans 5 Gio |
+| Dalles MNT (24) | 835 Mo | `DEM_MAX_TILES` 60 |
+| Disque | chaîne ≈ 7,9 Go ; ≈ 9,4 Go avec dalles et graphe en service | cache 8 Gio ; volume ≈ 18 Go |
+
+L'exemple Normandie (zone par défaut plus un lobe vers Caen) n'a pas été mesuré : ses chiffres restent des estimations (spec §3).
+
 ## Raisons
 
 - **Source unique** : quatre descriptions indépendantes de la couverture divergent forcément. Le cas Normandie le montre : la zone acceptée, le graphe et les dalles n'auraient pas couvert la même chose. Une seule zone active, dérivée d'un seul polygone et atteinte en une seule tâche, rend l'écart impossible en régime établi.
@@ -98,9 +116,9 @@ Statut : **accepté** (v2, 2026-11-26, décisions de l'utilisateur relayées par
 - **Le MNT sert aussi les activités importées**, pas seulement les traces planifiées : altitude-mnt, `dem_backfill`, bouton montagne. Le dériver de la zone de routage le lie à une fonction bêta.
   - Une instance sans constructeur de traces, ou une activité hors de la zone (vacances dans les Alpes), n'aurait plus de dalles neuves.
   - L'absence de purge protège l'existant, pas l'avenir. **Accepté par l'utilisateur** (option (1), 2026-11-26) : une installation neuve n'a de dalles que sur sa zone.
-- **La zone par défaut devient un engagement de ressources** : le premier passage avec `ROUTING_ZONE_BUILD=1` télécharge les extraits et les dalles de la zone par défaut. Le rectangle du lot Z1 est gardé (décision D2) : 17 régions, 3,28 Go, ≈ 1,9 Go recadrés (estimation), soit environ trois fois la situation actuelle (1,08 Go). La RAM d'import, la RAM du service et le disque grossissent d'autant : RAM doublée (point 4), dimensionnée pour **dune** ; une instance sur une machine plus petite doit régler ses variables. Si la vérification au premier build montre que la RAM ne tient pas sur dune, le choix de la zone par défaut revient à l'utilisateur.
+- **La zone par défaut devient un engagement de ressources** : le premier passage avec `ROUTING_ZONE_BUILD=1` télécharge les extraits et les dalles de la zone par défaut. Le rectangle du lot Z1 est gardé (décision D2) : 17 régions, 3,28 Go d'extraits, 1,956 Go après recadrage (mesures de dune). Par rapport à la situation actuelle (1,08 Go), l'import passe de 154 à 287 s, le graphe de 320 à 662 Mo, la RAM du service de 2 à 5 Gio, et le volume de routage et des dalles à ≈ 18 Go à prévoir. Ces valeurs sont dimensionnées pour **dune** : une instance sur une machine plus petite doit régler ses variables.
 - **Nouvelle dépendance binaire** `shapely` dans l'application (point 3) : une bibliothèque native de plus, GEOS, dont le suivi des failles est **manuel** (invisible pour `pip-audit` et Trivy).
-- **Côté hôte** : nouvelle unité systemd, nouvelles variables d'env (plafonds, budget, catalogue et exclusions, cache ; `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT`, `ROUTING_XMX`, `ROUTING_MEM_LIMIT` doublées pour dune), nouvelle commande Flask, nouvelle table d'état (migration nommée), nouveau réglage `routing.zone_margin_km`. `ROUTING_EXTRACT_URLS` et `DEM_BBOX` sont retirés.
+- **Côté hôte** : nouvelle unité systemd, nouvelles variables d'env (plafonds, budget, catalogue et exclusions, cache ; `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT`, `ROUTING_XMX`, `ROUTING_MEM_LIMIT`, `ROUTING_CACHE_MAX_BYTES` recalées sur les mesures de dune), nouvelle commande Flask, nouvelle table d'état (migration nommée), nouveau réglage `routing.zone_margin_km`. `ROUTING_EXTRACT_URLS` et `DEM_BBOX` sont retirés.
 - **Compose** : `opentopodata` dépend aujourd'hui de `dem-tiles` « terminé avec succès ». Or `dem-tiles` sort en erreur (code 2) sans `DEM_BBOX`. Il faut revoir le câblage du profil `dem`.
 - **Interruption du routage** de quelques secondes à chaque changement de zone, comme chaque mois aujourd'hui.
 - **Dépendance à Geofabrik** au moment du geste : son indisponibilité donne un `failed`, et l'ancienne zone reste.

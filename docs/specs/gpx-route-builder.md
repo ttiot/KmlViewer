@@ -290,6 +290,7 @@ Résultats détaillés dans l'ADR-0010. Ces exigences complètent RB-4.1 à RB-4
 | `routing.max_distance_km` | int 1–1000 | 300 |
 | ~~`routing.coverage_bbox`~~ | — | **supprimé** par le lot Z1 (2026-11-26) : la zone est le seul polygone ci-dessous ; une valeur personnalisée est reprise par migration (admin-space EF-6.20). `coverage_bbox` ne subsiste que dans la réponse de `options`, comme emprise calculée (RB-1.3b) |
 | `routing.coverage_polygon` | liste de **3 à 50** sommets `[lon, lat]` en degrés décimaux ; lon dans [−180, 180], lat dans [−85,0511 ; 85,0511] ; polygone simple ; emprise ≤ 2 000 km de côté (admin-space EF-6.20) ; `[]` refusé | les 4 sommets du rectangle Hauts-de-France + Belgique, sud-ouest, sud-est, nord-est, nord-ouest : `[[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]]` (contenu dans l'emprise que le moteur annonce : RB-1.3) |
+| `routing.zone_margin_km` | int 0–50, km | 10 (lot Z2 : marge de l'emprise d'extraction des données OSM et des dalles MNT, [routing-zone-donnees](routing-zone-donnees.md) ZD-5 ; s'applique à la prochaine construction, sans créer de demande : admin-space EF-6.22 ; sans effet avec `ROUTING_ZONE_BUILD=0`) |
 | `routing.distance_tolerance_pct` | int 1–100 | 15 |
 | `routing.snap_tolerance_m` | int 10–500 | 50 |
 | `routing.overlap_warning_pct` | int 1–100 | 25 (1 point et ≥ 3 points) |
