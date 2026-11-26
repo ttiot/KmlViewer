@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements.txt .
 # --require-hashes : chaque paquet, transitif compris, doit correspondre au verrou
-RUN pip install --no-cache-dir --user --require-hashes -r requirements.txt
+# --only-binary shapely : roue seulement, jamais de compilation de GEOS dans l'image (ADR-0013, SHP-1)
+RUN pip install --no-cache-dir --user --require-hashes --only-binary shapely -r requirements.txt
 
 # Stage 2: Production stage
 FROM python:3.15-slim

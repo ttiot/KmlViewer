@@ -60,6 +60,7 @@ SPEC = {
     'routing.health_interval_s': (INT, 15, 600, 60), 'routing.rate_limit_per_user': (INT, 1, 100, 30),
     'routing.overlap_warning_pct_2pts': (INT, 1, 100, 40), 'routing.seed_retries': (INT, 0, 2, 2),
     'smtp.port': (INT, 1, 65535, 587), 'smtp.timeout_s': (INT, 1, 60, 10),
+    'routing.zone_margin_km': (INT, 0, 50, 10),          # lot Z2, admin-space EF-6.22
 }
 OTHER = {                      # clé -> (type, défaut)
     'OIDC_AUTO_ACTIVATE': ('bool', False), 'auth.mfa_policy': ('enum', 'admins'), 'auth.forgot_enabled': ('bool', True),

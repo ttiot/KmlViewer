@@ -16,7 +16,7 @@ from app.secrets_store import SecretsError
 from app.services.routing.base import Health, RoutingError, RoutingUnavailable
 from app.services.routing.builder import BuildConfig
 from app.services.routing.graphhopper import GraphHopperProvider
-from app.services.routing import zone
+from app.services.routing import coverage_state, zone
 from app.services.routing.results import ResultStore
 from app.settings import effective
 
@@ -53,8 +53,34 @@ class RoutingRuntime:
         destination = self.destination()
         return destination is not None and outbound.allowed(self.cfg, 'routing', destination)
 
+    def requested_zone(self) -> list:
+        """Zone demandée : valeur effective du réglage (jamais vide : repli sur le défaut)."""
+        return zone.effective_zone(lambda key: effective(self.cfg, key))
+
+    def accepted_zone(self) -> list:
+        """Zone qui accepte ou refuse les points : la zone ACTIVE avec `ROUTING_ZONE_BUILD=1`, sinon la zone demandée (ZD-3)."""
+        requested = self.requested_zone()
+        if not coverage_state.enabled(self.cfg):
+            return requested
+        conn = database.connect(self.cfg['DB_PATH'])
+        try:
+            return coverage_state.accepted_zone(conn, self.cfg, requested)
+        finally:
+            conn.close()
+
+    def coverage_status(self) -> Optional[str]:
+        """Statut unique de la couverture (ZD-3) ; None si le mode zone-pilote est désactivé."""
+        if not coverage_state.enabled(self.cfg):
+            return None
+        conn = database.connect(self.cfg['DB_PATH'])
+        try:
+            return coverage_state.read(conn)['status']
+        finally:
+            conn.close()
+
     def build_config(self) -> BuildConfig:
-        return BuildConfig.from_settings(lambda key: effective(self.cfg, key))
+        accepted = self.accepted_zone()
+        return BuildConfig.from_settings(lambda key: accepted if key == 'routing.coverage_polygon' else effective(self.cfg, key))
 
     # -- fournisseur -----------------------------------------------------------------------------------------------------
     def _guard(self, destination: str) -> None:
@@ -113,6 +139,8 @@ class RoutingRuntime:
         """`ok`, `starting` (cache vide : traité comme injoignable, RB-1.2) ou `unavailable`."""
         with self._lock:
             health = self._health
+        if self.coverage_status() == 'starting':          # graphe basculé, moteur en redémarrage (ZD-3), motif mensuel compris
+            return 'starting'
         if health is None:
             return 'starting'
         return 'ok' if health['available'] else 'unavailable'
@@ -121,7 +149,7 @@ class RoutingRuntime:
         """P-TR5-9 : pour l'onglet admin des fonctions bêta (RB-1.2, RB-1.3)."""
         with self._lock:
             health = self._health
-        area = zone.effective_zone(lambda key: effective(self.cfg, key))      # toujours un polygone (RB-1.3b)
+        area = self.accepted_zone()                                           # la zone ACTIVE (inventaire n° 17)
         coverage = zone.envelope_lonlat(area)
         info = health['bbox'] if health else None
         contained = None
@@ -130,7 +158,8 @@ class RoutingRuntime:
             contained = info[0] <= lat_min and info[1] <= lon_min and info[2] >= lat_max and info[3] >= lon_max
         return {'configured': self.configured(), 'available': bool(health and health['available']),
                 'checked_at': health['checked_at'] if health else None, 'info_bbox': list(info) if info else None,
-                'coverage_contained': contained, 'profiles': list(health['profiles']) if health else []}
+                'coverage_contained': contained, 'zone_build': coverage_state.enabled(self.cfg),
+                'profiles': list(health['profiles']) if health else []}
 
     def neutral_test(self) -> dict:
         """« Tester » le moteur (EF-5.6, r4) : ok ou ko SEULEMENT, rendu à l'échéance `routing.timeout_s`."""

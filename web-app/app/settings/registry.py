@@ -304,6 +304,7 @@ _ENTRIES = (
     _int('routing.seed_retries', 2, 0, 2, 'Traces planifiées', "Essais de graine supplémentaires", unit=''),
     Setting('routing.coverage_polygon', 'polygon', [[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55]],
             'Traces planifiées', "Zone couverte (polygone)"),
+    _int('routing.zone_margin_km', 10, 0, 50, 'Traces planifiées', "Marge autour de la zone (extraction des données)", unit='km'),
     _int('routing.max_concurrent', 2, 1, 4, 'Traces planifiées', "Générations simultanées sur l'instance", unit=''),
     # Tâches de fond (EF-6.5) : relues à chaque tour de l'ordonnanceur, aucun redémarrage
     Setting('INBOX_ENABLED', 'bool', True, 'Dossier surveillé', "Surveiller le dossier d'import", env='INBOX_ENABLED'),

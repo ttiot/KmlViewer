@@ -9,6 +9,7 @@ import click
 from app.auth import users
 from app.db import connect
 from app.services import inbox_watcher, ingest_service
+from app.settings import SettingsError
 
 
 def backup_database(db_path: str, target: Path) -> None:
@@ -61,6 +62,9 @@ def _report_notification(app, failed, what: str) -> None:
 
 
 def register_cli(app) -> None:
+    from app import routing_zone_cli
+    routing_zone_cli.register(app)
+
     @app.cli.command('inbox-scan')
     def inbox_scan():
         """Passe une fois sur le dossier surveillé et ingère les nouveaux fichiers."""
@@ -290,12 +294,17 @@ def register_cli(app) -> None:
         failed = []
         try:
             touches_smtp = reset_all or (key or '').startswith('smtp.')
-            if touches_smtp:
-                failed = _notify(app, _admin_addresses(db), 'smtp_reset')          # avant : la configuration SMTP va changer
+            store = app.extensions['settings']
+            target = None if reset_all else key
             try:
-                count = app.extensions['settings'].reset(db, None if reset_all else key, actor=Actor.cli())
+                store.check_reset(db, target)              # zone refusée (ZD-4) : avant toute notification
+                if touches_smtp:
+                    failed = _notify(app, _admin_addresses(db), 'smtp_reset')      # avant : la configuration SMTP va changer
+                count = store.reset(db, target, actor=Actor.cli())
             except KeyError as exc:
                 raise click.ClickException(str(exc.args[0])) from exc
+            except SettingsError as exc:
+                raise click.ClickException(str(exc)) from exc
         finally:
             db.close()
         click.echo(f"{count} valeur(s) en base supprimée(s)")

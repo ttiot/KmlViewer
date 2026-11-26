@@ -580,6 +580,56 @@ def _coverage_polygon_only(conn: sqlite3.Connection) -> None:
                      "ON CONFLICT(id) DO UPDATE SET version = version + 1")
 
 
+def _routing_coverage_state(conn: sqlite3.Connection) -> None:
+    """
+    0018 - couverture pilotée par la zone (lot Z2, routing-zone-donnees ZD-2, ADR-0013) : table d'état à UNE ligne
+    (zone active, régions, graphe, dalles de la tâche, statut unique, demande en cours, dernier échec, réveil du MNT,
+    budget du jour) et table du catalogue Geofabrik (une ligne, remplacée en une transaction). Aucune donnée existante
+    n'est touchée ; la ligne d'état naît « sources historiques » (`active_polygon` NULL), statut `idle`. Idempotente.
+
+    `request_id` est le compteur des demandes : il ne revient jamais en arrière, la demande en cours est la dernière.
+    `request_polygon` est la zone demandée au moment de la demande (JSON). Demande prise : `claim_id`, `claimed_at` et
+    `claim_payload` (JSON : zone, emprise d'extraction, régions, dalles, marge de CETTE demande, reprise par `done`).
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS routing_coverage_state (
+            id                  INTEGER PRIMARY KEY CHECK (id = 1),
+            active_polygon      TEXT,
+            active_extract_bbox TEXT,
+            active_regions      TEXT NOT NULL DEFAULT '[]',
+            active_graph        TEXT,
+            data_date           TEXT,
+            task_tiles          TEXT NOT NULL DEFAULT '[]',
+            status              TEXT NOT NULL DEFAULT 'idle'
+                                CHECK (status IN ('idle', 'pending', 'building', 'starting', 'failed')),
+            reason              TEXT CHECK (reason IS NULL OR reason IN ('zone', 'mensuel', 'activation')),
+            status_at           TEXT,
+            request_id          INTEGER NOT NULL DEFAULT 0,
+            request_polygon     TEXT,
+            request_reason      TEXT CHECK (request_reason IS NULL OR request_reason IN ('zone', 'mensuel', 'activation')),
+            requested_at        TEXT,
+            claimed_at          TEXT,
+            claim_id            INTEGER,
+            claim_payload       TEXT,
+            last_failure_code   TEXT,
+            catalog_at          TEXT,
+            dem_wakeup          INTEGER NOT NULL DEFAULT 0 CHECK (dem_wakeup IN (0, 1)),
+            budget_day          TEXT,
+            budget_builds       INTEGER NOT NULL DEFAULT 0,
+            budget_bytes        INTEGER NOT NULL DEFAULT 0,
+            last_report_hash    TEXT,
+            invalid_report_hash TEXT
+        )""")
+    conn.execute("INSERT OR IGNORE INTO routing_coverage_state (id) VALUES (1)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS routing_catalog (
+            id        INTEGER PRIMARY KEY CHECK (id = 1),
+            content   TEXT NOT NULL,
+            sha256    TEXT NOT NULL,
+            loaded_at TEXT NOT NULL
+        )""")
+
+
 # Migrations appliquées dans l'ordre aux bases existantes ; PRAGMA user_version retient la
 # dernière passée. SCHEMA décrit l'état final de ces 5 migrations positionnelles : une base neuve le reçoit
 # directement, puis chacune est un no-op. Les tables ajoutées depuis (ADR-0012) ne sont créées que par
@@ -630,6 +680,7 @@ NAMED_MIGRATIONS: list[tuple[str, Callable[[sqlite3.Connection], None]]] = [
     ('0015_second_factors', _second_factors),
     ('0016_webauthn_credentials', _webauthn_credentials),
     ('0017_coverage_polygon_only', _coverage_polygon_only),
+    ('0018_routing_coverage_state', _routing_coverage_state),
 ]
 
 _MIGRATION_NAME = re.compile(r'[a-z0-9][a-z0-9_]{0,63}')

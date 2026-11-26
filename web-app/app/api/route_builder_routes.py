@@ -61,7 +61,7 @@ def route_builder_options():
     runtime, cfg = _runtime(), current_app.config
     db, user_id = get_db(), current_user_id()
     state = runtime.state()
-    area = zone.effective_zone(lambda key: effective(cfg, key))          # toujours un polygone (RB-1.3b)
+    area = runtime.accepted_zone()                                       # zone ACTIVE (ZD-3), sinon demandée (RB-1.3b)
     return jsonify({
         'available': state == 'ok', 'state': state, 'activities': profiles.options(),
         'default_activity': profiles.default_for(profile_service.default_activity_type(db, user_id)),
@@ -114,6 +114,8 @@ def route_builder_route_generate():
         prepared = builder.prepare(raw_points, activity, distance_km, seed, config)            # 400 : ne compte pas, aucun appel
     except builder.InvalidBuild as exc:
         raise _error(exc) from None
+    if runtime.coverage_status() == 'starting':                  # ZD-3 : bascule en cours, aucun appel au moteur
+        raise ApiError("Service en cours de redémarrage : réessaie dans une minute.", 503)
     state = runtime.state()
     # RB-1.2 : cache vide = injoignable
     if state != 'ok':

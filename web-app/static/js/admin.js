@@ -182,7 +182,8 @@
             lines.push(el('div', { class: 'diagnostic-line' }, el('span', {}, 'Zone couverte :'),
                 d.coverage_contained ? badge('oui', 'good') : badge('non', 'warn'),
                 d.coverage_contained ? null : el('span', { class: 'hint' },
-                    "la zone des traces (réglage routing.coverage_polygon) dépasse l'étendue du moteur : certains points seront refusés.")));
+                    d.zone_build ? 'graphe et zone active divergent : certains points seront refusés.'
+                        : "la zone des traces (réglage routing.coverage_polygon) dépasse l'étendue du moteur : certains points seront refusés.")));
         }
         const area = extent(d.info_bbox);
         if (area) lines.push(el('div', { class: 'diagnostic-line' }, el('span', {}, 'Étendue du moteur :'), el('span', { class: 'hint' }, area)));

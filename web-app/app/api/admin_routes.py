@@ -62,9 +62,10 @@ def admin_reset_link(user_id):
     _password_account_required(target)
     if not target['is_active']:
         raise ApiError('Compte désactivé.', 409)
-    tokens.revoke_pending(get_db(), user_id, 'reset', actor=_actor())             # un seul lien de réinitialisation à la fois
-    created = tokens.create(get_db(), 'reset', actor=_actor(), created_by=g.user['id'], target_user_id=user_id,
-                            email=target['email'], ttl=RESET_LINK_TTL, ip=request.remote_addr)
+    with write_transaction(get_db()):               # une seule transaction : jamais deux liens valides en parallèle (EF-1.8)
+        tokens.revoke_pending(get_db(), user_id, 'reset', actor=_actor())         # un seul lien de réinitialisation à la fois
+        created = tokens.create(get_db(), 'reset', actor=_actor(), created_by=g.user['id'], target_user_id=user_id,
+                                email=target['email'], ttl=RESET_LINK_TTL, ip=request.remote_addr)
     link = _public_link(created.token)
     sent = False
     mailer = current_app.extensions['mailer']
@@ -216,6 +217,8 @@ def _setting_alerts() -> list:
     alert = default_basemap_alert(cfg)
     if alert:
         alerts.append(alert)
+    from app.services.routing import coverage_state
+    alerts.extend(coverage_state.alerts(get_db(), cfg))
     return alerts
 
 
@@ -252,7 +255,7 @@ def admin_settings_patch():
         extra = {'field': exc.field}
         if exc.index is not None:
             extra['index'] = exc.index
-        raise ApiError(f"{exc.field} : {exc}", 409 if refused_policy else 400, **extra) from None
+        raise ApiError(str(exc), 409 if refused_policy else 400, **extra) from None
     return jsonify({'success': True, 'changed': sorted(changes), 'version': store.last_write_version})
 
 
@@ -279,7 +282,10 @@ def admin_settings_reset(key):
     store = current_app.config['SETTINGS_STORE']
     if key not in REGISTRY:
         raise ApiError('Réglage inconnu', 404)
-    removed = store.reset(get_db(), key, actor=_actor(), ip=request.remote_addr)
+    try:
+        removed = store.reset(get_db(), key, actor=_actor(), ip=request.remote_addr)
+    except SettingsError as exc:                                      # ex. retour au défaut refusé par les plafonds (ZD-4)
+        raise ApiError(str(exc), 400, field=exc.field) from None
     return jsonify({'success': True, 'reset': bool(removed), 'version': store.last_write_version if removed else store.version})
 
 

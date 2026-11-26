@@ -29,3 +29,6 @@ tzdata
 
 # Calcul géospatial
 numpy
+
+# Calcul exact des régions de la zone (ADR-0013, point 3) : roue seulement (--only-binary au Dockerfile), GEOS 3.14.1 embarqué
+shapely==2.2.0

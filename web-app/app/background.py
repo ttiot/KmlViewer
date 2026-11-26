@@ -30,6 +30,7 @@ from typing import Callable, Dict, List, Optional
 from app import audit
 from app.db import connect
 from app.services import dem_service, inbox_watcher, ingest_service
+from app.services.routing import coverage_state
 from app.settings import STORE_KEY, effective
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,10 @@ def default_tasks(wall_clock: Callable = lambda: datetime.now(timezone.utc)) -> 
         if not dem_service.is_enabled(cfg):
             dem_service.audit_refusal(db, cfg)      # configurée mais hors OUTBOUND_ALLOWED_HOSTS : refus audité (dédoublonné)
             return 0
+        if cfg.get('ROUTING_ZONE_BUILD'):
+            requeued = coverage_state.consume_dem_wakeup(db)    # nouvelles dalles : les activités hors couverture sont retentées
+            if requeued:
+                logger.info("Couverture MNT étendue : %d activité(s) remise(s) en file", requeued)
         return ingest_service.backfill_elevation(db, cfg)
 
     def reload_run(db, cfg):

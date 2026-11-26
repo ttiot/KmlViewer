@@ -32,7 +32,8 @@ WEB_APP = pathlib.Path(__file__).resolve().parent.parent
 CLI = Actor.cli()
 OUTBOUND = 'smtp=127.0.0.1:2525,routing=graphhopper.internal:8989,routing=other.internal:8989'
 EXPECTED_SECTIONS = ('Sécurité', 'E-mail', 'Carte', 'Traces planifiées', 'Altitude', 'Dossier surveillé', 'Stockage', 'Général')
-EXPECTED_COUNTS = {'Sécurité': 11, 'E-mail': 6, 'Carte': 5, 'Traces planifiées': 16, 'Altitude': 7, 'Dossier surveillé': 3,
+EXPECTED_COUNTS = {'Sécurité': 11, 'E-mail': 6, 'Carte': 5, 'Traces planifiées': 17,   # +1 : routing.zone_margin_km (lot Z2, EF-6.22) ; la ligne 306 d'admin-space dit encore 16 (spec à mettre à jour)
+                   'Altitude': 7, 'Dossier surveillé': 3,
                    'Stockage': 1, 'Général': 1}
 
 

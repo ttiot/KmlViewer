@@ -6,6 +6,7 @@ par `effective(cfg, clé)` ou par le store.
 """
 
 import logging
+import os
 
 from app.settings.registry import REGISTRY, SECTIONS
 from app.settings.store import SettingsConflict, SettingsError, SettingsStore
@@ -58,6 +59,7 @@ def init_settings(app) -> SettingsStore:
     store.tiles_allowed = lambda hosts: hosts <= outbound.allowlist_of(app.config).tile_hosts()
     app.config[STORE_KEY] = store
     app.extensions['settings'] = store
+    _wire_zone_build(app, store)
 
     conn = connect(app.config['DB_PATH'])
     try:
@@ -76,3 +78,39 @@ def init_settings(app) -> SettingsStore:
 
     app.before_request(refresh_per_request)
     return store
+
+
+def _wire_zone_build(app, store) -> None:
+    """Zone -> couverture (ZD-1, ZD-4) : seulement avec `ROUTING_ZONE_BUILD=1` ; sinon comportement du lot Z1."""
+    from datetime import datetime, timezone
+
+    from app.services.routing import coverage_state as coverage
+
+    if not coverage.enabled(app.config):
+        return
+    limits = coverage.Limits.from_config(app.config)
+
+    def margin() -> int:
+        return int(store.get('routing.zone_margin_km'))
+
+    def gate(conn, vertices):
+        coverage.plan_zone(vertices, coverage.load_catalog(conn), limits, margin())
+
+    def changed(conn, vertices):
+        coverage.register_request(conn, app.config, vertices, datetime.now(timezone.utc).replace(tzinfo=None))
+
+    store.zone_gate, store.zone_changed = gate, changed
+
+    if os.environ.get('FLASK_RUN_FROM_CLI') == 'true' and os.environ.get('KMLVIEWER_WATCHER') != '1':
+        return          # `flask <commande>` (dont `routing-zone`, chaque minute) : ni WARNING ni activation, au service seul
+    for legacy in ('DEM_BBOX', 'ROUTING_EXTRACT_URLS'):          # ZD-1 : ignorées avec `=1`
+        if os.environ.get(legacy):
+            logging.getLogger(__name__).warning("%s est ignorée : ROUTING_ZONE_BUILD=1 (la zone pilote les données)", legacy)
+    from app.db import connect
+    conn = connect(app.config['DB_PATH'])
+    try:
+        store.refresh(conn, force=True)
+        requested = coverage.zone.effective_zone(lambda key: store.get(key))
+        coverage.ensure_activation(conn, app.config, requested, datetime.now(timezone.utc).replace(tzinfo=None))
+    finally:
+        conn.close()

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 MASK = '[masqué]'
 SMTP_DESTINATION_KEYS = ('smtp.host', 'smtp.port')
+ZONE_KEY = 'routing.coverage_polygon'
 
 
 class SettingsError(ValueError):
@@ -67,6 +68,11 @@ class SettingsStore:
         self.destination_allowed = None
         self.tiles_allowed = None             # callable(ensemble d'hôtes) -> bool : fonds de carte contre `tiles=` (R1)
         self.secrets = None
+        # Couverture pilotée par la zone (ZD-4, ZD-3), branchée par init_settings seulement si ROUTING_ZONE_BUILD=1 :
+        # `zone_gate(conn, sommets)` lève ValueError(message) si la zone est refusée ; `zone_changed(conn, sommets)` enregistre
+        # la nouvelle demande, DANS la transaction d'écriture.
+        self.zone_gate = None
+        self.zone_changed = None
 
     @property
     def last_write_version(self) -> Optional[int]:
@@ -185,6 +191,7 @@ class SettingsStore:
             except ValueError as exc:
                 raise SettingsError(key, str(exc), getattr(exc, 'index', None)) from None
             self._check_destination(setting, clean[key])
+        self._check_zone(conn, clean)
         self._check_smtp(clean)
         self._check_map(clean)
         now = _now()
@@ -197,6 +204,8 @@ class SettingsStore:
             refusal = self._check_mfa_policy(conn, clean, actor, ip)    # E-2 : DANS la transaction d'écriture (BEGIN IMMEDIATE)
             if refusal is None:
                 self._write_locked(conn, clean, now, actor, ip)
+                if ZONE_KEY in clean and self.zone_changed is not None:
+                    self.zone_changed(conn, clean[ZONE_KEY])
                 self._written.version = self._current_version_in(conn)
         if refusal is not None:
             raise refusal
@@ -225,6 +234,7 @@ class SettingsStore:
         """Supprime la ligne en base (ou toutes) : l'env, sinon le défaut, redevient effectif. Retourne le nombre supprimé."""
         if key is not None:
             self.setting(key)
+        self.check_reset(conn, key)
         with write_transaction(conn):
             smtp_before = self._smtp_pair_in(conn)
             query = "SELECT key, value FROM settings" + ("" if key is None else " WHERE key = ?")
@@ -244,6 +254,8 @@ class SettingsStore:
                     self._clear_secrets_if_destination_changed(conn, setting, previous[removed], new, actor, ip)
             if any(k in SMTP_DESTINATION_KEYS for k in keys):
                 self._clear_smtp_secret_if_changed(conn, smtp_before, actor, ip)
+            if ZONE_KEY in keys and self.zone_changed is not None:
+                self.zone_changed(conn, self._effective_in(conn, self._registry[ZONE_KEY]))
             if keys:
                 self._bump(conn)
                 self._written.version = self._current_version_in(conn)
@@ -270,6 +282,20 @@ class SettingsStore:
                      details={'reason': 'comptes sans second facteur', 'accounts': len(missing)})
         return SettingsError('auth.mfa_policy', f"{len(missing)} compte(s) à mot de passe actif(s) n'ont aucun second facteur : "
                                                 "ils doivent d'abord en enrôler un (les codes de secours n'en sont pas un).")
+
+    def check_reset(self, conn, key: Optional[str] = None) -> None:
+        """Le retour au défaut de la zone passe ZD-4 aussi, seulement si la zone a une ligne en base."""
+        if (key is None or key == ZONE_KEY) and self.zone_gate is not None \
+                and conn.execute("SELECT 1 FROM settings WHERE key = ?", (ZONE_KEY,)).fetchone():
+            self._check_zone(conn, {ZONE_KEY: self._registry[ZONE_KEY].default})
+
+    def _check_zone(self, conn, clean: Mapping) -> None:
+        """Zone refusée par les plafonds ou la couverture des données (ZD-4) : 400, rien n'est écrit."""
+        if ZONE_KEY in clean and self.zone_gate is not None:
+            try:
+                self.zone_gate(conn, clean[ZONE_KEY])
+            except ValueError as exc:
+                raise SettingsError(ZONE_KEY, str(exc)) from None
 
     def _check_destination(self, setting: Setting, value) -> None:
         """Une destination hors OUTBOUND_ALLOWED_HOSTS est refusée à l'écriture (400, rien n'est écrit)."""

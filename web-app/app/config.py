@@ -23,6 +23,15 @@ def _env_bool(name: str, default):
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    """Entier d'environnement borné ; valeur absente, illisible ou hors bornes : le défaut (jamais une valeur dangereuse)."""
+    try:
+        value = int((os.environ.get(name) or '').strip())
+    except ValueError:
+        return default
+    return value if low <= value <= high else default
+
+
 class Config:
     """Configuration de base de l'application."""
 
@@ -101,6 +110,19 @@ class Config:
     # Liste blanche des destinations sortantes (ADR-0011) : entrées préfixées par service, ports obligatoires. Env seulement.
     OUTBOUND_ALLOWED_HOSTS = (os.environ.get('OUTBOUND_ALLOWED_HOSTS') or '').strip()
     ROUTING_BASE_URL = (os.environ.get('ROUTING_BASE_URL') or '').rstrip('/')
+
+    # Couverture pilotée par la zone (routing-zone-donnees ZD-1, ZD-4, ZD-6) : lues par l'application ET par l'hôte (même nom).
+    # `0` : comportement du lot Z1. Les plafonds sont anticipés ici ; l'hôte recontrôle avec son propre environnement et fait foi.
+    ROUTING_ZONE_BUILD = _env_bool('ROUTING_ZONE_BUILD', False)
+    ROUTING_MAX_UNCOVERED_PCT = _env_int('ROUTING_MAX_UNCOVERED_PCT', 10, 0, 50)
+    ROUTING_MAX_REGIONS = _env_int('ROUTING_MAX_REGIONS', 20, 1, 50)
+    ROUTING_MAX_SOURCE_BYTES = _env_int('ROUTING_MAX_SOURCE_BYTES', 4 * 2 ** 30, 1, 2 ** 40)
+    DEM_MAX_TILES = _env_int('DEM_MAX_TILES', 60, 1, 1000)
+    ROUTING_ZONE_SETTLE_S = _env_int('ROUTING_ZONE_SETTLE_S', 300, 0, 86400)
+    ROUTING_CATALOG_ROOT = (os.environ.get('ROUTING_CATALOG_ROOT') or 'europe').strip()
+    ROUTING_CATALOG_EXCLUDE = _env_list('ROUTING_CATALOG_EXCLUDE') or [
+        'alps', 'britain-and-ireland', 'dach', 'great-britain', 'guadeloupe', 'martinique', 'mayotte', 'reunion']
+    ROUTING_ALLOWED_HOSTS = _env_list('ROUTING_ALLOWED_HOSTS') or ['download.geofabrik.de']
 
     # Correction d'altitude : URL d'un dataset OpenTopoData,
     # ex. http://opentopodata:5000/v1/copernicus30 (vide = désactivé)
