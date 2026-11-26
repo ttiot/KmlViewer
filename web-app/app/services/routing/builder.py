@@ -64,6 +64,11 @@ class BuildConfig:
     coverage_bbox: Optional[tuple] = None        # emprise de la zone (lat_min, lon_min, lat_max, lon_max), calculée ; RB-1.3
     coverage_polygon: Optional[tuple] = None     # sommets (lon, lat) de la zone en vigueur (RB-1.3b) ; None : aucune zone
 
+    def __post_init__(self):
+        # Une emprise sans polygone désactiverait silencieusement le refus des points hors zone (RB-1.3b) : refusé
+        if self.coverage_bbox is not None and not self.coverage_polygon:
+            raise ValueError("BuildConfig : coverage_bbox sans coverage_polygon (la zone est le polygone, RB-1.3b)")
+
     def zone_vertices(self) -> Optional[list]:
         """Sommets `[lon, lat]` de la zone en vigueur ; None sans zone (RB-1.3b)."""
         if self.coverage_polygon:

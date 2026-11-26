@@ -464,7 +464,7 @@ def _coverage_polygon_only(conn: sqlite3.Connection) -> None:
         try:
             return json.loads(text)
         except (ValueError, RecursionError):
-            return None
+            return text[:2048]                      # illisible : l'audit garde le texte brut tronqué à 2 Kio, jamais None
 
     def finite(number):
         try:

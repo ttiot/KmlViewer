@@ -56,7 +56,8 @@ const RouteBuilder = (() => {
     function alertText(text) { $('rbAlert').textContent = text; }       // role="alert" : échec d'un recalcul (RB-2.7)
 
     // -- géométrie ---------------------------------------------------------------------------------------------------------
-    // Zone en vigueur : sommets [lon, lat] du polygone renvoyé par `options`, toujours présent (RB-1.3b) ; pas de repli sur un rectangle
+    // Zone en vigueur : sommets [lon, lat] du polygone renvoyé par `options`, toujours présent (RB-1.3b) ; pas de repli sur un rectangle.
+    // Sans polygone (réponse anormale), `null` : le contrôle local est OUVERT (tout point accepté), le serveur refait le contrôle (RB-1.3)
     function coverageVertices() {
         const options = state.options || {};
         return Array.isArray(options.coverage_polygon) && options.coverage_polygon.length >= 3 ? options.coverage_polygon : null;

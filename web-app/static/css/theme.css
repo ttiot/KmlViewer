@@ -1348,11 +1348,6 @@ input[type="range"] {
     border-radius: 50%;
 }
 
-.rect-handle.is-inactive {
-    opacity: 0.45;
-    pointer-events: none;
-}
-
 .chip-remove {
     border: 0;
     background: transparent;
@@ -1440,7 +1435,7 @@ input[type="range"] {
     margin: 0;
 }
 
-/* La mention et l'erreur partagent une seule ligne réservée au-dessus de la carte : la carte ne se décale jamais pendant un geste */
+/* L'erreur occupe une ligne réservée au-dessus de la carte : la carte ne se décale jamais pendant un geste */
 .polygon-editor {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

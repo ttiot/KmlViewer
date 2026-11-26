@@ -158,7 +158,7 @@ Prérequis : adresse d'`alice` validée (4.4).
 ### Étape 6 — Réglages et secrets (EF-2.2, EF-5, EF-6, CA-13b, CA-19, CA-21, CA-34)
 
 1. **Faire** : Administration › Réglages › validité des invitations = 72 h.
-   **Attendu** : source « base » ; `docker compose exec kml-viewer flask settings-list` affiche la même valeur et la même source. « Revenir au défaut » ⇒ source « défaut ».
+   **Attendu** : source « base » ; `docker compose exec kml-viewer flask settings-list` affiche la même valeur et la même source. « Rétablir la valeur par défaut → 168 h » (ou « Rétablir la valeur d'environnement → … » si la variable est définie), puis confirmation dans la page ⇒ effet immédiat, sans « Enregistrer », source « défaut ».
 2. **Faire** : une valeur hors bornes (0 h ou 1 000 h).
    **Attendu** : 400 avec le champ, lot non écrit (CA-21c).
 3. **Faire** (si le SMTP de test a une authentification, sécurité `starttls` ou `tls`) : saisir le mot de passe SMTP, enregistrer, recharger.
