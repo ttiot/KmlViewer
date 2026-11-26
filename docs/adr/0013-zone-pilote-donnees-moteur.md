@@ -98,7 +98,7 @@ Premier build réel de la zone par défaut (17 régions, confirmées sur l'index
 | Graphe | 662 Mo | — |
 | Service (`-Xmx3g` dans 4 Gio) | repos 1,42 Gio ; 3,25 Gio après 256 appels dont 8 en parallèle (81 %) ; pic du cgroup 3,28 Gio ; p50 83 ms | `-Xmx3g` dans 5 Gio |
 | Dalles MNT (24) | 835 Mo | `DEM_MAX_TILES` 60 |
-| Disque | chaîne ≈ 7,9 Go ; ≈ 9,4 Go avec dalles et graphe en service | cache 8 Gio ; volume ≈ 18 Go |
+| Disque | chaîne ≈ 7,9 Go ; ≈ 9,4 Go avec dalles et graphe en service | cache 8 Gio dans le volume de l'hôte, hors de portée du moteur ; volumes par volume : ZD-11 de la spec Z2 |
 
 L'exemple Normandie (zone par défaut plus un lobe vers Caen) n'a pas été mesuré : ses chiffres restent des estimations (spec §3).
 
@@ -116,7 +116,7 @@ L'exemple Normandie (zone par défaut plus un lobe vers Caen) n'a pas été mesu
 - **Le MNT sert aussi les activités importées**, pas seulement les traces planifiées : altitude-mnt, `dem_backfill`, bouton montagne. Le dériver de la zone de routage le lie à une fonction bêta.
   - Une instance sans constructeur de traces, ou une activité hors de la zone (vacances dans les Alpes), n'aurait plus de dalles neuves.
   - L'absence de purge protège l'existant, pas l'avenir. **Accepté par l'utilisateur** (option (1), 2026-11-26) : une installation neuve n'a de dalles que sur sa zone.
-- **La zone par défaut devient un engagement de ressources** : le premier passage avec `ROUTING_ZONE_BUILD=1` télécharge les extraits et les dalles de la zone par défaut. Le rectangle du lot Z1 est gardé (décision D2) : 17 régions, 3,28 Go d'extraits, 1,956 Go après recadrage (mesures de dune). Par rapport à la situation actuelle (1,08 Go), l'import passe de 154 à 287 s, le graphe de 320 à 662 Mo, la RAM du service de 2 à 5 Gio, et le volume de routage et des dalles à ≈ 18 Go à prévoir. Ces valeurs sont dimensionnées pour **dune** : une instance sur une machine plus petite doit régler ses variables.
+- **La zone par défaut devient un engagement de ressources** : le premier passage avec `ROUTING_ZONE_BUILD=1` télécharge les extraits et les dalles de la zone par défaut. Le rectangle du lot Z1 est gardé (décision D2) : 17 régions, 3,28 Go d'extraits, 1,956 Go après recadrage (mesures de dune). Par rapport à la situation actuelle (1,08 Go), l'import passe de 154 à 287 s, le graphe de 320 à 662 Mo, la RAM du service de 2 à 5 Gio, et le volumes du routage, de l'hôte et des dalles à ≈ 25 Go au total (volume de l'hôte ≈ 19 Go, `routing-data` ≈ 3 Go, `dem-data` ≈ 3 Go ; détail : ZD-11 de la spec Z2). Ces valeurs sont dimensionnées pour **dune** : une instance sur une machine plus petite doit régler ses variables.
 - **Nouvelle dépendance binaire** `shapely` dans l'application (point 3) : une bibliothèque native de plus, GEOS, dont le suivi des failles est **manuel** (invisible pour `pip-audit` et Trivy).
 - **Côté hôte** : nouvelle unité systemd, nouvelles variables d'env (plafonds, budget, catalogue et exclusions, cache ; `ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT`, `ROUTING_XMX`, `ROUTING_MEM_LIMIT`, `ROUTING_CACHE_MAX_BYTES` recalées sur les mesures de dune), nouvelle commande Flask, nouvelle table d'état (migration nommée), nouveau réglage `routing.zone_margin_km`. `ROUTING_EXTRACT_URLS` et `DEM_BBOX` sont retirés.
 - **Compose** : `opentopodata` dépend aujourd'hui de `dem-tiles` « terminé avec succès ». Or `dem-tiles` sort en erreur (code 2) sans `DEM_BBOX`. Il faut revoir le câblage du profil `dem`.

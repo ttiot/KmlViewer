@@ -68,10 +68,10 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 | 6 | Résultats en mémoire, « Autre proposition », régénération RB-2.7 | — | une régénération après une bascule repasse le contrôle ; un `save` d'un résultat déjà calculé reste permis | — |
 | 7 | Traces planifiées enregistrées | — | non concernées (GPX stockés) | — |
 | 8 | **Extraits OSM** | `ROUTING_EXTRACT_URLS` fixe | **résolus depuis le polygone** dans le catalogue (ZD-6) ; variable retirée | ops, dev |
-| 9 | Fichier fusionné `hdf-be-*.osm.pbf` ; défaut `GH_PBF` du compose | nom figé sur la région | `sources-AAAAMMJJ.osm.pbf` (jour des extraits, utilisé par la règle « même jour ») : fusion des extraits **déjà recadrés** (ZD-9.6) | ops |
+| 9 | Fichier fusionné `hdf-be-*.osm.pbf` ; défaut `GH_PBF` du compose | nom figé sur la région | `sources-AAAAMMJJ.osm.pbf` (jour des extraits, utilisé par la règle « même jour ») : fusion des extraits **déjà recadrés** (ZD-9.6), dans le volume de l'hôte (n° 35) | ops |
 | 10 | **Graphe** GraphHopper | extraits complets | emprise d'extraction ; `zone.json` dans son dossier | ops |
 | 11 | **Mise à jour mensuelle** | tâche distincte | **même tâche, même cycle** (`claim --monthly`, `switching`, `starting`, `done`), motif `mensuel` (ZD-3) | ops, dev |
-| 12 | **Dalles MNT** (`DEM_BBOX`, `dem-tiles`) | env fixe, lue au démarrage du profil `dem` | dérivées de l'emprise d'extraction ; `DEM_BBOX` retiré ; seules les dalles **téléchargées par la tâche** sont purgeables (ZD-8) | ops, dev |
+| 12 | **Dalles MNT** (`DEM_BBOX`, `dem-tiles`) | env fixe, lue au démarrage du profil `dem` | dérivées de l'emprise d'extraction ; `DEM_BBOX` retiré ; seules les dalles **téléchargées par la tâche** sont purgeables (ZD-8) ; gérées et bornées par `DEM_MAX_TILES` **seulement** si la variable d'environnement `DEM_URL` (jamais le réglage en base) désigne le service `opentopodata` local, sinon ni téléchargées ni comptées dans le plan de zone (ZD-1, ZD-4.3, ZD-7) | ops, dev |
 | 13 | Câblage compose du profil `dem` | `opentopodata` attend la fin sans erreur de `dem-tiles`, qui sort en code 2 sans `DEM_BBOX` | `dem-tiles` dans un profil d'outillage lancé par l'hôte ; `opentopodata` ne dépend plus de lui | ops |
 | 14 | Prise en compte des nouvelles dalles par `opentopodata` | — | **à vérifier** : sans redémarrage, ou redémarrage à la bascule | ops |
 | 15 | Activités `dem_status = 'no_coverage'` | jamais retentées | remises en file après une bascule qui ajoute des dalles (ZD-10, réveil par marqueur en base) | dev |
@@ -81,7 +81,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 | 19 | Fonds de carte, centre et zoom (`map.*`) | réglages de carte | non dépendants | — |
 | 20 | `OUTBOUND_ALLOWED_HOSTS` de l'application | — | inchangé : l'application ne contacte ni Geofabrik ni le bucket MNT | — |
 | 21 | `ROUTING_ALLOWED_HOSTS`, sortie réseau de l'hôte | `download.geofabrik.de` | idem, redirections recontrôlées (ZD-9) ; bucket Copernicus pour `dem-tiles` (existant) | ops |
-| 22 | Caches et disque | ~2,4 Go routage, dalles selon `DEM_BBOX` | cache des extraits borné (ZD-9), graphes inchangés, dalles de la tâche bornées (ZD-8) | ops |
+| 22 | Caches et disque | ~2,4 Go routage, dalles selon `DEM_BBOX` | cache des extraits borné (ZD-9), graphes inchangés, dalles de la tâche bornées (ZD-8) ; état, cache et fichiers de travail de l'hôte dans son volume, `routing-data` réduit à `graphs/` (n° 35) | ops |
 | 23 | Borne de taille de la zone | 2 000 km de côté, EF-6.20 | inchangée (règle dans EF-6.20 seulement) ; **plafonds de ressources** en plus (ZD-4) | dev |
 | 24 | Page et diagnostic de l'admin | réglage seul | panneau « Couverture en service » (ZD-12) | dev |
 | 25 | Documentation (README, `docs/exploitation.md`, `docs/bibliotheque.md`, `.env.example`, compose) | variables fixes | à réécrire ; règle de dimensionnement de la RAM d'import (ZD-4) | doc, ops |
@@ -91,9 +91,10 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 | 29 | Commande `flask routing-zone` lancée chaque minute | — | ni ordonnanceur ni fils de fond (déjà garanti par `_start_scheduler` hors service, à tester) | dev, test |
 | 30 | **RAM d'import** (`ROUTING_IMPORT_XMX`, `ROUTING_IMPORT_MEM_LIMIT`) | `-Xmx6g`, 8 Go, pour 1,08 Go | **`-Xmx8g` dans 10 Gio** (dune ; mesuré avec `-Xmx12g` : tas 4,4 Go, pic 5,2 Gio, 287 s ; V-Z2, §9) | ops |
 | 31 | **RAM du service** (`ROUTING_XMX`, `ROUTING_MEM_LIMIT`) | `-Xmx1536m` dans 2 Go, graphe de 320 Mo | graphe de **662 Mo** ; **`-Xmx3g` dans 5 Gio** (dune ; 3,28 Gio de pic après charge, 81 % de 4 Gio : limite relevée ; V-Z2) | ops |
-| 32 | **Disque** du routage (extraits, fusionné, recadré, graphes, dalles) | ~2,4 Go en régime, pic ~4 Go | chaîne **≈ 7,9 Go**, **≈ 9,4 Go** avec les dalles (835 Mo) et le graphe en service (V-Z2) ; `ROUTING_CACHE_MAX_BYTES` 8 Gio (ZD-11) ; volume à prévoir : ZD-11 | ops |
+| 32 | **Disque** du routage (extraits, fusionné, recadré, graphes, dalles) | ~2,4 Go en régime, pic ~4 Go | chaîne **≈ 7,9 Go**, **≈ 9,4 Go** avec les dalles (835 Mo) et le graphe en service (V-Z2) ; `ROUTING_CACHE_MAX_BYTES` 8 Gio dans le volume de l'hôte (ZD-11) ; volumes à prévoir, par volume : ZD-11 | ops |
 | 33 | **Dépendance** `shapely` de l'application (G1) | absente | `shapely==2.2.0` (GEOS 3.14.1 embarqué), épinglée avec empreintes, roue seulement ; feu vert de review (ADR-0013, point 3) | dev |
-| 34 | **Catalogue Geofabrik** (copie de l'application) | — | table `routing_catalog`, une ligne : contenu contrôlé, SHA-256, date ; créée par la migration `0018_routing_coverage_state` avec la table d'état (ZD-2). L'hôte garde sa propre copie dans le volume de routage (ZD-9.2) | dev |
+| 34 | **Catalogue Geofabrik** (copie de l'application) | — | table `routing_catalog`, une ligne : contenu contrôlé, SHA-256, date ; créée par la migration `0018_routing_coverage_state` avec la table d'état (ZD-2). L'hôte garde sa propre copie dans son volume (ZD-9.2, ZD-9 « Volume de l'hôte ») | dev |
+| 35 | **Volume de l'hôte** : état (budget, dernière mensuelle, dalles de la tâche, étape en suspens, copie du catalogue) et fichiers de travail (cache des extraits et MD5, recadrés, fusionné) | tout dans `routing-data`, monté en écriture par le moteur | `routing-state` (ou `routing-cache` distinct pour les gros fichiers), monté par les seuls conteneurs ponctuels de l'hôte, en lecture seule pour l'import ; jamais par `graphhopper`, `kml-viewer` ni `opentopodata` ; `routing-data` réduit à `graphs/` (ZD-9, ZD-11, §6 ; revue TZ2c-m3) | ops |
 
 ## 5. Exigences
 
@@ -104,6 +105,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
   - À `1` : ces deux variables sont **ignorées**, avec un `WARNING` si elles restent définies. **Au premier démarrage avec `1`**, si la zone active est « sources historiques » ou absente, l'application crée une demande pour la zone demandée, motif `activation`, statut `pending`. Une installation neuve et une instance existante suivent ainsi le même chemin (revue Z2-M4 a). Au démarrage, l'application **ne contrôle pas les plafonds** : le catalogue n'est pas encore chargé (il arrive par l'hôte, ZD-9.2). Le contrôle a lieu **à la prise** (`claim`), après le délai de stabilité, comme pour toute demande :
     - catalogue toujours absent ⇒ rien n'est pris, la demande reste `pending`, sans échec ;
     - plafonds dépassés ⇒ statut `failed`, code `cap`, entrée d'audit, alerte « La zone dépasse les plafonds : réduis-la ou relève les plafonds (exploitation) » ; rien n'est construit.
+  - **Dalles MNT de la tâche** : avec `1`, elles ne sont gérées (étape 8 de ZD-9, ZD-8) que si `DEM_URL` désigne le service `opentopodata` **local** du compose, c'est-à-dire si l'hôte de l'URL est exactement `opentopodata` (« **MNT géré par la tâche** »). La seule source est la **variable d'environnement** `DEM_URL` **seule**, des deux côtés (application et hôte), jamais le réglage `DEM_URL` enregistré en base dans l'onglet Altitude (revue TZ2c-m5, décision de coord). L'onglet Altitude le dit sous le champ (admin-space EF-6.23). Sinon (URL vide, API publique, autre hôte), l'étape est sautée et aucune dalle n'est téléchargée ni purgée : avec une API publique, la tâche tirerait ≈ 1 Go de dalles inutiles (tests TZ2-c).
 
 ### Zone active et statut unique
 
@@ -139,7 +141,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
   | `starting` | graphe basculé, moteur (et service d'altitude si besoin) en redémarrage | `switching` accepté |
   | `failed` | la **dernière** demande a échoué ; tout l'actif est inchangé | `failed` d'une demande **non dépassée** |
 
-  - **Recalcul** (revue Z2-M4 c) : après `switching` en code 3, après `failed` d'une demande **dépassée** et après `done`, le statut devient `idle` si la zone demandée égale l'active, sinon `pending`. Un échec d'une demande dépassée ne bloque jamais la plus récente.
+  - **Recalcul** (revue Z2-M4 c) : après `switching` en code 3, après `failed` d'une demande **dépassée**, après `done` et après l'**expiration d'un `starting`** (ZD-10, revue TZ2c-M1), le statut devient `idle` si la zone demandée égale l'active, sinon `pending`. Un échec d'une demande dépassée ne bloque jamais la plus récente.
   - L'acceptation des points (inventaire n° 1 à 4) lit la **zone active**. Avec « sources historiques » (avant la première bascule), elle lit la zone demandée, comme au lot Z1.
   - En `starting`, quel que soit le motif (mensuel compris) : `options` renvoie `available: false` et `state: "starting"` ; `route` répond **503** « Service en cours de redémarrage : réessaie dans une minute. », sans appel au moteur.
   - Un enregistrement pendant `building` ou `starting` ne change pas le statut. La demande en cours devient **dépassée**.
@@ -151,8 +153,10 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
   2. **couverture du polygone** (ZD-6) : la part des points du polygone hors de toute région candidate est au plus `ROUTING_MAX_UNCOVERED_PCT` (env, 0 à 50, défaut **10**). Sinon 400 « Zone : 23 % de la zone hors des données OSM (mer ou hors d'Europe). ». La zone par défaut est à 4,0 % (§3) ;
   3. **plafonds**, tous en env :
      - `ROUTING_MAX_REGIONS` (1 à 50, défaut **20**) : nombre de régions retenues ;
-     - `ROUTING_MAX_SOURCE_BYTES` (défaut **4 Gio**, soit 4 294 967 296 octets) : somme des tailles du catalogue. Ce plafond porte sur le **réseau et le disque** ;
-     - `DEM_MAX_TILES` (1 à 1 000, défaut **60**) : nombre de dalles de l'emprise d'extraction.
+     - `ROUTING_MAX_SOURCE_BYTES` (défaut **4 Gio**, soit 4 294 967 296 octets) : plafond du **réseau et du disque**, contrôlé deux fois :
+       - **à la prise**, sur la somme des tailles du catalogue des régions retenues (application, puis hôte au contrôle de la sortie de `claim`) ;
+       - **pendant le téléchargement**, par l'hôte, sur les **octets reçus** cumulés de la tâche, essais compris ; les extraits repris du cache ne comptent pas (ZD-9.5). C'est ce second contrôle qui fait foi quand les tailles du catalogue sont sous-estimées ;
+     - `DEM_MAX_TILES` (1 à 1 000, défaut **60**) : nombre de dalles de l'emprise d'extraction. Ce plafond ne s'applique **que si le MNT est géré par la tâche** (ZD-1) : hôte de la **variable d'environnement** `DEM_URL` **seule**, des deux côtés (application et hôte), jamais le réglage `DEM_URL` enregistré en base dans l'onglet Altitude (revue TZ2c-m5, décision de coord) exactement `opentopodata`. Sinon (URL vide, API publique, autre hôte), l'application l'**ignore** dans le plan de zone : aucune dalle n'est téléchargée, donc aucune zone n'est refusée pour ses dalles (décision de coord, 2026-11-26). L'application (plan de zone, à l'écriture et à la prise) et l'hôte (contrôle de la sortie de `claim`, plafond appliqué **seulement si `dem_enabled`**) appliquent la même règle sur la même variable : une zone acceptée à l'écriture n'est jamais refusée pour ses dalles à la prise.
      
      Messages chiffrés, par exemple « Zone trop grande : 4,6 Go d'extraits (23 régions : belgium, picardie, …) pour 4 Gio au plus. ».
      
@@ -193,8 +197,9 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
   - résultat **déterministe**, trié par identifiant ;
   - **temps** : contours préparés une fois par catalogue et gardés en mémoire du processus, associés à l'empreinte du catalogue (ZD-2) ; calcul ≤ 1 s mesuré en CI sur la zone de 2 000 km de côté ;
   - **critère de non-régression** : la zone par défaut se résout en régions **listées dans un test**, contre une copie figée du catalogue dans les données de test. La liste est établie par TZ2-a avec ce calcul exact. L'échantillonnage du §3 donne 17 régions ; si le calcul exact dépasse `ROUTING_MAX_REGIONS` ou `ROUTING_MAX_SOURCE_BYTES` par défaut, dev le signale avant de poursuivre (la spec est à revoir).
-- **ZD-7** **Dalles** : les dalles 1° × 1° Copernicus dont le carré coupe l'emprise d'extraction.
+- **ZD-7** **Dalles** : les dalles 1° × 1° Copernicus dont le carré coupe l'emprise d'extraction. Elles sont calculées dans tous les cas (diagnostic, sortie de `claim`), mais elles ne sont téléchargées, comptées contre `DEM_MAX_TILES` et purgées que si le MNT local est géré par la tâche (ZD-1, ZD-4.3, ZD-8).
 - **ZD-8** **Propriété des dalles** (revue Z2-M3 ; précision de Q-A, option 1) :
+  - **condition** : la gestion des dalles par la tâche n'a lieu que si le MNT est géré par la tâche (ZD-1) : hôte de la **variable d'environnement** `DEM_URL` **seule**, des deux côtés (application et hôte), jamais le réglage `DEM_URL` enregistré en base dans l'onglet Altitude (revue TZ2c-m5, décision de coord) exactement `opentopodata`. Un `DEM_URL` changé dans l'onglet Altitude ne change ni le plafond ni les téléchargements de dalles. Sinon, l'hôte ne télécharge, ne compte ni ne purge aucune dalle, et `done` reçoit une liste de dalles nouvelles vide ;
   - la tâche tient la liste des dalles **qu'elle a téléchargées elle-même** ;
   - une dalle présente avant elle (ancienne `DEM_BBOX`, ajout manuel) n'est **jamais** supprimée ni comptée ;
   - `DEM_MAX_TILES` borne les dalles de la zone (ZD-4.3) et les dalles de la tâche au total ;
@@ -205,7 +210,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 
 - **ZD-9** `routing/update.sh` est lancé par une minuterie systemd toutes les minutes, sous le verrou existant (verrou pris ⇒ sortie 0). À chaque passage :
   0. **étape en suspens** (revue TZ2a-n9) : si un passage précédent a laissé un `switching` ou un `done` sans réponse définitive, l'hôte le rejoue d'abord, **avant `report`** et avant toute prise, selon la conduite de ZD-10 :
-     - l'étape en suspens est notée dans le volume de routage (`pending-step.json` : numéro de demande, étape, graphe, date des données, dalles nouvelles), écrite avant l'appel et effacée sur une réponse définitive ;
+     - l'étape en suspens est notée dans le volume de l'hôte (ZD-9, « Volume de l'hôte ») : `pending-step.json` (numéro de demande, étape, graphe, date des données, dalles nouvelles), écrite avant l'appel et effacée sur une réponse définitive ;
      - **avant `report`** : un `report` du graphe neuf pendant `starting` réaligne la zone et recalcule le statut ; un `done` rejoué après lui répondrait 3, et les activités `no_coverage` ne seraient pas remises en file ;
      - le rejeu ne compte pas comme une tâche du budget ;
   1. **rapport** (`report`) du graphe en service et de son `zone.json`, plus les compteurs du budget du jour ;
@@ -214,20 +219,23 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
      - contrôle, puis copie locale, puis transmission (`catalog -`) ;
   3. **prise** : `claim`, ou `claim --monthly` si l'échéance mensuelle est passée (une demande `pending` est alors prise, motif `mensuel` ; sinon on reconstruit la zone active) ;
      - prise seulement si la demande a au moins `ROUTING_ZONE_SETTLE_S` (défaut **300 s**) : une saisie vite remplacée ne lance pas d'import (revue Z2-M2) ;
-     - **budget** (revue Z2-M2), tenu par l'hôte dans le volume de routage : au plus `ROUTING_MAX_BUILDS_PER_DAY` tâches (défaut **6**) et `ROUTING_MAX_DOWNLOAD_BYTES_PER_DAY` octets téléchargés (défaut **12 Gio**, soit 3 × `ROUTING_MAX_SOURCE_BYTES`) par jour UTC, mensuelle comprise. Au-delà : `failed --code budget`, sans relance ; une mensuelle refusée est retentée le lendemain ;
+     - **budget** (revue Z2-M2), tenu par l'hôte dans son volume (ZD-9, « Volume de l'hôte ») : au plus `ROUTING_MAX_BUILDS_PER_DAY` tâches (défaut **6**) et `ROUTING_MAX_DOWNLOAD_BYTES_PER_DAY` octets téléchargés (défaut **12 Gio**, soit 3 × `ROUTING_MAX_SOURCE_BYTES`) par jour UTC, mensuelle comprise. Au-delà : `failed --code budget`, sans relance ; une mensuelle refusée est retentée le lendemain ;
+     - **octets comptés** (revue TZ2c-m1) : tous les octets **reçus** de Geofabrik, tâche en échec comprise (extrait refusé par le MD5 ou par `cap`, coupure, échec au 3e fichier sur 4) et **essais compris**. Le compteur est écrit avant chaque téléchargement (réservation de la taille annoncée) ou après chaque fichier, jamais seulement à la fin d'une tâche réussie ;
   4. **contrôle de la sortie de `claim`**, traitée comme non fiable :
      - JSON lu par un outil ;
      - identifiants de régions présents dans la copie locale ;
      - emprise : 4 nombres au format strict, ordonnés, dans les bornes ;
      - plafonds recalculés avec la copie locale et l'environnement de l'hôte.
      
-     Échec : `failed --code other` ou `cap` ;
+     Échec :
+     - sortie **illisible** (pas du JSON, plusieurs lignes, JSON tronqué) ou sans `request_id` entier valide : **aucun `failed` possible**, faute de numéro de demande. Rien n'est construit, le passage se termine (journalisé), et la prise expire au bout de 2 h (ZD-10) ;
+     - JSON lisible avec un `request_id` valide, mais contenu refusé : `failed ID --code other` (valeur piégée, région inconnue, emprise invalide) ou `cap` (plafonds recalculés dépassés) ;
   5. **extraits** :
      - **règle du même jour** : tous les extraits d'une construction portent la **même date Geofabrik** (celle du nom de fichier daté, lue dans la cible de la redirection : `…-261124.osm.pbf`), âgée de moins de 35 jours ;
      - extraits en cache tous à la date *D* et extraits manquants publiés à la date *D* (cible de la redirection) ⇒ seuls les **manquants** sont téléchargés ; sinon tous sont retéléchargés (mensuelle : toujours) ;
      - **redirections** (revue Z2-m2) : au plus 2, `https` seulement, et l'hôte de **chaque** cible recontrôlé contre `ROUTING_ALLOWED_HOSTS` avant de télécharger (URL effective lue, pas seulement `--proto-redir`) ;
      - `.md5` vérifié ;
-     - **taille réelle** : plafond par fichier existant, plus total cumulé recontrôlé sur les octets reçus contre `ROUTING_MAX_SOURCE_BYTES`. Dépassement : arrêt, `failed --code cap` ;
+     - **taille réelle** : plafond par fichier existant, plus total cumulé recontrôlé sur les **octets reçus** pendant la tâche (essais compris, extraits du cache exclus) contre `ROUTING_MAX_SOURCE_BYTES` (ZD-4.3). Dépassement : arrêt, `failed --code cap` ;
   6. **recadrage de chaque extrait**, puis **fusion** des fichiers recadrés, dans un conteneur sans réseau (décision de coord, d'après V-Z2) :
      - chaque extrait retenu passe par `osmium extract --bbox` sur l'emprise d'extraction (stratégie `complete_ways`) ;
      - les fichiers recadrés sont fusionnés en `sources-AAAAMMJJ.osm.pbf`, le fichier envoyé à l'import ;
@@ -235,16 +243,25 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
      - mesure sur dune, zone par défaut : recadrage 118 s, fusion 74 s, fichier fusionné 1,956 Go ;
      - fichier fusionné au-delà de `ROUTING_MAX_IMPORT_BYTES` : `failed --code cap`, sans import ;
   7. **graphe** : dossier neuf, `zone.json` (polygone, emprise, marge, régions, date, demande), import ;
-  8. **dalles** : `dem-tiles` sur l'emprise d'extraction (au format `lat_min,lon_min,lat_max,lon_max` qu'il attend), sans retélécharger les dalles présentes ; liste des dalles nouvelles retenue pour ZD-8 ; purge de ZD-8. Étape sautée sans profil `dem` ;
+  8. **dalles** : `dem-tiles` sur l'emprise d'extraction (au format `lat_min,lon_min,lat_max,lon_max` qu'il attend), sans retélécharger les dalles présentes ; liste des dalles nouvelles retenue pour ZD-8 ; purge de ZD-8. Étape sautée si `DEM_URL` ne désigne pas le service `opentopodata` local (ZD-1, ZD-8) ;
   9. **bascule** :
      - **ordre obligatoire** (revue TZ2a-n10) : `switching ID` réussi (code 0) **une seule fois**, puis bascule, puis `done ID`. L'hôte n'appelle jamais `done` sans un `switching` à 0 pour la même demande. L'application accepte encore un `done` sur une demande `building` : l'hôte ne s'appuie pas sur cette tolérance ;
      - rejouer `switching` après un code 2 (ZD-10) ne fait pas un second `switching` : sur une demande déjà `starting`, l'application répond 0 sans rien changer (revue TZ2a-n6) ;
      - `switching` : code 3 ⇒ suppression du graphe neuf, des fichiers recadrés et du fusionné, extraits et dalles gardés en cache ;
      - puis bascule, redémarrage (et `opentopodata` si nécessaire) ;
+     - **bascule en échec après un `switching` à 0** (revue TZ2c-M1) : le script de bascule échoue (`graphs/current` inattendu, graphe neuf absent, volume inaccessible), rien n'a basculé. Pas de retour arrière ; graphe neuf, recadrés et fusionné supprimés ; étape en suspens effacée ; **`failed ID --code other`**. L'erreur est locale à l'hôte et ne se corrige pas seule : **aucun rejeu** ;
      - santé non atteinte ⇒ retour arrière, `failed --code health` ;
   10. **`done`** avec la liste des dalles nouvelles ; nettoyage (`ROUTING_KEEP_GRAPHS`, cache ZD-11, fichiers fusionnés sauf le dernier).
   - Une erreur aux étapes 2 à 8 donne `failed` avec son code (`catalog`, `cap`, `budget`, `download`, `merge`, `extract`, `import`, `incomplete`, `dem`, `disk`, `timeout`, `other`). Graphe et dalles en service intacts.
   - Un code de sortie de `flask routing-zone` est traité selon la conduite de ZD-10. En particulier, un code 2 sur `switching` ou `done` ne donne **jamais** `failed`, ni suppression du graphe, ni retour arrière.
+  - **Volume de l'hôte** (revues TZ2c-m3 et décision de coord du 2026-11-26) : tout ce que l'hôte relit comme sûr vit hors de portée du moteur, dans `routing-state` (ou un volume `routing-cache` distinct pour les gros fichiers, au choix d'ops) :
+    - **état** : budget du jour, date de la dernière mensuelle réussie, dalles de la tâche (ZD-8), étape en suspens (ZD-9.0), copie locale du catalogue (ZD-9.2) ;
+    - **fichiers de travail** : cache des extraits avec la date et la somme MD5 de chaque fichier (ZD-11), fichiers recadrés et fichier fusionné (ZD-9.6) ;
+    - seuls les conteneurs ponctuels de la tâche de l'hôte le montent ; le conteneur d'import le monte **en lecture seule** (il lit le fusionné) ;
+    - `graphhopper`, `kml-viewer` et `opentopodata` ne le montent jamais ;
+    - le volume de routage `routing-data` ne contient plus que `graphs/`, seul dossier que le moteur monte en écriture.
+    
+    Le moteur reçoit les requêtes de l'application : compromis, il ne peut ni réécrire l'état (budget, dalles à purger), ni déposer un faux extrait en cache, réutilisé sans nouveau téléchargement ni MD5 recontrôlé (§6).
 
 ### Dialogue avec l'application (`flask routing-zone`)
 
@@ -254,16 +271,19 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 
     | Sous-commande | 0 | 2 | 3 | 4 | autre code (1, 125 à 137 de `docker compose exec`…) |
     |---|---|---|---|---|---|
-    | `switching ID` | `starting` ⇒ bascule | **transitoire** : graphe neuf, recadrés et fusionné gardés ; aucun `failed` ; fin du passage ; `switching` rejoué au passage suivant (ZD-9 étape 0), puis bascule | demande dépassée ⇒ suppressions de ZD-9.9 | désactivé ⇒ graphe neuf supprimé, fin du passage | comme 2 (décision de coord, voir plus bas) |
+    | `switching ID` | `starting` ⇒ bascule ; bascule en échec ⇒ `failed --code other`, sans rejeu (ZD-9.9) | **transitoire** : graphe neuf, recadrés et fusionné gardés ; aucun `failed` ; fin du passage ; `switching` rejoué au passage suivant (ZD-9 étape 0), puis bascule | demande dépassée ⇒ suppressions de ZD-9.9 | désactivé ⇒ graphe neuf supprimé, fin du passage | comme 2 (décision de coord, voir plus bas) |
     | `done ID` | tâche close | **transitoire** : graphe en service gardé ; ni `failed` ni retour arrière ; fin du passage ; `done` rejoué au passage suivant, avant `report` (ZD-9 étape 0) | dépassée : rien à défaire, `report` réaligne | fin du passage, rien à défaire | comme 2 (décision de coord) |
     | `catalog -`, `claim`, `report`, `failed` | succès | sens actuel (ZD-9) | sens actuel | fin du passage | **`failed ID --code other`** si l'hôte tient une demande prise dont le `switching` n'a pas encore répondu 0 ; sinon (aucun numéro tenu, ou `failed` lui-même) fin du passage, journalisée |
 
-    - Rejeu borné par la **prise** : une étape en suspens dont la prise date de plus de 2 h est abandonnée et `pending-step.json` effacé. Un `switching` abandonné laisse l'application reprendre la demande (prise expirée, ZD-10 `claim`), et le graphe neuf non basculé est supprimé. Un `done` abandonné laisse le graphe en service, et `report` réaligne la zone active.
+    - Rejeu borné par la **prise** : une étape en suspens dont la prise date de plus de 2 h est abandonnée et `pending-step.json` effacé :
+      - étape `switching` : l'hôte appelle d'abord **`failed ID --code timeout`** (revue TZ2c-M1). Une demande dépassée répond 3, sans effet ; une demande en `building` ou `starting` passe en `failed`. Puis le graphe neuf non basculé est supprimé ;
+      - étape `done` : le graphe en service est gardé, `report` réaligne la zone active (et recalcule le statut) ;
+      - dans tous les cas, l'expiration côté application (ci-dessous) reste le dernier recours.
     - Dans la séquence de ZD-9, `catalog -`, `claim` et `report` ne sont jamais appelés pendant qu'une demande est tenue sans `switching` à 0 : un 2 sur `switching` termine le passage, et la prise ne se fait qu'après `report`. La branche `failed --code other` de la dernière ligne est donc une **garde** contre un changement d'ordre, sans cas atteignable aujourd'hui.
-    - `failed` n'est jamais appelé en réponse à son propre échec : un `failed` sans réponse 0 ou 3 est journalisé, et la prise expire au bout de 2 h.
+    - `failed` n'est jamais appelé en réponse à son propre échec : un `failed` sans réponse 0 ou 3 est journalisé, et la prise expire au bout de 2 h, en `building` comme en `starting`.
     - **Décision de coord (2026-11-26)** : un code hors 0/2/3/4 sur `switching` ou `done` est traité comme un 2 (transitoire, rejeu), car une panne du conteneur de l'application ne doit pas faire perdre le graphe, neuf ou en service. En dernier recours, la prise expire au bout de 2 h.
     - La garde `failed --code other` reste écrite (décision de coord).
-  - **Contenus volumineux** (catalogue, `zone.json`) : passés par l'**entrée standard** (`catalog -`, `report --zone -`) (revue Z2-M1). Taille lue et bornée **avant** toute analyse : catalogue ≤ **16 Mio** (index complet : 3,5 Mo), `zone.json` ≤ **64 Kio**. Au-delà : code 2, rien n'est lu. **Aucun montage n'est ajouté** au service `kml-viewer`, qui reste en `read_only` sans le volume de routage.
+  - **Contenus volumineux** (catalogue, `zone.json`) : passés par l'**entrée standard** (`catalog -`, `report --zone -`) (revue Z2-M1). Taille lue et bornée **avant** toute analyse : catalogue ≤ **16 Mio** (index complet : 3,5 Mo), `zone.json` ≤ **64 Kio**. Au-delà : code 2, rien n'est lu. **Aucun montage n'est ajouté** au service `kml-viewer`, qui reste en `read_only` sans le volume de routage ni celui de l'hôte.
   - **Format d'entrée de `catalog -`** (choix de dev, TZ2-a) : le JSON de l'**index Geofabrik** (`index-v1.json`), tel quel, enrichi par l'hôte :
 
     ```json
@@ -287,8 +307,22 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 
   Tous les arguments sont contrôlés : nom `graph-` suivi de 14 chiffres, date ISO, nombres finis, code dans la liste. Une valeur invalide donne 2, et rien n'est écrit.
 
-- **ZD-11** **Cache des extraits** : volume de routage, avec la date et la somme MD5 de chaque fichier. Purge : les extraits absents de la sélection active et âgés de plus de 35 jours, puis les plus anciens tant que le total dépasse `ROUTING_CACHE_MAX_BYTES` (défaut **8 Gio**, soit la sélection active de la zone par défaut, 3,28 Go, plus une sélection de même taille pour revenir à une zone précédente sans tout retélécharger, avec ≈ 30 % de marge). Les extraits de la sélection active ne sont jamais purgés.
-  - **Volume à prévoir** pour le routage et les dalles sur dune : ≈ 9,4 Go mesurés avec le seul cache de la sélection active (V-Z2), plus ≈ 4,7 Go si le cache est plein, soit ≈ 14 Go ; avec ≈ 30 % de marge, **≈ 18 Go** (validé par coord le 2026-11-26, comme le cache de 8 Gio ; dune a 334 Go libres ; à reporter par doc).
+  - **Expiration d'une prise** (revue TZ2c-M1), vérifiée à chaque `claim` et par « Tâche bloquée ? » (ZD-12) :
+    - `building` depuis plus de 2 h **après la prise** (`claimed_at`) ⇒ prise abandonnée, `pending` (audit `routing.claim_expired`), comme aujourd'hui ;
+    - `starting` depuis plus de 2 h **après le `switching`** (`status_at`) ⇒ prise abandonnée, **recalcul** (ZD-3 ; audit `routing.claim_expired`). L'application sort ainsi du 503 de `starting` même si l'hôte ne rappelle jamais ;
+    - un `done` ou un `failed` arrivé après l'expiration répond 3, sans effet.
+
+- **ZD-11** **Cache des extraits** : volume de l'hôte (ZD-9, « Volume de l'hôte »), jamais monté par le moteur, avec la date et la somme MD5 de chaque fichier. Purge : d'abord les fichiers `.part` (restes d'un téléchargement interrompu) âgés de plus de **24 h**, jamais comptés comme extraits ; puis les extraits absents de la sélection active et âgés de plus de 35 jours, puis les plus anciens tant que le total dépasse `ROUTING_CACHE_MAX_BYTES` (défaut **8 Gio**, soit la sélection active de la zone par défaut, 3,28 Go, plus une sélection de même taille pour revenir à une zone précédente sans tout retélécharger, avec ≈ 30 % de marge). Les extraits de la sélection active ne sont jamais purgés.
+  - **Volumes à prévoir sur dune**, d'après les mesures V-Z2, avec ≈ 30 % de marge :
+
+    | Volume | Contenu | Pic mesuré ou calculé | À prévoir |
+    |---|---|---|---|
+    | volume de l'hôte (`routing-state`, ou `routing-cache`) | cache des extraits plein (8 Gio ≈ 8,6 Go) ; pendant une construction : recadrés 1,96 Go, fusionné neuf 1,96 Go, dernier fusionné gardé 1,96 Go ; état (quelques Mo) | ≈ 14,5 Go | **≈ 19 Go** |
+    | `routing-data` (`graphs/` seul) | `ROUTING_KEEP_GRAPHS` = 2 graphes gardés, plus le graphe neuf pendant l'import : 3 × 0,66 Go | ≈ 2 Go | **≈ 3 Go** |
+    | `dem-data` | 835 Mo mesurés (24 dalles) ; au plafond `DEM_MAX_TILES` = 60 : ≈ 2,1 Go | ≈ 2,1 Go | **≈ 3 Go** |
+    | **Total** | | ≈ 18,6 Go | **≈ 25 Go** |
+
+    **Validé par coord le 2026-11-26.** Ce total remplace les ≈ 18 Go validés plus tôt le même jour, qui sous-comptaient. Le cache plein ajoute 5,3 Go et non 4,7 (8 Gio = 8,6 Go). Le dernier fusionné gardé, le second graphe gardé et les dalles au plafond n'étaient pas comptés. dune a 334 Go libres. À reporter par doc.
 
 ### Administration
 
@@ -299,7 +333,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
   - consommation des plafonds (« 1,1 Go / 2 Go · 3 régions / 8 · 24 dalles / 60 ») et du budget du jour ;
   - boutons :
     - `failed` : « Réessayer » et « Revenir à la zone active » ;
-    - `building` depuis plus de 2 h : « Tâche bloquée ? » ;
+    - `building` depuis plus de 2 h après la prise, ou `starting` depuis plus de 2 h après le `switching` : « Tâche bloquée ? » (revue TZ2c-M1) ;
   - diagnostic de l'inventaire n° 17 ;
   - alertes **dédoublonnées** comme les refus de sortie (`outbound._refusals`) : une alerte par cause et par contenu, effacée quand la cause disparaît ;
   - API `GET /api/admin/routing/coverage` et `POST …/coverage/retry` : admin seulement, 403 sinon, 404 si `=0`.
@@ -320,6 +354,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 - Catalogue (document tiers) : taille bornée avant analyse, hôte, chemin, extension, sous-arbre et exclusions contrôlés. Ses contours vont à GEOS (code natif, via `shapely`) : au plus **10 000 sommets par région** et **500 000 au total** (relevé du 2026-11-26 : 1 543 au plus), coordonnées finies et dans les bornes, sinon catalogue refusé et ancien catalogue gardé.
 - Charge bornée : par tâche (plafonds), par jour (budget), par saisie (délai de stabilité), une tâche à la fois, aucune relance automatique. Le volume tiré de Geofabrik reste borné par jour, ce qui respecte sa politique d'usage.
 - Destruction de fichiers de l'hôte : seules les dalles et extraits **créés par la tâche** sont purgeables (ZD-8, ZD-11).
+- **État et fichiers de l'hôte hors de portée du moteur** (revue TZ2c-m3 ; décision de coord) : budget, dernière mensuelle, dalles de la tâche, étape en suspens, copie du catalogue, **cache des extraits et leurs MD5, recadrés et fusionné** sont dans le volume de l'hôte, que ni `graphhopper`, ni `kml-viewer`, ni `opentopodata` ne montent (ZD-9). Le moteur ne monte en écriture que `graphs/`. Un moteur compromis ne peut ni remettre le budget à zéro (mensuelles et téléchargements en boucle), ni forger la liste des dalles à purger (suppression de dalles présentes avant la tâche, dans `dem-data`), ni déposer un faux extrait en cache ou un faux fusionné envoyé à l'import.
 
 ## 7. Cas limites
 
@@ -329,7 +364,8 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 - **Budget atteint** : `failed --code budget`. Une nouvelle saisie est refusée à la prise jusqu'au lendemain (le panneau le dit).
 - **Geofabrik indisponible, ou redirection vers un autre hôte** : `failed --code download`, couverture actuelle gardée.
 - **Agrégat nouveau dans l'index** (feuille sans `shp`) : `WARNING` de l'hôte ; tant qu'il n'est pas exclu, il peut gagner des points en mer.
-- **Arrêt de l'hôte** : prise expirée au bout de 2 h, puis reprise ; en `starting`, `report` réaligne.
+- **Arrêt de l'hôte** : prise expirée au bout de 2 h, puis reprise ; en `starting`, `report` réaligne, et sans `report` ni `done` le `starting` expire au bout de 2 h (recalcul, fin du 503).
+- **Bascule en échec après un `switching` à 0** : `failed --code other`, couverture actuelle gardée, alerte ; aucun 503 au passage suivant.
 - **Retour arrière manuel par ops** : `report` réaligne (une entrée d'audit).
 - **Point dans la zone active mais en mer ou dans un trou des données** : 422, comme aujourd'hui.
 - **`ROUTING_ZONE_BUILD` repassé de 1 à 0** : retour à `ROUTING_EXTRACT_URLS` et `DEM_BBOX` ; le graphe reste recadré jusqu'à la mise à jour suivante (à documenter, ops).
@@ -340,13 +376,13 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 |---|---|
 | CA-ZD1 [CI] (ZD-1) | `=0` : enregistrer une zone ⇒ `options` la renvoie aussitôt ; table non écrite ; `claim` ⇒ sortie 4 ; API ⇒ 404 ; CA-R49 et CA-85 inchangés. `=1` avec `DEM_BBOX` défini ⇒ `WARNING`. Premier démarrage avec `=1` et graphe « sources historiques » ⇒ demande motif `activation`, `pending`, sans contrôle des plafonds. Puis, horloge injectée après `ROUTING_ZONE_SETTLE_S` : sans catalogue, `claim` ⇒ `{}` et toujours `pending` ; catalogue chargé et zone au-delà des plafonds, `claim` ⇒ `{}`, `failed` `cap`, une entrée d'audit et l'alerte. |
 | CA-ZD2 [CI] (ZD-3, ZD-4) | Catalogue de test figé (contours et tailles), zone active = défaut. `PATCH` d'une zone Z ⇒ 200, `pending` ; `options` ⇒ zone active ; un point de l'active hors de Z ⇒ accepté. Cas inverse ⇒ 400, 0 appel. Zone à 23 % hors des contours ⇒ 400 avec le pourcentage. Plafonds dépassés (régions, octets, dalles) ⇒ 400 chiffré, version inchangée. Catalogue absent ⇒ 400. `PATCH` de la zone active ⇒ `idle`. |
-| CA-ZD3 [CI] (ZD-5, ZD-6, ZD-7) | Emprise d'extraction de la zone par défaut Z1 = `[1.2053, 48.74, 6.5647, 51.64]` exactement, 24 dalles ; bornes respectées ; emprise contenant tous les points des arêtes tracées. Résolution sur le polygone : une zone en U dont l'échancrure couvre une région C ne retient pas C. Agrégat exclu jamais retenu ; un morceau couvert par deux régions va à la plus petite ; un liseré sous 0,01 % de la zone ne retient pas sa région ; une petite région de 10 km² entièrement dans une zone de 50 km × 50 km est retenue (pas d'effet de grille). Même zone ⇒ mêmes régions, quel que soit l'ordre des sommets. Zone par défaut ⇒ la liste de régions du test, dans les plafonds par défaut. Zone de 2 000 km de côté ⇒ calcul ≤ 1 s. `shapely` présent dans `requirements.txt` avec empreintes ; le `pip install` du Dockerfile porte `--only-binary shapely` (revue SHP-1) ; un test fige `shapely.__version__ == "2.2.0"` et `shapely.geos_version == (3, 14, 1)` ; l'image amd64 et arm64 se construit en CI. |
-| CA-ZD4 [CI] (ZD-3, ZD-10) | Horloge injectée. `claim` avant `ROUTING_ZONE_SETTLE_S` ⇒ `{}` ; après ⇒ JSON, `building` ; second `claim` ⇒ `{}`. Nouvelle zone puis `switching` de l'ancienne ⇒ 3 et `pending` ; retour à la zone active puis `switching` ⇒ 3 et `idle`. `failed` d'une demande dépassée ⇒ recalcul, la plus récente reste prenable. `failed` de la dernière ⇒ `failed`, `claim` ⇒ `{}` jusqu'à « Réessayer ». `claim --monthly` ⇒ motif `mensuel`, puis `switching` ⇒ `starting`, `done` ⇒ `idle`, aucune alerte de réalignement. `done` avec dalles nouvelles ⇒ `no_coverage` remis en file, marqueur lu au tick suivant (`tick(now)`). Prise de plus de 2 h ⇒ reprise. Arguments invalides ⇒ 2. `catalog -` de 16 Mio + 1 octet ⇒ 2 sans analyse ; URL `http://`, autre hôte, `..`, taille négative, contour de 10 001 sommets, coordonnée `NaN` ⇒ 2, ancien catalogue gardé. La commande ne démarre aucun fil (`threading.enumerate()` inchangé). |
+| CA-ZD3 [CI] (ZD-4.3, ZD-5, ZD-6, ZD-7) | Emprise d'extraction de la zone par défaut Z1 = `[1.2053, 48.74, 6.5647, 51.64]` exactement, 24 dalles ; bornes respectées ; emprise contenant tous les points des arêtes tracées. Résolution sur le polygone : une zone en U dont l'échancrure couvre une région C ne retient pas C. Agrégat exclu jamais retenu ; un morceau couvert par deux régions va à la plus petite ; un liseré sous 0,01 % de la zone ne retient pas sa région ; une petite région de 10 km² entièrement dans une zone de 50 km × 50 km est retenue (pas d'effet de grille). Même zone ⇒ mêmes régions, quel que soit l'ordre des sommets. Zone par défaut ⇒ la liste de régions du test, dans les plafonds par défaut. Zone de 2 000 km de côté ⇒ calcul ≤ 1 s. `shapely` présent dans `requirements.txt` avec empreintes ; le `pip install` du Dockerfile porte `--only-binary shapely` (revue SHP-1) ; un test fige `shapely.__version__ == "2.2.0"` et `shapely.geos_version == (3, 14, 1)` ; l'image amd64 et arm64 se construit en CI. `DEM_MAX_TILES` = 10 et zone de 24 dalles : `DEM_URL=http://opentopodata:5000/v1/copernicus30` ⇒ refus chiffré sur les dalles ; `DEM_URL` vide, `https://api.opentopodata.org/v1/…` ou `http://opentopodata.example:5000/…` ⇒ aucun refus pour les dalles. Variable d'environnement vide et réglage `DEM_URL` en base = `http://opentopodata:5000/…` ⇒ aucun refus (la base n'est pas lue) ; l'inverse (variable locale, réglage en base vide) ⇒ refus chiffré. |
+| CA-ZD4 [CI] (ZD-3, ZD-10) | Horloge injectée. `claim` avant `ROUTING_ZONE_SETTLE_S` ⇒ `{}` ; après ⇒ JSON, `building` ; second `claim` ⇒ `{}`. Nouvelle zone puis `switching` de l'ancienne ⇒ 3 et `pending` ; retour à la zone active puis `switching` ⇒ 3 et `idle`. `failed` d'une demande dépassée ⇒ recalcul, la plus récente reste prenable. `failed` de la dernière ⇒ `failed`, `claim` ⇒ `{}` jusqu'à « Réessayer ». `claim --monthly` ⇒ motif `mensuel`, puis `switching` ⇒ `starting`, `done` ⇒ `idle`, aucune alerte de réalignement. `done` avec dalles nouvelles ⇒ `no_coverage` remis en file, marqueur lu au tick suivant (`tick(now)`). Prise de plus de 2 h ⇒ reprise. `starting` depuis plus de 2 h après le `switching` ⇒ `claim` le fait expirer (recalcul, audit `routing.claim_expired`), puis `done` de cette demande ⇒ 3 ; « Tâche bloquée ? » accepté en `starting` au-delà de 2 h, refusé avant. Arguments invalides ⇒ 2. `catalog -` de 16 Mio + 1 octet ⇒ 2 sans analyse ; URL `http://`, autre hôte, `..`, taille négative, contour de 10 001 sommets, coordonnée `NaN` ⇒ 2, ancien catalogue gardé. La commande ne démarre aucun fil (`threading.enumerate()` inchangé). |
 | CA-ZD5 [CI] (ZD-3) | `starting` (motifs `zone` et `mensuel`) ⇒ `options` `available: false`, `state: "starting"` ; `route` ⇒ 503, 0 appel. |
 | CA-ZD6 [CI] (ZD-10 `report`, ZD-12, ZD-13) | Active A ; `report` de B ⇒ active B, une entrée d'audit ; même `report` 10 fois ⇒ aucune entrée de plus. Zone rapportée invalide 10 fois ⇒ une alerte, un `WARNING` par contenu. `--historic` ⇒ acceptation sur la zone demandée. `/info` hors de l'emprise active ⇒ alerte « graphe et zone active divergent ». |
 | CA-ZD7 [CI] (ZD-8) | Dalles présentes avant la tâche (100, hors zone) + `DEM_MAX_TILES` = 60 ⇒ aucune supprimée ni comptée. Dalles de la tâche au-delà du plafond ⇒ seules celles hors de la zone active, plus anciennes d'abord. |
 | CA-ZD8 [CI] (ZD-12) | Libellés de chaque statut et motif, budget et plafonds affichés, boutons selon le statut ; non admin ⇒ 403 ; « Revenir à la zone active » ⇒ réglage = zone active, `idle`, audit admin. |
-| CA-ZD9 [hôte] (ZD-9, ZD-10 conduite de l'hôte) | Avec une commande `flask` simulée : sortie de `claim` contenant `$(touch /tmp/x)`, `;`, un retour à la ligne, une région inconnue de la copie locale ou des plafonds dépassés ⇒ aucun fichier créé, aucune construction, `failed` appelé. Redirection vers un hôte hors liste ⇒ aucun téléchargement, `failed --code download`. Total reçu au-delà de `ROUTING_MAX_SOURCE_BYTES` (tailles du catalogue sous-estimées) ⇒ arrêt, `cap`. Fichier fusionné au-delà de `ROUTING_MAX_IMPORT_BYTES` ⇒ pas d'import, `cap`. 7e tâche du jour ⇒ `budget`. Cache à la date *D* ⇒ aucun téléchargement ; un extrait nouveau publié à *D* ⇒ lui seul téléchargé ; publié à une autre date ⇒ tous retéléchargés. Fusionné de 2,4 Go + 1 octet (défaut) ⇒ `cap`, pas d'import. Recadrage fait extrait par extrait, avant la fusion (aucun `osmium extract` sur le fichier fusionné). Verrou tenu ⇒ sortie 0 sans `claim`. `switching` simulé en code 2 ⇒ graphe neuf gardé, aucun `failed`, `pending-step.json` présent ; passage suivant ⇒ `switching` rejoué avant `report`, puis bascule et `done`. `done` simulé en code 2 ⇒ graphe en service gardé, ni `failed` ni retour arrière ; passage suivant ⇒ `done` rejoué **avant** `report`. Journal des appels : jamais de `done` sans `switching` à 0 pour le même numéro, jamais deux `switching` à 0 pour une même demande hors rejeu. Étape en suspens dont la prise a plus de 2 h ⇒ abandonnée. Code 1 ou 137 sur `catalog -`, `report` ou `claim` ⇒ fin du passage, aucune construction, aucun `failed` (pas de numéro tenu). |
+| CA-ZD9 [hôte] (ZD-9, ZD-10 conduite de l'hôte) | Avec une commande `flask` simulée : sortie de `claim` non JSON (texte, deux lignes, JSON tronqué) ou sans `request_id` valide ⇒ aucun fichier créé, aucune construction, **aucun `failed`** (pas de numéro), fin du passage ; la prise expire au bout de 2 h. JSON valide avec `request_id`, mais valeur contenant `$(touch /tmp/x)`, `;` ou un retour à la ligne, région inconnue de la copie locale ⇒ aucun fichier créé, aucune construction, `failed --code other` ; plafonds dépassés ⇒ `failed --code cap`. `DEM_URL` vide ou sur un autre hôte qu'`opentopodata` ⇒ aucun appel à `dem-tiles`, aucune purge de dalles, `done` avec une liste vide ; avec `DEM_URL` vide, zone de 61 dalles (`DEM_MAX_TILES` = 60) ⇒ prise acceptée par l'hôte, pas de `cap`. Redirection vers un hôte hors liste ⇒ aucun téléchargement, `failed --code download`. Total reçu au-delà de `ROUTING_MAX_SOURCE_BYTES` (tailles du catalogue sous-estimées) ⇒ arrêt, `cap`. Fichier fusionné au-delà de `ROUTING_MAX_IMPORT_BYTES` ⇒ pas d'import, `cap`. 7e tâche du jour ⇒ `budget`. `.part` de plus de 24 h supprimé au passage, `.part` plus récent gardé. Cache à la date *D* ⇒ aucun téléchargement ; un extrait nouveau publié à *D* ⇒ lui seul téléchargé ; publié à une autre date ⇒ tous retéléchargés. Fusionné de 2,4 Go + 1 octet (défaut) ⇒ `cap`, pas d'import. Recadrage fait extrait par extrait, avant la fusion (aucun `osmium extract` sur le fichier fusionné). Verrou tenu ⇒ sortie 0 sans `claim`. `switching` simulé en code 2 ⇒ graphe neuf gardé, aucun `failed`, `pending-step.json` présent ; passage suivant ⇒ `switching` rejoué avant `report`, puis bascule et `done`. `done` simulé en code 2 ⇒ graphe en service gardé, ni `failed` ni retour arrière ; passage suivant ⇒ `done` rejoué **avant** `report`. Journal des appels : jamais de `done` sans `switching` à 0 pour le même numéro, jamais deux `switching` à 0 pour une même demande hors rejeu. Étape en suspens dont la prise a plus de 2 h ⇒ abandonnée. Code 1 ou 137 sur `catalog -`, `report` ou `claim` ⇒ fin du passage, aucune construction, aucun `failed` (pas de numéro tenu). Script de bascule simulé en échec après un `switching` à 0 ⇒ graphe neuf supprimé, `failed --code other`, aucun rejeu, aucun 503 au passage suivant. Étape `switching` de plus de 2 h ⇒ `failed --code timeout` puis effacement. Extrait refusé par le MD5 au 3e fichier sur 4 ⇒ octets des fichiers reçus **et** des essais comptés au budget du jour. `docker compose config` : le volume de l'hôte absent des montages de `graphhopper`, `kml-viewer` et `opentopodata` ; import avec ce volume en lecture seule ; après une construction, `routing-data` ne contient que `graphs/` (ni extrait, ni `.md5`, ni recadré, ni fusionné). |
 | CA-ZD10 [recette dune] | (a) Zone réduite à la métropole lilloise ⇒ graphe reconstruit, `/info` dans l'emprise, Lille routé, Liège 400 ; durée, pic de RAM, **interruption** relevés. (b) Zone par défaut plus Normandie, polygone `[[1.35, 48.83], [6.42, 48.83], [6.42, 51.55], [1.35, 51.55], [1.35, 49.75], [-0.5, 49.4], [-0.5, 49.05], [1.35, 49.05]]` ⇒ `basse-normandie` ajoutée (≈ 3,4 Go, §3), seul extrait téléchargé si la date Geofabrik n'a pas changé, Caen routé, 8 dalles ajoutées, activité `no_coverage` à Caen corrigée ensuite ; taille recadrée, pic de RAM et disque relevés (V-Z2). (c) Import tué ⇒ couverture précédente, `failed`. (d) Retour à la zone par défaut ⇒ cache réutilisé. (e) Mensuelle ⇒ même cycle, 503 annoncé, zone active conservée. (f) Instance existante passée à `=1` ⇒ demande `activation` construite au premier passage. |
 
 ## 9. Décisions
@@ -373,7 +409,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 | Graphe | 662 Mo (560 Mo estimés) | — |
 | Service, `-Xmx3g` dans 4 Gio | repos 1,42 Gio ; après 256 appels dont 8 en parallèle 3,25 Gio, soit **81 %** (cible < 80 % non tenue) ; pic du cgroup 3,28 Gio ; p50 83 ms | limite relevée à 5 Gio (66 %) |
 | Dalles MNT (24) | 835 Mo | `DEM_MAX_TILES` 60 gardé |
-| Disque | chaîne ≈ 7,9 Go ; ≈ 9,4 Go avec dalles et graphe en service | cache relevé à 8 Gio ; volume ≈ 18 Go (ZD-11) |
+| Disque | chaîne ≈ 7,9 Go ; ≈ 9,4 Go avec dalles et graphe en service | cache relevé à 8 Gio, dans le volume de l'hôte ; volumes ≈ 25 Go au total, détail par volume dans ZD-11 (validé par coord) |
 
 Les valeurs de ZD-4 et de ZD-11 en découlent, avec ≈ 30 % de marge. L'exemple Normandie (CA-ZD10 b) n'a pas été mesuré : ses chiffres du §3 restent des estimations. À reporter dans `docs/exploitation.md` (doc).
 
@@ -393,14 +429,20 @@ Les valeurs de ZD-4 et de ZD-11 en découlent, avec ≈ 30 % de marge. L'exemple
 | Z2-m5 | Audit et alertes par changement, dédoublonnés (ZD-10, ZD-12, ZD-13) |
 | TZ2a-n9 (review TZ2-a ; contrat de l'hôte = TZ2-c, et non TZ2-b comme écrit dans REVIEW.md) | Code 2 transitoire sur `switching` et `done` : rejeu, jamais `failed` ni suppression du graphe ; étape en suspens rejouée avant `report` ; code inattendu ailleurs ⇒ `failed --code other` (ZD-9 étape 0, ZD-10 « Conduite de l'hôte », CA-ZD9) |
 | TZ2a-n10 (review TZ2-a ; TZ2-c) | Ordre obligatoire : `switching` à 0 une fois, puis `done` ; la tolérance de l'application n'est pas utilisée (ZD-9.9) |
+| TZ2c-M1 (review TZ2-c) | Bascule en échec après `switching` à 0 ⇒ `failed --code other` sans rejeu (ZD-9.9) ; étape `switching` abandonnée ⇒ `failed --code timeout` (ZD-10) ; expiration et « Tâche bloquée ? » valent aussi pour `starting`, 2 h après le `switching` (ZD-3, ZD-10, ZD-12) |
+| TZ2c-m1 (review TZ2-c) | Budget en octets : tous les octets reçus, tâche en échec et essais compris (ZD-9.3) |
+| TZ2c-m3 (review TZ2-c) | État, cache des extraits et MD5, recadrés et fusionné dans le volume de l'hôte, hors de portée du moteur ; le moteur ne monte que `graphs/` (ZD-9, ZD-11, §6, inventaire n° 35) |
+| TZ2c-m5 (review delta TZ2-c) | « MNT géré par la tâche » = variable d'environnement `DEM_URL` seule, application et hôte ; plafond de l'hôte seulement si `dem_enabled` ; phrase dans l'onglet Altitude (ZD-1, ZD-4.3, ZD-8, CA-ZD3, CA-ZD9 ; admin-space EF-6.23, CA-89) |
+| `DEM_MAX_TILES` sans MNT local (décision de coord) | Plafond ignoré dans le plan de zone si `DEM_URL` ne désigne pas `opentopodata` (ZD-4.3, ZD-7, inventaire n° 12, CA-ZD3) |
+| Tests TZ2-c (2026-11-26) | Sortie de `claim` illisible : aucun `failed`, expiration à 2 h (ZD-9.4, CA-ZD9) ; dalles gérées seulement avec le service `opentopodata` local (ZD-1, ZD-8, ZD-9.8) ; `ROUTING_MAX_SOURCE_BYTES` sur les octets reçus (ZD-4.3, ZD-9.5) ; purge des `.part` de plus de 24 h (ZD-11) |
 | Nits | 2 000 km : renvoi à EF-6.20 seulement (inventaire n° 23) ; `sources-AAAAMMJJ.osm.pbf` (n° 9) |
 
 ## 11. Découpage
 
-1. **TZ2-a (dev)** Tables d'état et du catalogue, migration `0018_routing_coverage_state` (ZD-2) ; ZD-1 à ZD-8 ; ZD-10 ; API et audit ; diagnostic ; réveil du MNT. Dépendance `shapely==2.2.0` dans `requirements.in` et le verrou à empreintes ; **SHP-1** : `--only-binary shapely` dans le `pip install` du Dockerfile, test qui fige la version de `shapely` et de GEOS. Critères CA-ZD1 à CA-ZD8.
+1. **TZ2-a (dev)** Tables d'état et du catalogue, migration `0018_routing_coverage_state` (ZD-2) ; ZD-1 à ZD-8 ; ZD-10 ; API et audit ; diagnostic ; réveil du MNT. Dépendance `shapely==2.2.0` dans `requirements.in` et le verrou à empreintes ; **SHP-1** : `--only-binary shapely` dans le `pip install` du Dockerfile, test qui fige la version de `shapely` et de GEOS. Critères CA-ZD1 à CA-ZD8. **Complément (revue TZ2c-M1)** : expiration de `starting` 2 h après le `switching`, et « Tâche bloquée ? » en `starting` (ZD-10, ZD-12) ; CA-ZD4.
 2. **TZ2-b (dev, front)** Panneau « Couverture en service » ; banc local.
-3. **TZ2-c (ops)** Tâche unique dans `update.sh` (catalogue, budget, cache, redirections, extraction, MNT, bascule), unité systemd, recâblage du profil `dem`, retrait de `ROUTING_EXTRACT_URLS` et `DEM_BBOX`, valeurs de RAM et de cache de ZD-4 et ZD-11, recadrage avant fusion (ZD-9.6). Critères CA-ZD9, CA-ZD10 ; V-Z2 vérifiée.
-4. **TZ2-d (doc)** README, exploitation (RAM d'import et du service dimensionnées pour dune, règle de ZD-4 pour une autre machine, mesures V-Z2, volume de ≈ 18 Go, retour arrière), bibliothèque, `.env.example`. Nit de review SHP-n1 : composant tiers GEOS 3.14.1 sous LGPL-2.1, lien vers son source.
+3. **TZ2-c (ops)** Tâche unique dans `update.sh` (catalogue, budget, cache, redirections, extraction, MNT, bascule), unité systemd, recâblage du profil `dem`, retrait de `ROUTING_EXTRACT_URLS` et `DEM_BBOX`, valeurs de RAM et de cache de ZD-4 et ZD-11, recadrage avant fusion (ZD-9.6) ; volume de l'hôte et `routing-data` réduit à `graphs/` (ZD-9, ZD-11, inventaire n° 35). Critères CA-ZD9, CA-ZD10 ; V-Z2 vérifiée.
+4. **TZ2-d (doc)** README, exploitation (RAM d'import et du service dimensionnées pour dune, règle de ZD-4 pour une autre machine, mesures V-Z2, volumes par volume de ZD-11 (hôte ≈ 19 Go, `routing-data` ≈ 3 Go, `dem-data` ≈ 3 Go, ≈ 25 Go au total), retour arrière), bibliothèque, `.env.example`. Nit de review SHP-n1 : composant tiers GEOS 3.14.1 sous LGPL-2.1, lien vers son source.
 5. **TZ2-e (test)** Tests du diagnostic et banc (inventaire n° 26).
 
 Dépend de TZ1 (lot Z1). TZ2-a établit la liste exacte des régions de la zone par défaut (ZD-6) ; review a donné son feu vert à `shapely==2.2.0` (ADR-0013, point 3).

@@ -137,7 +137,7 @@ Le chiffrage ci-dessus vaut pour l'emprise d'origine (3 extraits, 1,08 Go). Avec
 | Import | 287 s avec `-Xmx12g` dans 14 Gio ; tas au plus 4,4 Go ; pic du conteneur 5,2 Gio | **`-Xmx8g` dans 10 Gio** |
 | Graphe | 662 Mo | — |
 | Service | `-Xmx3g` dans 4 Gio : 1,42 Gio au repos, 3,25 Gio après 256 appels dont 8 en parallèle (81 %), pic 3,28 Gio, p50 83 ms | **`-Xmx3g` dans 5 Gio** |
-| Disque | ≈ 7,9 Go pour la chaîne, ≈ 9,4 Go avec les dalles (835 Mo) et le graphe en service | volume ≈ 18 Go, cache des extraits 8 Gio |
+| Disque | ≈ 7,9 Go pour la chaîne, ≈ 9,4 Go avec les dalles (835 Mo) et le graphe en service | cache des extraits 8 Gio dans le volume de l'hôte (le moteur ne monte que `graphs/`) ; volumes : ZD-11 de la spec Z2 |
 
 Ces valeurs sont dimensionnées pour dune (64 Go) ; la règle de dimensionnement est dans la spec [routing-zone-donnees](../specs/routing-zone-donnees.md) (ZD-4).
 
