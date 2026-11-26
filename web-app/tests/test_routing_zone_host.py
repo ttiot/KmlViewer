@@ -1229,3 +1229,128 @@ def test_with_the_local_dem_service_the_same_zone_is_refused_by_the_host_with_ca
     mark = w.mark()
     assert w.run(DEM_URL=DEM) == 0
     assert failed_codes(w, mark) == [('7', 'cap')] and w.host.builds() == []
+
+
+# ===================================================== M. index réel : entrées hors du sous-arbre (E1) ========================
+
+def index_bytes(mutate=None):
+    from tests.routing_zone_support import frozen_document
+    document = frozen_document()
+    if mutate:
+        mutate(document['features'])
+    return json.dumps(document).encode()
+
+
+def test_the_host_accepts_the_index_with_the_ids_outside_europe_and_ignores_them(zu):
+    from tests.routing_zone_support import frozen_document, outside_europe
+    document = frozen_document()
+    outside = outside_europe(document)
+    assert len([r for r in outside if r.startswith('us/')]) == 51 and 'africa' in outside
+    out, nodes, subtree = zu.candidates_of(document, 'europe', {'alps', 'britain-and-ireland', 'dach', 'great-britain', 'guadeloupe',
+                                                                'martinique', 'mayotte', 'reunion'}, HOSTS)
+    assert len(out) == 70 and not set(out) & outside and not subtree & outside
+
+
+def test_an_entry_outside_the_subtree_is_ignored_by_the_host_whatever_is_wrong_with_it(zu):
+    from tests.routing_zone_support import frozen_document, outside_europe
+    document = frozen_document()
+    outside = outside_europe(document)
+    for feature in document['features']:
+        if feature['properties']['id'] in outside:
+            feature['properties'].update(urls={'pbf': 'http://evil.example/x'}, size='x')
+    document['features'].append({'properties': {'id': 'us/alabama', 'parent': 'us'}, 'geometry': None})
+    document['features'].append({'properties': {'id': 'Bad ID/%', 'parent': 'nowhere'}, 'geometry': None})
+    out, _, _ = zu.candidates_of(document, 'europe', set(), HOSTS)
+    assert not set(out) & outside and 'belgium' in out
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda f: f.append({'properties': {'id': 'france/us', 'parent': 'france', 'urls': {'pbf': 'https://download.geofabrik.de/europe/a-latest.osm.pbf'}},
+                        'geometry': None}),
+    lambda f: f.append({'properties': {'id': 'Upper', 'parent': 'france', 'urls': {'pbf': 'https://download.geofabrik.de/europe/a-latest.osm.pbf'}},
+                        'geometry': None}),
+    lambda f: next(x for x in f if x['properties']['id'] == 'lorraine')['properties'].update(urls={'pbf': 'http://download.geofabrik.de/x-latest.osm.pbf'}),
+    lambda f: f.append(next(x for x in f if x['properties']['id'] == 'lorraine')),
+], ids=['slash-id-inside', 'uppercase-inside', 'http-url-of-a-candidate', 'duplicate-inside'])
+def test_an_invalid_entry_inside_the_subtree_is_still_refused_by_the_host(zu, mutate):
+    from tests.routing_zone_support import frozen_document
+    document = frozen_document()
+    mutate(document['features'])
+    with pytest.raises(ValueError):
+        zu.candidates_of(document, 'europe', set(), HOSTS)
+
+
+def test_the_catalog_of_the_real_shaped_index_goes_through_end_to_end_without_the_outside_entries_reaching_the_application(w):
+    w.bootstrap()
+    sent = json.loads([data for sub, data in w.host.stdin if sub == 'catalog'][0])
+    ids = [f['properties']['id'] for f in sent['features']]
+    assert len(w.local_catalog()) == 70 and w.codes('catalog') == [0]
+    assert not [i for i in ids if i.startswith('us') or i in ('africa', 'asia', 'russia', 'north-america')] and 'europe' in ids
+
+
+def test_a_refused_index_is_logged_never_a_silent_success_nothing_is_sent_and_it_is_retried_only_after_an_hour(w, capsys):
+    """E1 : une entrée invalide DANS le sous-arbre ⇒ journal « catalogue non rafraîchi », aucun `catalog -`, aucune copie locale."""
+    w.web.index_override = index_bytes(lambda f: f.append({'properties': {'id': 'france/us', 'parent': 'france',
+                                                                           'urls': {'pbf': 'https://download.geofabrik.de/europe/a-latest.osm.pbf'}},
+                                                            'geometry': None}))
+    assert w.run() == 0
+    out = capsys.readouterr().out
+    assert 'catalogue non rafraîchi' in out and 'ValueError' in out and 'catalogue chargé' not in out
+    assert w.host.apps('catalog') == [] and w.host.read_json('catalog.json') is None and w.host.read_json('catalog-meta.json')['attempt_at']
+    w.advance(600)
+    assert w.run() == 0 and w.host.apps('catalog') == []
+    assert 'catalogue non rafraîchi' not in capsys.readouterr().out                    # tentative espacée d'une heure : pas de bruit chaque minute
+    w.advance(3600)
+    w.web.index_override = None                                                         # l'index est corrigé : accepté à la tentative suivante
+    assert w.run() == 0 and w.codes('catalog') == [0] and len(w.local_catalog()) == 70
+
+
+def test_an_index_refused_by_the_application_is_logged_and_the_previous_local_copy_is_kept(w, capsys):
+    w.bootstrap()
+    before = w.host.read_json('catalog.json')
+    capsys.readouterr()
+    w.advance(days=8)
+    w.host.app_script['catalog'] = [2]
+    assert w.run() == 0
+    assert 'catalogue non rafraîchi' in capsys.readouterr().out and w.host.read_json('catalog.json') == before
+
+
+@pytest.mark.parametrize('parent', ['A/B', 'unknown-parent', None, 'us/alabama', ''])
+def test_an_entry_whose_parent_is_not_in_the_subtree_is_ignored_by_the_host_too(zu, parent):
+    from tests.routing_zone_support import frozen_document
+    document = frozen_document()
+    document['features'].append({'properties': {'id': 'orphan-region', 'parent': parent,
+                                                'urls': {'pbf': 'https://download.geofabrik.de/europe/orphan-region-latest.osm.pbf'}}, 'geometry': None})
+    assert 'orphan-region' not in zu.candidates_of(document, 'europe', set(), HOSTS)[0]
+
+
+@pytest.mark.parametrize('where', ['first', 'last'])
+@pytest.mark.parametrize('parent', ['nowhere', 'us', None, 'A/B'])
+@pytest.mark.parametrize('real_id', ['france', 'belgium', 'lorraine'])
+def test_a_duplicate_of_an_entry_of_the_subtree_is_refused_by_the_host_wherever_it_is_placed_E1_M1(zu, real_id, parent, where):
+    import copy
+    from tests.routing_zone_support import frozen_document
+    document = frozen_document()
+    twin = copy.deepcopy(next(x for x in document['features'] if x['properties']['id'] == real_id))
+    twin['properties']['parent'] = parent
+    document['features'].insert(0 if where == 'first' else len(document['features']), twin)
+    with pytest.raises(ValueError):
+        zu.candidates_of(document, 'europe', set(), HOSTS)
+
+
+def test_a_hijacked_index_is_never_loaded_the_previous_copy_stays_and_the_refusal_is_logged_E1_M1(w, capsys):
+    import copy
+    w.bootstrap()
+    before = w.host.read_json('catalog.json')
+    capsys.readouterr()
+
+    def hijack(features):
+        twin = copy.deepcopy(next(x for x in features if x['properties']['id'] == 'france'))
+        twin['properties']['parent'] = 'nowhere'
+        features.insert(0, twin)
+
+    w.web.index_override = index_bytes(hijack)
+    w.advance(days=8)
+    assert w.run() == 0
+    assert 'catalogue non rafraîchi' in capsys.readouterr().out and w.host.read_json('catalog.json') == before and len(before['regions']) == 70
+    assert w.codes('catalog') == [0]                                                             # un seul `catalog -`, celui du premier passage

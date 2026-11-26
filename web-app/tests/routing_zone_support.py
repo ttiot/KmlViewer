@@ -43,6 +43,19 @@ def frozen_document() -> dict:
     return json.loads(FROZEN.read_text(encoding='utf-8'))
 
 
+def outside_europe(document, root='europe') -> set:
+    """Identifiants hors du sous-arbre `root` (E1 : continents, `us`, les 51 `us/<état>`…), calculés sur le document."""
+    parents = {f['properties']['id']: f['properties'].get('parent') for f in document['features']}
+    inside, grew = {root}, True
+    while grew:
+        grew = False
+        for rid, parent in parents.items():
+            if rid not in inside and parent in inside:
+                inside.add(rid)
+                grew = True
+    return set(parents) - inside
+
+
 def raw(document) -> bytes:
     return json.dumps(document, separators=(',', ':')).encode()
 

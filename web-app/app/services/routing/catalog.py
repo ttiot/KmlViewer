@@ -117,19 +117,25 @@ def build(document, *, root: str, exclude: Sequence, allowed_hosts: Sequence) ->
     features = document.get('features') if isinstance(document, dict) else None
     if not isinstance(features, list) or not features or len(features) > 5000:
         raise CatalogError("catalogue : liste de régions attendue")
-    nodes, total = {}, 0
+    # Forme contrôlée sur TOUT le document ; identifiants (gabarit, unicité) et parents seulement sur le sous-arbre de `root` :
+    # l'index réel porte des entrées hors Europe (`us/alabama`…) qui n'ont pas à passer le gabarit et sont simplement ignorées.
+    nodes, dups, total = {}, set(), 0
+    links = []                                          # (id, parent) de TOUTES les occurrences : l'ordre n'y change rien
     for feature in features:
         props = feature.get('properties') if isinstance(feature, dict) else None
         if not isinstance(props, dict):
             raise CatalogError("région invalide")
         rid, parent = props.get('id'), props.get('parent')
-        if not isinstance(rid, str) or not _ID.fullmatch(rid) or rid in nodes:
+        if not isinstance(rid, str) or len(rid) > 128:
             raise CatalogError("identifiant de région invalide ou en double")
-        if parent is not None and (not isinstance(parent, str) or not _ID.fullmatch(parent)):
-            raise CatalogError("parent de région invalide")
+        parent = parent if isinstance(parent, str) else None
+        links.append((rid, parent))
+        if rid in nodes:
+            dups.add(rid)
+            continue
         nodes[rid] = (parent, props, feature.get('geometry'))
     children = {}
-    for rid, (parent, _, _) in nodes.items():
+    for rid, parent in links:
         children.setdefault(parent, []).append(rid)
     if root not in nodes:
         raise CatalogError("racine du catalogue absente")
@@ -141,6 +147,12 @@ def build(document, *, root: str, exclude: Sequence, allowed_hosts: Sequence) ->
                 raise CatalogError("catalogue : arborescence invalide (cycle)")
             seen.add(child)
             (stack if child in children else wanted).append(child)
+    for rid in seen:                                    # contrôles d'identité, sur le sous-arbre seulement
+        if not _ID.fullmatch(rid) or rid in dups:
+            raise CatalogError("identifiant de région invalide ou en double")
+        parent = nodes[rid][0]
+        if rid != root and (parent is None or not _ID.fullmatch(parent)):
+            raise CatalogError("parent de région invalide")
     out = []
     for rid in sorted(set(wanted) - set(exclude)):
         _, props, geometry = nodes[rid]

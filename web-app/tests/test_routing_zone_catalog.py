@@ -109,7 +109,7 @@ def with_geometry(geometry):
     ('identifiant en double', synthetic(rect('aa', 0, 0, 1, 1, size=1), rect('aa', 1, 0, 2, 1, size=1))),
     ('identifiant à majuscule', with_props(id='AA')), ('identifiant avec /', with_props(id='a/b')), ('identifiant avec ..', with_props(id='..')),
     ('identifiant avec espace', with_props(id='a b')), ('identifiant trop long', with_props(id='a' * 65)),
-    ('parent invalide', with_props(parent='A/B')),
+    # « parent invalide » : l'entrée sort du sous-arbre, donc ignorée (E1) ; voir test_routing_catalog_outside_subtree.py
     ('url http', with_props(urls={'pbf': 'http://download.geofabrik.de/europe/bb-latest.osm.pbf'})),
     ('url autre hôte', with_props(urls={'pbf': 'https://evil.example/europe/bb-latest.osm.pbf'})),
     ('url hôte préfixé', with_props(urls={'pbf': 'https://download.geofabrik.de.evil.example/europe/bb-latest.osm.pbf'})),
@@ -417,3 +417,98 @@ def test_a_wide_flat_catalog_is_not_mistaken_for_a_cycle_and_a_deep_chain_is_acc
     chain.update({f'n{i}': f'n{i - 1}' for i in range(1, 40)})
     chain['leaf'] = 'n39'
     assert [r['id'] for r in build(tree(chain))] == ['leaf']
+
+
+# ===================================================== E. entrées hors du sous-arbre (E1, index Geofabrik réel) ================
+
+def test_the_frozen_index_carries_the_entries_outside_europe_the_real_one_has_and_the_catalog_ignores_them(world):
+    """E1 : `us/alabama`… (identifiants avec barre oblique) ne doivent ni faire refuser le catalogue ni y entrer."""
+    from tests.routing_zone_support import outside_europe
+    app, conn = world
+    document = frozen_document()
+    outside = outside_europe(document)
+    assert len([r for r in outside if r.startswith('us/')]) == 51 and {'africa', 'asia', 'us', 'canada/ontario', 'russia'} <= outside
+    assert load(app, conn, document) == {'regions': 70}
+    stored = {r['id'] for r in json.loads(catalog_row(conn)['content'])}
+    assert len(stored) == 70 and not stored & outside
+
+
+def test_an_entry_outside_the_subtree_is_ignored_whatever_is_wrong_with_it():
+    from tests.routing_zone_support import outside_europe
+    document = frozen_document()
+    outside = outside_europe(document)
+    reference = [r['id'] for r in build(frozen_document())]
+    for entry in document['features']:
+        props = entry['properties']
+        if props['id'] in outside:
+            props.update(urls={'pbf': 'http://evil.example/x'}, size=-5)
+            entry['geometry'] = {'type': 'Point', 'coordinates': [0, 0]}
+    document['features'].append({'properties': {'id': 'us/alabama', 'parent': 'us'}, 'geometry': None})               # doublon hors sous-arbre
+    document['features'].append({'properties': {'id': 'Bad ID/%', 'parent': 'nowhere'}, 'geometry': None})
+    for entry in document['features']:
+        if entry['properties']['id'] == 'north-america':
+            entry['properties']['parent'] = 'us'                                                            # cycle hors sous-arbre : jamais parcouru
+    assert [r['id'] for r in build(document)] == reference
+
+
+@pytest.mark.parametrize('mutate, why', [
+    (lambda f: f.append({'properties': {'id': 'france/us/alabama', 'parent': 'france', 'urls': {'pbf': 'https://download.geofabrik.de/europe/a-latest.osm.pbf'},
+                                        'size': 1}, 'geometry': frozen_document()['features'][1]['geometry']}), 'identifiant avec barre oblique sous france'),
+    (lambda f: f.append({'properties': {'id': 'Lorraine2', 'parent': 'france', 'urls': {'pbf': 'https://download.geofabrik.de/europe/a-latest.osm.pbf'},
+                                        'size': 1}, 'geometry': None}), 'majuscule dans le sous-arbre'),
+    (lambda f: f.append(copy.deepcopy(next(x for x in f if x['properties']['id'] == 'lorraine'))), 'doublon dans le sous-arbre'),
+    (lambda f: next(x for x in f if x['properties']['id'] == 'lorraine')['properties'].update(urls={'pbf': 'http://download.geofabrik.de/x-latest.osm.pbf'}),
+     'URL http d\'une candidate'),
+    (lambda f: next(x for x in f if x['properties']['id'] == 'lorraine')['properties'].pop('size'), 'taille absente d\'une candidate'),
+])
+def test_an_invalid_entry_inside_the_subtree_is_still_refused_and_nothing_is_written(world, mutate, why):
+    app, conn = world
+    load(app, conn, simple_document())
+    before, mark = catalog_row(conn), audit_mark(conn)
+    document = frozen_document()
+    mutate(document['features'])
+    with pytest.raises(coverage.CoverageError):
+        coverage.load_catalog_document(conn, raw(document), app.config, T0)
+    assert catalog_row(conn) == before and routing_audit(conn, mark) == [], why
+
+
+@pytest.mark.parametrize('parent', ['A/B', 'unknown-parent', None, 'us/alabama', ''])
+def test_an_entry_whose_parent_is_not_in_the_subtree_is_ignored_not_refused_even_with_a_valid_looking_id(parent):
+    """E1, ancien cas « parent invalide » : l'entrée sort du sous-arbre, donc elle n'est ni refusée ni retenue."""
+    document = frozen_document()
+    document['features'].append({'properties': {'id': 'orphan-region', 'parent': parent, 'size': 5,
+                                                'urls': {'pbf': 'https://download.geofabrik.de/europe/orphan-region-latest.osm.pbf'}},
+                                 'geometry': frozen_document()['features'][1]['geometry']})
+    assert [r['id'] for r in build(document)] == [r['id'] for r in build(frozen_document())]
+
+
+def hijacked(real_id, parent, where):
+    """E1-M1 : une entrée de même identifiant que `real_id`, rattachée hors du sous-arbre, avant (`first`) ou après (`last`) l'entrée réelle."""
+    document = frozen_document()
+    real = next(x for x in document['features'] if x['properties']['id'] == real_id)
+    twin = copy.deepcopy(real)
+    twin['properties']['parent'] = parent
+    document['features'].insert(0 if where == 'first' else len(document['features']), twin)
+    return document
+
+
+@pytest.mark.parametrize('where', ['first', 'last'])
+@pytest.mark.parametrize('parent', ['nowhere', 'us', None, 'A/B'])
+@pytest.mark.parametrize('real_id', ['france', 'belgium', 'lorraine'])
+def test_a_duplicate_of_an_entry_of_the_subtree_is_refused_wherever_it_is_placed_and_whatever_its_parent_so_no_branch_vanishes(world, real_id, parent, where):
+    """Une occurrence du doublon est dans le sous-arbre ⇒ refus (ZD-6), jamais un catalogue amputé de la branche (74 ⇒ 60 régions)."""
+    app, conn = world
+    load(app, conn, simple_document())
+    before, mark = catalog_row(conn), audit_mark(conn)
+    with pytest.raises(coverage.CoverageError):
+        coverage.load_catalog_document(conn, raw(hijacked(real_id, parent, where)), app.config, T0)
+    assert catalog_row(conn) == before and routing_audit(conn, mark) == []
+    with pytest.raises(catalog.CatalogError):
+        build(hijacked(real_id, parent, where))
+
+
+def test_the_same_duplicate_outside_the_subtree_on_both_sides_is_still_ignored_and_the_catalog_unchanged():
+    document = frozen_document()
+    twin = copy.deepcopy(next(x for x in document['features'] if x['properties']['id'] == 'us/alabama'))
+    document['features'].insert(0, twin)
+    assert [r['id'] for r in build(document)] == [r['id'] for r in build(frozen_document())] and len(build(document)) == 70

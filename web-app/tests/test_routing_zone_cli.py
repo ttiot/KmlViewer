@@ -475,3 +475,15 @@ def test_under_a_flask_command_there_is_no_legacy_warning_and_no_activation_only
     warned = [r for r in caplog.records if 'DEM_BBOX' in r.getMessage() or 'ROUTING_EXTRACT_URLS' in r.getMessage()]
     assert bool(warned) is expected and bool(calls) is expected, (warned, calls)
     assert coverage.enabled(app.config)                                              # le mode reste actif : seule l'activation au démarrage saute
+
+
+def test_the_real_shaped_index_with_entries_outside_europe_is_loaded_and_an_invalid_entry_inside_is_a_visible_refusal(host):
+    """E1 : exit 0 avec les `us/*` ; un identifiant invalide DANS le sous-arbre ⇒ exit 2, message sur stderr, ancien catalogue gardé."""
+    assert host.json('catalog', '-', stdin=raw(frozen_document())) == {'regions': 70}
+    before = snapshot(host.app)
+    document = frozen_document()
+    document['features'].append({'properties': {'id': 'france/us', 'parent': 'france', 'urls': {'pbf': 'https://download.geofabrik.de/europe/a-latest.osm.pbf'},
+                                                'size': 1}, 'geometry': None})
+    result = host.run('catalog', '-', stdin=raw(document))
+    assert result.exit_code == 2 and result.stdout.strip() == '' and result.stderr.strip().startswith('invalide')
+    assert snapshot(host.app) == before

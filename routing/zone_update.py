@@ -342,15 +342,23 @@ def candidates_of(document, root: str, exclude, hosts):
     features = document.get('features') if isinstance(document, dict) else None
     if not isinstance(features, list) or not features or len(features) > 5000:
         raise ValueError("catalogue : liste de régions attendue")
-    nodes, children = {}, {}
+    # Forme contrôlée sur tout le document ; gabarit et unicité des identifiants seulement sur le sous-arbre de `root` : l'index réel
+    # porte des entrées hors Europe (`us/alabama`…) qui n'ont pas à passer le gabarit et sont ignorées (comptées dans le journal).
+    nodes, children, dups = {}, {}, set()
+    links = []                                             # (id, parent) de TOUTES les occurrences : l'ordre du document n'y change rien
     for feature in features:
         props = feature.get('properties') if isinstance(feature, dict) else None
         rid = props.get('id') if isinstance(props, dict) else None
-        if not isinstance(rid, str) or not ID_RE.fullmatch(rid) or rid in nodes:
+        if not isinstance(rid, str) or len(rid) > 128:
             raise ValueError("catalogue : identifiant invalide ou double")
         parent = props.get('parent')
-        nodes[rid] = (parent if isinstance(parent, str) else None, feature)
-    for rid, (parent, _) in nodes.items():
+        parent = parent if isinstance(parent, str) else None
+        links.append((rid, parent))
+        if rid in nodes:
+            dups.add(rid)
+            continue
+        nodes[rid] = (parent, feature)
+    for rid, parent in links:
         children.setdefault(parent, []).append(rid)
     if root not in nodes:
         raise ValueError("catalogue : racine absente")
@@ -361,6 +369,11 @@ def candidates_of(document, root: str, exclude, hosts):
                 raise ValueError("catalogue : arborescence invalide (cycle)")
             subtree.add(child)
             (stack if child in children else leaves).append(child)
+    if any(not ID_RE.fullmatch(rid) or rid in dups for rid in subtree):
+        raise ValueError("catalogue : identifiant invalide ou double dans le sous-arbre")
+    ignored = len(nodes) - len(subtree)                    # entrées distinctes non rattachées à la racine
+    if ignored:
+        log(f"catalogue : {ignored} entrée(s) hors du sous-arbre « {root} » ignorée(s)")
     out, no_shp = {}, []
     for rid in sorted(set(leaves) - set(exclude)):
         urls = nodes[rid][1]['properties'].get('urls')
@@ -932,6 +945,7 @@ def run_pass(config: Config) -> int:
         monthly = False                                    # mensuelle refusée par le budget : retentée le lendemain, sans `failed`
     code, out = docker.app('claim', *(['--monthly'] if monthly else []))
     if code != 0:
+        log(f"claim : code {code}, rien pris ce passage")
         return 0
     if out.strip() in ('', '{}'):
         return 0
