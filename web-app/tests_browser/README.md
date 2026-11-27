@@ -11,7 +11,7 @@ Des défauts visuels (popup d'état vide qui capte les clics, JSON brut dans l'a
 web-app/tests_browser/run.sh
 ```
 
-Quatre instances de l'application sont démarrées : mode `local` sur 5277 (moteur de routage réel), mode `oidc` de test sur 5279, **page Réglages** sur 5281
+Sept instances de l'application sont démarrées (dont l'instance **coverage** sur 5293, `ROUTING_ZONE_BUILD=1`, ci-dessous) : mode `local` sur 5277 (moteur de routage réel), mode `oidc` de test sur 5279, **page Réglages** sur 5281
 (registre v1, état exact du CA-72) et **registre de test** sur 5283 (réglages `list`, `requires_restart` et `secret`, variable `DEM_TIMEOUT=abc`).
 Captures et résultats dans `~/.cache/kmlviewer-browser/<horodatage>/` (**hors dépôt**, `run.sh` refuse un dossier dans le dépôt) :
 `01` à `08` (visualiseur, constructeur, administration, connexion oidc, bandeau SMTP, confirmation du secret), `09` à `23` (page Réglages), `resultat.json`
@@ -67,6 +67,13 @@ Les deux images locales (`kmlviewer-bench-app:<hachage de requirements.txt>` et 
   Le résultat de départ est une génération réelle, gardée ; les régénérations sont répondues par un double (`RouteMock`) qui peut les retarder ou les faire échouer
   (429, 503, 504, coupure) ; (v) et (k) utilisent le moteur et le serveur réels. Les générations réelles comptent dans la limite de 30 par heure (RB-S5) : un banc rejoué
   sans cesse sur la même instance finit par recevoir « Trop de générations ».
+- **(z1) à (z5) Mini-carte « Couverture en service »** (`coverage_front.py`, CA-86 mini-carte, EF-6.20, lot Z3 ; instance `coverage` : `ROUTING_ZONE_BUILD=1`,
+  `tiles=` a, b, c.tiles.exemple.fr, trois fonds de carte et une zone active ≠ zone demandée amorcés par `seed.py`) : (z1) fond par défaut autorisé (tuiles de ce fond seulement,
+  aucune autre requête, attribution en texte brut), tracés (couleurs, épaisseurs, pointillé, halos, ordre, aucun `style`), légende, carte inerte (glisser, double clic, molette, clavier) ;
+  (z2) sans fond autorisé (sous-domaine hors liste, hôte hors liste, liste vide, aucun fond par défaut, fond inconnu) : aucune requête de tuile, fond `rgb(24, 39, 32)`, quadrillage à
+  chaque degré entier ; (z3) zones égales (`idle`) ; (z4) réglages rechargés après le panneau (« Recharger » après un 409) : même carte, tuiles ajoutées puis retirées ; (z5) ni la carte ni ses
+  tuiles ne sont recréées à la frappe en recherche ni à la saisie d'un réglage. Thèmes clair et sombre ; mesures sur les styles calculés. Sans moteur de routage :
+  `BENCH_ENGINE_URL` vers un faux moteur et `BENCH_ONLY=coverage_` rejouent ces seuls scénarios.
 - **(g)** une requête vers un hôte externe est interceptée, enregistrée et bloquée.
 - Aucune erreur JavaScript dans la console (les erreurs de tuiles de fond de carte / réseau sont ignorées et listées dans `resultat.json`).
 

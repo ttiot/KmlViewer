@@ -7,7 +7,7 @@ const AdminCoverage = (() => {
     const { api, el, notify } = App;
     const URL_BASE = '/api/admin/routing/coverage';
     const POLL_MS = 30000;
-    const C = { enabled: null, data: null, confirm: null, busy: false, timer: null, map: null, focus: null, sig: {} };
+    const C = { enabled: null, data: null, confirm: null, busy: false, timer: null, map: null, tiles: null, grid: null, baseKey: null, bounds: null, sized: false, basemap: null, focus: null, sig: {} };
 
     // Motifs émis par l'application (CHECK de la table d'état) et codes d'échec (FAILURE_CODES) : libellés en clair.
     const REASONS = { zone: 'zone modifiée', mensuel: 'mise à jour mensuelle', activation: 'activation' };
@@ -23,11 +23,12 @@ const AdminCoverage = (() => {
     const statusNode = el('p', { class: 'coverage-status', role: 'status', tabindex: '-1' });
     const actionsNode = el('div', { class: 'mb-2' });
     const errorNode = el('p', { class: 'setting-error', role: 'alert', hidden: true });
-    const mapNode = el('div', { class: 'coverage-map', role: 'img', 'aria-label': 'Zone demandée (bleu) et zone en service (gris pointillé)' });
+    const mapNode = el('div', { class: 'coverage-map', role: 'img', 'aria-label': 'Zone demandée (bleu plein) et zone en service (jaune pointillé)' });
+    const legendNode = el('p', { class: 'hint coverage-legend', hidden: true }, 'bleu plein : zone demandée · jaune pointillé : zone active (en service)');
     const hintNode = el('p', { class: 'hint', hidden: true }, 'Zone en service : sources historiques (aucune zone enregistrée).');
     const factsNode = el('dl', { class: 'coverage-facts' });
     const box = el('section', { id: 'coveragePanel', class: 'coverage-panel', role: 'region', 'aria-labelledby': 'coverageTitle', hidden: true },
-        title, statusNode, actionsNode, errorNode, mapNode, hintNode, factsNode);
+        title, statusNode, actionsNode, errorNode, mapNode, legendNode, hintNode, factsNode);
 
     function parse(text) {
         if (!text) return null;
@@ -63,22 +64,72 @@ const AdminCoverage = (() => {
         }
     }
 
-    // -- mini-carte : zone demandée en bleu, zone active en gris dessous (refaite seulement si une zone change) ---------------
+    // -- mini-carte (EF-6.20, lot Z3) : non interactive ; fond autorisé ou fond neutre + quadrillage de 1° ; halo sous chaque trait ---
+    const GRID_MAX = 60;                                      // lignes au plus par sens : zone démesurée ⇒ pas de quadrillage
+    function drawGrid(map) {
+        const group = L.layerGroup();
+        const bounds = map.getBounds();
+        const south = Math.floor(bounds.getSouth()), north = Math.ceil(bounds.getNorth());
+        const west = Math.floor(bounds.getWest()), east = Math.ceil(bounds.getEast());
+        if (north - south > GRID_MAX || east - west > GRID_MAX) return group;
+        const line = (points) => L.polyline(points, { className: 'coverage-grid', weight: 1, interactive: false }).addTo(group);
+        for (let lat = south; lat <= north; lat += 1) line([[lat, west], [lat, east]]);
+        for (let lon = west; lon <= east; lon += 1) line([[south, lon], [north, lon]]);
+        return group;
+    }
+    function applyBasemap() {                                 // tuiles du fond par défaut s'il est autorisé, sinon fond neutre et quadrillage
+        const map = C.map;
+        if (!map) return;
+        const base = C.basemap ? C.basemap() : null;
+        const key = base ? JSON.stringify([base.url, base.subdomains, base.max_zoom, base.attribution]) : '';
+        if (key === C.baseKey) return;
+        C.baseKey = key;
+        if (C.tiles) { map.removeLayer(C.tiles); C.tiles = null; }
+        if (base) {
+            C.tiles = App.basemapLayer(base).addTo(map);
+            C.tiles.bringToBack();
+            if (C.grid) map.removeLayer(C.grid);
+        } else if (C.grid) {
+            C.grid.addTo(map);
+            C.grid.eachLayer((layer) => layer.bringToBack());     // sous les zones
+        }
+        mapNode.classList.toggle('has-tiles', !!base);
+    }
+    function refit() {                                        // conteneur redimensionné : même carte, recadrée, quadrillage recalculé
+        const map = C.map;
+        map.invalidateSize({ animate: false });
+        map.fitBounds(C.bounds, { padding: [8, 8], animate: false });
+        const shown = C.grid && map.hasLayer(C.grid);
+        if (C.grid) map.removeLayer(C.grid);
+        C.grid = drawGrid(map);
+        if (shown) { C.grid.addTo(map); C.grid.eachLayer((layer) => layer.bringToBack()); }
+    }
     function drawMap(d) {
-        if (C.map) { C.map.remove(); C.map = null; }
+        if (C.map) { C.map.remove(); C.map = null; C.tiles = null; C.grid = null; C.baseKey = null; }
+        legendNode.hidden = true;
         if (typeof L === 'undefined' || !mapNode.isConnected) return;
-        const shapes = [];
+        const active = Array.isArray(d.active_zone) && d.active_zone.length >= 3 ? d.active_zone : null;
+        const requested = Array.isArray(d.requested_zone) && d.requested_zone.length >= 3 ? d.requested_zone : null;
+        if (!active && !requested) return;
         const map = L.map(mapNode, { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
-            boxZoom: false, keyboard: false, touchZoom: false });
-        const add = (vertices, style) => {
-            if (!Array.isArray(vertices) || vertices.length < 3) return;
-            shapes.push(L.polygon(vertices.map(([lon, lat]) => [lat, lon]), { weight: 2, fill: false, interactive: false, ...style }).addTo(map));
-        };
-        add(d.active_zone, { color: '#6c757d', dashArray: '4 4' });
-        add(d.requested_zone, { color: '#0d6efd' });
-        if (!shapes.length) { map.remove(); return; }
-        map.fitBounds(L.featureGroup(shapes).getBounds(), { padding: [8, 8] });
+            boxZoom: false, keyboard: false, touchZoom: false, tap: false });
+        map.attributionControl = L.control.attribution({ prefix: false }).addTo(map);            // attribution du fond, texte brut, sans lien
+        const polygon = (vertices, cls, weight) => L.polygon(vertices.map(([lon, lat]) => [lat, lon]),
+            { className: cls, weight, fill: false, interactive: false });
+        const layers = [];
+        if (active) layers.push(polygon(active, 'coverage-halo coverage-halo-active', 9));
+        if (requested) layers.push(polygon(requested, 'coverage-halo coverage-halo-requested', 6));
+        if (active) layers.push(polygon(active, 'coverage-core coverage-core-active', 5));
+        if (requested) layers.push(polygon(requested, 'coverage-core coverage-core-requested', 2));
+        C.bounds = L.featureGroup(layers).getBounds();
+        C.sized = mapNode.clientWidth > 0 && mapNode.clientHeight > 0;      // créée hors de la page (taille nulle) : refaite au reflow
+        map.fitBounds(C.bounds, { padding: [8, 8], animate: false });
         C.map = map;
+        C.grid = drawGrid(map);
+        C.baseKey = null;
+        applyBasemap();                                       // les zones sont ajoutées après : le quadrillage reste dessous
+        layers.forEach((layer) => layer.addTo(map));
+        legendNode.hidden = false;
     }
 
     function usageLine(d) {
@@ -162,8 +213,8 @@ const AdminCoverage = (() => {
         if (target) target.focus();
     }
     function reflow() {                                       // panneau remis dans la page (changement d'onglet) : la carte reprend sa taille
-        if (C.map) C.map.invalidateSize();
-        else if (C.data) { C.sig.map = null; render(); }
+        if (C.map && C.sized) refit();                            // jamais recréée à chaque rendu : tuiles et marque de la carte conservées
+        else if (C.data) { C.sig.map = null; render(); }          // carte absente ou créée hors de la page : refaite à la taille réelle
     }
 
     // -- chargement --------------------------------------------------------------------------------------------------------
@@ -198,5 +249,5 @@ const AdminCoverage = (() => {
         return `Aperçu : ${parts.join(' · ')}.`;
     }
 
-    return { node: () => box, refresh, reflow, start, stop, preview, enabled: () => C.enabled === true };
+    return { node: () => box, refresh, reflow, useBasemap: (fn) => { C.basemap = fn; }, basemapChanged: applyBasemap, start, stop, preview, enabled: () => C.enabled === true };
 })();

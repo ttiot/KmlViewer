@@ -22,6 +22,7 @@ SETTINGS = os.environ.get('BENCH_SETTINGS_URL', '').rstrip('/')      # instance 
 REGISTRY = os.environ.get('BENCH_REGISTRY_URL', '').rstrip('/')
 DEM_APP = os.environ.get('BENCH_DEM_URL', '').rstrip('/')           # instance 5 : DEM_URL posé (service d'altitude factice)
 DEM_SVC = os.environ.get('BENCH_DEM_SVC', '').rstrip('/')           # service d'altitude factice : /gate/open, /gate/close
+COVERAGE = os.environ.get('BENCH_COVERAGE_URL', '').rstrip('/')    # instance 6 : mini-carte « Couverture en service » (CA-86)
 NOPW = os.environ.get('BENCH_NOPW_URL', '').rstrip('/')            # mode oidc SANS SECRETS_KEY : invitations indisponibles
 OUT = os.environ.get('BENCH_OUT', '/out')
 results = []
@@ -29,7 +30,7 @@ results = []
 # Aucune sortie réseau (EF-6.17) : toute requête du navigateur vers un autre hôte que les applications de test est
 # INTERCEPTÉE (page.route), ENREGISTRÉE puis BLOQUÉE ; les tuiles des hôtes de tuiles reçoivent une image locale de 1 pixel.
 # La liste sert de preuve (CA-76).
-APP_HOSTS = {urllib.parse.urlsplit(u).netloc for u in (BASE, OIDC, SETTINGS, REGISTRY, DEM_APP, NOPW) if u}
+APP_HOSTS = {urllib.parse.urlsplit(u).netloc for u in (BASE, OIDC, SETTINGS, REGISTRY, DEM_APP, NOPW, COVERAGE) if u}
 TILE_HOST_SUFFIXES = ('tile.openstreetmap.org', 'tile.opentopomap.org', 'basemaps.cartocdn.com', 'server.arcgisonline.com',
                       'tiles.exemple.fr')
 PIXEL = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=')
@@ -1545,6 +1546,9 @@ def main():
         if SETTINGS:
             import zone_front                                    # polygone : CA-86, CA-R50, CA-R51 (tests_browser/zone_front.py)
             runs += zone_front.RUNS
+        if COVERAGE:
+            import coverage_front                                # mini-carte « Couverture en service » : CA-86
+            runs += coverage_front.RUNS
         only = os.environ.get('BENCH_ONLY')                      # sous-chaîne du nom de la fonction : ne rejoue que ces scénarios
         if only:
             runs = [r for r in runs if only in r.__name__]

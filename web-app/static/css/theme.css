@@ -1465,7 +1465,18 @@ input[type="range"] {
 
 .coverage-status.is-bad { color: var(--danger, #b02a37); font-weight: 600; }
 .coverage-status.is-ok { color: var(--text); }
-.coverage-map { height: 180px; margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; }
+.coverage-map { height: 220px; margin: 8px 0 4px; border: 1px solid var(--border); border-radius: 6px; }
+/* Mini-carte (EF-6.20) : fond neutre sombre dans les deux thèmes, tracés par classes (aucun style en ligne) */
+.coverage-map.leaflet-container { background: #182720; cursor: default; }
+.coverage-map .leaflet-grab, .coverage-map.leaflet-grab { cursor: default; }
+.coverage-map path.coverage-grid { stroke: #3f544a; stroke-width: 1px; fill: none; }
+.coverage-map path.coverage-halo { stroke: #0c1411; stroke-opacity: 1; fill: none; stroke-linecap: butt; stroke-linejoin: round; }
+.coverage-map path.coverage-halo-active { stroke-width: 9px; }
+.coverage-map path.coverage-halo-requested { stroke-width: 6px; }
+.coverage-map path.coverage-core { stroke-opacity: 1; fill: none; stroke-linecap: butt; stroke-linejoin: round; }
+.coverage-map path.coverage-core-active { stroke: #ffd43b; stroke-width: 5px; stroke-dasharray: 8 6; }
+.coverage-map path.coverage-core-requested { stroke: #0d6efd; stroke-width: 2px; stroke-dasharray: none; }
+.coverage-legend { margin: 0 0 8px; }
 .coverage-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 0; font-size: 0.875rem; }
 .coverage-facts dt { color: var(--text-2); font-weight: 400; }
 .coverage-facts dd { margin: 0; overflow-wrap: anywhere; }

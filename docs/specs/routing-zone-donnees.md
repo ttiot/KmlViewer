@@ -328,7 +328,7 @@ Index `https://download.geofabrik.de/index-v1.json` (3,5 Mo), relevé par spec. 
 
 - **ZD-12** Avec `=1`, l'onglet « Traces planifiées » montre un panneau **« Couverture en service »** :
   - statut unique en clair, avec son motif et sa date. Exemples : « À jour », « En attente (prise dans 4 min) », « Reconstruction en cours depuis 3 min », « Mise à jour mensuelle en cours », « Redémarrage », « Échec : budget du jour atteint (code `budget`) — la couverture actuelle reste en service » ;
-  - zone active en gris sous la zone demandée ;
+  - mini-carte : zone active sous la zone demandée, avec le fond, les tracés et la légende d'[admin-space](admin-space.md) EF-6.20 (« mini-carte », lot Z3) ;
   - régions actives, date des données OSM, nombre de dalles ;
   - consommation des plafonds (« 1,1 Go / 2 Go · 3 régions / 8 · 24 dalles / 60 ») et du budget du jour ;
   - boutons :

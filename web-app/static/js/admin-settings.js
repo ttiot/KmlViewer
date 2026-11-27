@@ -8,7 +8,7 @@
 const AdminSettings = (() => {
     const { api, el, notify } = App;
     const $ = (id) => document.getElementById(id);
-    const NO_COVERAGE = { node: () => document.createComment(''), refresh: () => Promise.resolve(), reflow() {}, start() {}, stop() {}, enabled: () => false };
+    const NO_COVERAGE = { node: () => document.createComment(''), refresh: () => Promise.resolve(), reflow() {}, useBasemap() {}, basemapChanged() {}, start() {}, stop() {}, enabled: () => false };
     const Coverage = typeof AdminCoverage === 'undefined' ? NO_COVERAGE : AdminCoverage;      // panneau absent (page sans le script) : rien à montrer
 
     // Contrôle de saisie de CHAQUE type du registre ; aucun ne passe par une zone JSON hors du volet « Avancé » (EF-6.12)
@@ -84,6 +84,13 @@ const AdminSettings = (() => {
             try { const parsed = new URL(u.replace(/\{[zxyr]\}/g, '0')); return parsed.host; } catch (_) { return null; }
         }).map((host) => ({ host, ok: host !== null && allowlist.includes(host) }));
     }
+    // Fond par défaut de la valeur CHARGÉE, seulement si tous ses hôtes sont dans tiles= (EF-6.21) : sert à l'éditeur et à la mini-carte.
+    function allowedDefaultBasemap() {
+        const maps = S.byKey['map.basemaps'], wanted = S.byKey['map.default_basemap'];
+        const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
+        return base && tileHosts(base, maps.allowlist || []).every((h) => h.ok) ? base : null;
+    }
+    Coverage.useBasemap(allowedDefaultBasemap);
     function validateBasemaps(list, setting) {
         const names = new Set();
         for (let index = 0; index < list.length; index += 1) {
@@ -517,9 +524,8 @@ const AdminSettings = (() => {
             }
             map = L.map(preview, { zoomControl: false, attributionControl: false });
             S.previewMaps.push(map);
-            const maps = S.byKey['map.basemaps'], wanted = S.byKey['map.default_basemap'];
-            const base = maps && wanted && (maps.value || []).find((b) => b.name === wanted.value);
-            if (base && tileHosts(base, maps.allowlist || []).every((h) => h.ok)) App.basemapLayer(base).addTo(map);
+            const base = allowedDefaultBasemap();
+            if (base) App.basemapLayer(base).addTo(map);
             shape = L.polygon(lastDrawn.map(([lon, lat]) => [lat, lon]), { color: '#0d6efd', weight: 2, fill: false, interactive: false }).addTo(map);
             fit();
             preview.addEventListener('pointerdown', onDown, true);                       // avant Leaflet : un appui sur un côté ne déplace pas la carte
@@ -872,6 +878,7 @@ const AdminSettings = (() => {
             S.secrets = info.disabled ? {} : Object.fromEntries(info.secrets.map((x) => [x.name, !!x.configured]));
         } catch (_) { S.secrets = {}; }
         S.loaded = true;
+        Coverage.basemapChanged();                               // la mini-carte ajoute les tuiles sans être recréée (EF-6.20)
         S.stale = false;
     }
 

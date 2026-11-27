@@ -92,7 +92,7 @@ class World:
     def ask(self, polygon=LILLE_ZONE, **env):
         """Zone demandée, délai de stabilité écoulé, un passage."""
         self.request(polygon)
-        self.advance(301)
+        self.advance(330)  # délai de stabilité (300 s) + marge : l'application date la demande à l'heure réelle, l'horloge du banc est figée au départ
         return self.run(**env)
 
     def built(self, polygon=LILLE_ZONE, **env):
@@ -123,7 +123,7 @@ class World:
     def pending_claim(self, polygon=LILLE_ZONE, **override):
         """Demande réelle prise par l'application (zone demandée, délai écoulé) : sortie de `claim` et numéro."""
         self.request(polygon)
-        self.advance(301)
+        self.advance(330)  # délai de stabilité (300 s) + marge : l'application date la demande à l'heure réelle, l'horloge du banc est figée au départ
         code, out = self.host.app_call(['claim'], b'')
         assert code == 0
         return json.loads(out)
@@ -690,7 +690,7 @@ def test_a_report_that_does_not_answer_ends_the_pass_with_nothing_else_called(w,
 def test_a_claim_that_does_not_answer_builds_nothing_calls_no_failed_and_the_request_is_taken_at_the_next_pass(w, code):
     w.bootstrap()
     w.request(NEW_ZONE)
-    w.advance(301)
+    w.advance(330)
     w.host.app_script['claim'] = [code]
     assert w.run() == 0 and w.host.builds() == [] and w.host.apps('failed') == []
     w.advance(60)
